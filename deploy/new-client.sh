@@ -34,8 +34,10 @@ SERVICE="caliclean-$SLUG"
 [ -e "$APP_DIR" ] && die "$APP_DIR ya existe. Elige otro slug o bórralo antes."
 
 # Cada cliente escucha en su propio puerto local; nginx enruta por dominio.
+# Comprobación en bash puro: no todos los servidores traen `ss` o `netstat`.
+port_taken() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- && return 0 || return 1; }
 PORT=3100
-while ss -ltn 2>/dev/null | grep -q ":$PORT "; do PORT=$((PORT + 1)); done
+while port_taken "$PORT"; do PORT=$((PORT + 1)); done
 
 step "Cliente: $NAME ($SLUG) · $DOMAIN · puerto $PORT"
 

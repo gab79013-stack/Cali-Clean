@@ -29,8 +29,21 @@ step() { echo -e "\n\033[1;36m▸ $*\033[0m"; }
 [ "$(id -u)" -eq 0 ] || die "Ejecútalo como root (o con sudo)."
 [ -f "$APP_DIR/package.json" ] || die "No encuentro package.json en $APP_DIR."
 
+# ¿Hay algo escuchando ahí? Se comprueba con bash puro para no depender de que
+# el servidor traiga `ss` o `netstat` instalados.
+port_taken() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- && return 0 || return 1; }
+
+# En un servidor que ya aloja otra cosa, el puerto por defecto puede estar
+# ocupado. Se busca el primero libre en lugar de pelearse con el vecino.
+if port_taken "$PORT"; then
+  original=$PORT
+  while port_taken "$PORT"; do PORT=$((PORT + 1)); done
+  echo "  ⚠ El puerto $original está ocupado por otro servicio. Se usará el $PORT."
+fi
+
 echo "  Código:  $APP_DIR"
 echo "  Dominio: $DOMAIN"
+echo "  Puerto:  $PORT"
 
 step "Dependencias del sistema"
 export DEBIAN_FRONTEND=noninteractive
@@ -94,8 +107,19 @@ step "nginx"
 sed -e "s/__DOMAIN__/$DOMAIN/g" -e "s|127.0.0.1:3000|127.0.0.1:$PORT|g" \
   "$APP_DIR/deploy/nginx.conf" > "/etc/nginx/sites-available/$SERVICE"
 ln -sf "/etc/nginx/sites-available/$SERVICE" "/etc/nginx/sites-enabled/$SERVICE"
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
+
+# El sitio "default" solo se retira si esta app es lo único que sirve el
+# servidor. En un VPS que ya aloja otra cosa, borrarlo la tumbaría.
+enabled=$(find /etc/nginx/sites-enabled -maxdepth 1 -type l -o -maxdepth 1 -type f | grep -v "^/etc/nginx/sites-enabled$" | wc -l)
+if [ -e /etc/nginx/sites-enabled/default ] && [ "$enabled" -le 2 ]; then
+  rm -f /etc/nginx/sites-enabled/default
+  echo "  Retirado el sitio por defecto (este servidor no servía nada más)."
+elif [ -e /etc/nginx/sites-enabled/default ]; then
+  echo "  Se conserva el sitio por defecto: hay más sitios configurados aquí."
+fi
+
+nginx -t || die "La configuración de nginx no valida. No se recargó nada: lo que ya servía el servidor sigue intacto."
+systemctl reload nginx
 
 step "Certificado SSL"
 certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect \
