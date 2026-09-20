@@ -62,6 +62,62 @@ export const config = {
     pass: process.env.ADMIN_PASS || 'admin',
   },
 
+  // ── Prospección outbound ──────────────────────────────────
+  outbound: {
+    // Interruptor general: en false no sale ni un correo outbound.
+    enabled: bool(process.env.OUTBOUND_ENABLED, false),
+    // Tope de correos outbound por día, una vez terminado el calentamiento.
+    dailyLimit: num(process.env.OUTBOUND_DAILY_LIMIT, 40),
+    // Calentamiento del dominio: se arranca aquí y se sube un escalón por día.
+    warmupStart: num(process.env.OUTBOUND_WARMUP_START, 10),
+    warmupStep: num(process.env.OUTBOUND_WARMUP_STEP, 5),
+    warmupStartDate: process.env.OUTBOUND_WARMUP_START_DATE || '',
+    // Nunca dos prospectos del mismo dominio dentro de esta ventana.
+    domainCooldownDays: num(process.env.OUTBOUND_DOMAIN_COOLDOWN_DAYS, 90),
+    // Puntuación mínima del ICP para que un prospecto entre en secuencia.
+    minIcpScore: num(process.env.OUTBOUND_MIN_ICP_SCORE, 45),
+    // Exigir que el dominio tenga registros MX antes de enviar.
+    requireMx: bool(process.env.OUTBOUND_REQUIRE_MX, true),
+    // Motivo de contacto: buena práctica y requisito de CAN-SPAM.
+    disclosureEs: process.env.OUTBOUND_DISCLOSURE_ES
+      || 'Te escribimos porque tu negocio aparece en registros públicos de California. Si no te interesa, usa "Darme de baja" y no volvemos a escribirte.',
+    disclosureEn: process.env.OUTBOUND_DISCLOSURE_EN
+      || 'You are receiving this because your business appears in California public records. Not interested? Hit "Unsubscribe" and we will not write again.',
+  },
+
+  prospecting: {
+    // Topes por corrida de cada agente.
+    discoverLimit: num(process.env.PROSPECT_DISCOVER_LIMIT, 50),
+    enrichLimit: num(process.env.PROSPECT_ENRICH_LIMIT, 40),
+    // Pausa entre peticiones al mismo host.
+    crawlDelayMs: num(process.env.PROSPECT_CRAWL_DELAY_MS, 2000),
+    userAgent: process.env.PROSPECT_USER_AGENT
+      || 'CaliCleanProspector/1.0 (+https://cali-clean.net/bot; contact: info@cali-clean.net)',
+    requestTimeoutMs: num(process.env.PROSPECT_TIMEOUT_MS, 12000),
+    sources: list(process.env.PROSPECT_SOURCES).length
+      ? list(process.env.PROSPECT_SOURCES)
+      : ['la_building_permits', 'la_active_businesses'],
+    socrataAppToken: process.env.SOCRATA_APP_TOKEN || '',
+  },
+
+  crm: {
+    // Adaptador: webhook | hubspot | gohighlevel | none
+    driver: (process.env.CRM_DRIVER || 'none').toLowerCase(),
+    webhookUrl: process.env.CRM_WEBHOOK_URL || '',
+    webhookSecret: process.env.CRM_WEBHOOK_SECRET || '',
+    apiKey: process.env.CRM_API_KEY || '',
+    baseUrl: process.env.CRM_BASE_URL || '',
+    locationId: process.env.CRM_LOCATION_ID || '',
+  },
+
+  ai: {
+    // Redacción de los correos con Claude. Sin clave, plantillas deterministas.
+    enabled: bool(process.env.AI_COPY_ENABLED, false),
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.AI_MODEL || 'claude-opus-5',
+    effort: process.env.AI_EFFORT || 'low',
+  },
+
   sequences: {
     tickMinutes: num(process.env.SEQUENCE_TICK_MINUTES, 5),
     sendFrom: num(process.env.SEQUENCE_SEND_FROM, 8),

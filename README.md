@@ -1,19 +1,33 @@
 # Cali Clean · Máquina de leads
 
-Sistema completo de captación y conversión de clientes para
-[cali-clean.net](https://cali-clean.net): presupuesto instantáneo, puntuación
-automática de leads y secuencias de correo bilingües sobre **Sender** (SMTP o API).
+Sistema de generación de clientes para [cali-clean.net](https://cali-clean.net).
 
-No sustituye a la web actual: se **incrusta** en ella con una línea de código.
+Tiene dos motores que alimentan el mismo CRM:
+
+1. **Prospección outbound** — agentes que salen a buscar negocios en registros
+   públicos de California, averiguan a quién escribir, cualifican, redactan y
+   contactan. Es el motor principal.
+2. **Captación inbound** — un widget de presupuesto instantáneo que se incrusta
+   en la web y convierte visitas en leads. Es también el destino al que apuntan
+   los correos en frío: el prospecto calcula su propio precio sin hablar con nadie.
 
 ---
 
-## Qué hace, en una frase
+## El motor outbound en una frase
 
-Un visitante configura su limpieza en 30 segundos, **ve el precio al instante**,
-deja su correo para bloquearlo, y a partir de ahí el sistema le escribe solo
-—en su idioma— hasta que reserva o pide la baja, mientras el equipo recibe cada
-lead ya puntuado y ordenado por el dinero que representa.
+Cinco agentes en cadena: uno **descubre** negocios en registros públicos, otro
+**enriquece** visitando su web para encontrar el contacto real, otro **cualifica**
+según el perfil de cliente ideal, otro **redacta** el correo con el dato concreto
+que justifica escribir, y otro **contacta** y lo empuja todo al CRM.
+
+```
+registros públicos ──▶ descubrir ──▶ enriquecer ──▶ cualificar ──▶ contactar ──▶ CRM
+  permisos de obra      clasifica     visita su web    puntúa ICP     redacta       webhook /
+  licencias nuevas      y deduplica   busca el email   y valora       y encola      HubSpot / GHL
+```
+
+Cada etapa deja su resultado en la base, así que una corrida interrumpida se
+retoma sola: los prospectos siguen donde se quedaron.
 
 ---
 
@@ -21,12 +35,13 @@ lead ya puntuado y ordenado por el dinero que representa.
 
 | Decisión | Motivo |
 |---|---|
-| El precio se muestra **antes** de pedir el correo | La causa nº1 de abandono en limpieza es "no sé cuánto cuesta". Dar el número primero convierte al visitante en lead. |
-| Widget embebible con Shadow DOM | Funciona sobre WordPress, Wix, Squarespace o HTML plano sin rehacer la web ni pelearse con sus estilos. |
-| Lead scoring con razones visibles | Un equipo pequeño no puede llamar a todos. El panel ordena por valor anual estimado y explica el porqué. |
-| Secuencias distintas para hogar y negocio | Una oficina decide en semanas y con números; una casa decide en días y con confianza. |
-| SQLite en un archivo | Un negocio de servicios no genera el volumen que justifica un Postgres. Un archivo se respalda copiándolo. |
-| Bilingüe ES/EN de origen | En California duplica el mercado alcanzable sin duplicar el trabajo. |
+| Señales de intención, no listas compradas | Una obra que acaba de cerrarse necesita limpieza **esta semana**. Un negocio que acaba de abrir aún no tiene proveedor. Eso convierte; una lista fría no. |
+| Solo correos que el negocio publica en su web | Los patrones adivinados (`info@`, `contacto@`) rebotan, y los rebotes queman el dominio. Si no publica correo, se descarta. |
+| Se respeta `robots.txt` sin excepción | Un prospector que machaca la web de su futuro cliente no es un prospector. Si el sitio prohíbe el rastreo, el prospecto se descarta con ese motivo. |
+| El CRM local es la fuente de verdad | Si el CRM externo se cae o cambia, la prospección no se detiene ni se pierde un contacto. Lo que no se sincroniza se reintenta. |
+| Salvaguardas antes de **cada** correo, no al programar | Entre programar y enviar pasan días. Alguien pudo darse de baja en ese hueco. |
+| Cuatro toques y se acaba | Insistir más a quien nunca pidió nada es lo que convierte una campaña en una denuncia de spam. |
+| El texto lo escribe Claude, la estructura la fija la plantilla | El modelo personaliza; la plantilla garantiza el aviso de procedencia y la baja. Si el texto sale mal, se usa el determinista. |
 
 ---
 
@@ -35,164 +50,156 @@ lead ya puntuado y ordenado por el dinero que representa.
 ```bash
 cp .env.example .env     # rellena los datos reales del negocio
 npm install
-npm start                # http://localhost:3000
+npm start                # API + paneles
+npm run worker           # agentes y cola de correo (proceso aparte)
 ```
 
-Con Docker:
+Con Docker: `docker compose up -d --build`.
 
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
+### Arranque seguro, en este orden
 
-### Lo mínimo que hay que rellenar en `.env`
+1. **Deja `OUTBOUND_ENABLED=false`.** Los agentes prospectan y llenan el CRM,
+   pero no sale ni un correo.
+2. Lanza un ciclo desde `/prospects` y revisa a quién encontró y qué correo le
+   habría escrito (la ficha de cada prospecto muestra el texto completo).
+3. Ajusta el ICP en `src/prospecting/icp.js` y los precios en `src/config.js`.
+4. Autentica el dominio: **SPF, DKIM y DMARC**. Sin esto, el outbound automático
+   acaba en spam en una semana.
+5. Pon `OUTBOUND_WARMUP_START_DATE` a la fecha de hoy y enciende
+   `OUTBOUND_ENABLED=true`. El cupo empieza en 10 correos y sube 5 por día.
 
-```ini
-APP_URL=https://leads.cali-clean.net     # dominio donde corre esto
-BUSINESS_PHONE=+1 (310) 555-0123
-BUSINESS_ADDRESS=...                     # obligatorio por CAN-SPAM
-BOOKING_URL=https://cali-clean.net/contact
-SERVICE_ZIPS=90001,90012,...             # ZIPs donde sí se da servicio
-
-MAIL_DRIVER=smtp
-SMTP_USER=...                            # credenciales SMTP de Sender
-SMTP_PASS=...
-MAIL_FROM_EMAIL=hello@cali-clean.net
-
-ADMIN_PASS=...                           # clave del panel
-APP_SECRET=...                           # cadena larga aleatoria
-```
-
-Comprueba que el correo sale antes de publicar nada:
-
-```bash
-node scripts/test-email.js tu@correo.com es
-```
+Comprueba el correo antes de nada: `node scripts/test-email.js tu@correo.com`.
 
 ---
 
-## Cómo se conecta a cali-clean.net
+## Las salvaguardas
 
-Pega esto donde quieras el formulario (una página nueva "Presupuesto", o la home):
+En modo automático nadie revisa antes de que salga el correo, así que estas
+comprobaciones corren **inmediatamente antes de cada envío**:
+
+| Salvaguarda | Qué evita |
+|---|---|
+| Lista de supresión (correo y dominio) | Volver a escribir a quien se quejó |
+| Comprobación de bajas, insensible a mayúsculas | Que una mayúscula suelta reabra la puerta a quien se dio de baja |
+| Enfriamiento por dominio (90 días) | Dos correos a la misma empresa |
+| Cupo diario con calentamiento progresivo | Quemar el dominio el primer día |
+| Registro MX del destinatario | Rebotes que dañan la reputación |
+| Franja horaria de envío | Correos a las 3 de la mañana |
+| Umbral mínimo de ICP | Escribir a quien nunca va a comprar |
+| Interruptor general (`OUTBOUND_ENABLED`) | Todo, de golpe, desde el panel |
+
+Dos de ellas **aplazan** en vez de descartar: el cupo agotado y el interruptor
+general. Apagar el sistema no destruye la cola.
+
+Cada correo lleva enlace de baja, cabecera `List-Unsubscribe` de un clic,
+dirección física y una línea que explica por qué lo recibe. Darse de baja
+cancela la secuencia en el acto.
+
+---
+
+## Panel de prospección
+
+`/prospects` (usuario y clave de `.env`):
+
+- Embudo por etapa y **por qué se descarta** cada prospecto, en castellano
+- Ficha con la evidencia: qué páginas se leyeron, qué coincidió para verificar
+  que la web es de ese negocio, qué correos se encontraron
+- El desglose del ICP, punto por punto
+- **El correo redactado, antes de enviarse**
+- El JSON exacto que recibe el CRM
+- Botón de ciclo completo o etapa suelta, e interruptor general en caliente
+
+`/admin` es el panel de leads: pipeline, conversión, aperturas y clics, notas,
+export CSV. Inbound y outbound conviven ahí.
+
+---
+
+## Fuentes de datos
+
+Portales de datos abiertos de California (Socrata), consultables por API sin
+credenciales:
+
+| Clave | Qué trae | Señal |
+|---|---|---|
+| `la_building_permits` | Permisos de obra cerrados en Los Ángeles | Obra terminada: limpieza inminente |
+| `la_active_businesses` | Licencias de negocio nuevas en Los Ángeles | Acaba de abrir: sin proveedor fijo |
+| `sf_building_permits` | Permisos completados en San Francisco | Obra terminada |
+| `sf_registered_businesses` | Negocios registrados en San Francisco | Acaba de abrir |
+
+Añadir una ciudad es añadir una entrada en `src/prospecting/sources/index.js`
+con su dataset y el mapeo de campos. El resto del pipeline no cambia.
+
+**Límite honesto:** los registros públicos dan nombre y dirección, nunca web ni
+correo. El agente enriquecedor deduce el dominio del nombre del negocio, lo
+verifica contra la página (nombre + teléfono, ZIP o dirección) y solo entonces
+lee el correo publicado. Funciona bien con negocios cuyo dominio se parece a su
+nombre, y falla con los que no. En las pruebas, de 5 prospectos descubiertos se
+enriquecieron 2 — esa proporción es la realidad del método, no un error.
+Si en algún momento quieres más cobertura, la Google Places API cubre
+exactamente ese hueco y el conector encaja donde están los demás.
+
+---
+
+## El perfil de cliente ideal
+
+`src/prospecting/icp.js` define los cinco segmentos que persiguen los agentes,
+con su peso, cómo se reconocen (palabras clave y códigos NAICS), cuánto vale un
+cliente de ese tipo y con qué argumento se le abre la conversación:
+
+administradores de propiedades · consultorios y oficinas · restaurantes y
+locales · anfitriones de rentas cortas · contratistas al cerrar obra
+
+Es el archivo que se toca para cambiar a quién se persigue.
+
+---
+
+## Conectar el CRM real
+
+No pude ver qué CRM hay detrás de cali-clean.net, así que el sistema trae su
+propio CRM (base + panel) y cuatro formas de enchufar el externo:
+
+```ini
+CRM_DRIVER=webhook          # POST de cada lead a tu URL, firmado con HMAC
+CRM_WEBHOOK_URL=https://...
+CRM_WEBHOOK_SECRET=...
+
+CRM_DRIVER=hubspot          # API de contactos de HubSpot
+CRM_DRIVER=gohighlevel      # API de contactos de Go High Level
+CRM_DRIVER=none             # solo CRM local
+```
+
+El payload va en `src/services/crm.js` (`toPayload`) y se puede ver entero en la
+ficha de cualquier prospecto. Lleva contacto, servicio estimado, valor anual,
+scoring con sus razones, atribución y el rastro completo de prospección.
+
+Dime cuál es el CRM y escribo el adaptador exacto.
+
+---
+
+## Captación inbound
+
+Se incrusta en la web actual con una línea:
 
 ```html
 <div id="cali-quote"></div>
 <script src="https://leads.cali-clean.net/embed.js" data-target="#cali-quote" async></script>
 ```
 
-Botón flotante en **todas** las páginas del sitio (recomendado además del anterior):
+O como botón flotante en todas las páginas: `data-mode="button"`. Va en Shadow
+DOM, así que los estilos del sitio no pueden romperlo. Recuerda añadir el
+dominio a `CORS_ORIGINS`.
 
-```html
-<script src="https://leads.cali-clean.net/embed.js" data-mode="button" async></script>
-```
-
-Opciones del `<script>`:
-
-| Atributo | Valores | Para qué |
-|---|---|---|
-| `data-target` | selector CSS | Dónde incrustar el widget |
-| `data-mode` | `inline` · `button` | En la página, o botón flotante con ventana |
-| `data-locale` | `es` · `en` | Forzar idioma (por defecto detecta el del navegador) |
-| `data-api` | URL | Solo si la API vive en otro dominio |
-
-Añade el dominio de la web a `CORS_ORIGINS` en `.env`, o el navegador bloqueará los envíos.
-
-La landing propia en `/` ya trae el widget montado y sirve para campañas de
-Google Ads, Meta o el enlace del perfil de Google Business.
-
----
-
-## El recorrido de un lead
-
-```
-Widget (6 pasos, ~30 s)
-   └─> POST /api/leads
-         ├─ presupuesto calculado y guardado
-         ├─ score 0-100 + temperatura (hot/warm/cold)
-         ├─ correo instantáneo al cliente con su precio
-         ├─ aviso al equipo con el score y el porqué
-         ├─ alta como suscriptor en Sender (si está activado)
-         └─ secuencia programada según segmento
-```
-
-**Secuencia residencial:** cotización → 2 h → día 1 (prueba social) → día 3
-(15 % de descuento, 48 h) → día 7 (contenido útil) → día 14 (cierre) → día 45
-(reactivación).
-
-**Secuencia comercial:** cotización → 20 h (propuesta con cifras anuales) →
-día 4 (objeción de precio) → día 8 → día 15 → día 45.
-
-La automatización **se detiene sola** cuando el lead reserva, se marca como
-ganado o perdido, o pide la baja. Los envíos respetan la franja horaria
-configurada (`SEQUENCE_SEND_FROM`/`TO`), salvo la cotización inicial, que sale
-siempre al instante.
-
-Previsualiza los 20 correos antes de que los vea nadie:
-
-```bash
-node scripts/preview-emails.js && open preview/index.html
-```
-
----
-
-## Panel de control
-
-`https://leads.cali-clean.net/admin` (usuario y clave de `.env`).
-
-- Leads ordenados por score, con el motivo de cada punto
-- Pipeline por visita y **valor anual potencial**
-- Filtros por estado, temperatura, segmento y búsqueda libre
-- Ficha con historial de correos (enviado / abierto / clic) y secuencia programada
-- Cambio de estado, notas internas y exportación a CSV
-- `/api/admin/health` para verificar SMTP y ver correos fallidos
+La landing de `/` trae el widget montado y sirve como destino de los correos en
+frío y de campañas de pago.
 
 ---
 
 ## Configurar precios
 
-Todo el pricing vive en `src/config.js`, en el objeto `pricing`: base, precio
-por dormitorio y por baño, tarifa por pie cuadrado, multiplicadores por tipo de
-servicio, descuentos por frecuencia y catálogo de extras. **Ajústalos a los
-precios reales de Cali Clean antes de publicar**: son estimaciones de mercado,
-no los tuyos.
-
-Cambiar un número ahí se refleja a la vez en el widget, en los correos y en el
-cálculo del valor anual.
-
----
-
-## Sender: SMTP o API
-
-| Modo | `MAIL_DRIVER` | Cuándo usarlo |
-|---|---|---|
-| SMTP | `smtp` | Recomendado. `smtp.sender.net:587`, usuario y clave de Sender. |
-| API REST | `api` | Si prefieres la API transaccional. Ajusta `SENDER_TRANSACTIONAL_PATH` a la ruta de tu cuenta. |
-| Consola | `log` | Desarrollo: no envía nada, escribe en pantalla. |
-
-Con `SENDER_SYNC_SUBSCRIBERS=true`, cada lead entra además como suscriptor en
-Sender con campos personalizados (`quote_price`, `annual_value`, `lead_score`,
-`segment`, `frequency`, `zip`…), lo que permite montar campañas segmentadas
-desde el panel de Sender sin tocar código. Los IDs de grupo se configuran en
-`SENDER_GROUP_*`.
-
----
-
-## Protección del formulario
-
-- Campo trampa invisible: descarta bots sin molestar a nadie
-- Límite de envíos por IP y hora (`RATE_LIMIT_PER_HOUR`)
-- Rechazo de correos con formato inválido y de dominios desechables
-- CORS restringido a los dominios que configures
-- Envíos anormalmente rápidos **se guardan igual** y se marcan en el registro:
-  perder un cliente real cuesta más que revisar un registro dudoso
-
----
-
-## Cumplimiento
-
-Enlace de baja en todos los correos comerciales, cabecera `List-Unsubscribe`
-con baja en un clic, dirección física en el pie y parada automática de las
-secuencias al darse de baja.
+Todo el pricing está en `src/config.js`, objeto `pricing`. **Son estimaciones de
+mercado, no los precios de Cali Clean**: ajústalos antes de publicar. Cambiar un
+número ahí se refleja a la vez en el widget, en los correos y en el cálculo del
+valor de cada prospecto.
 
 ---
 
@@ -200,31 +207,38 @@ secuencias al darse de baja.
 
 ```
 src/
-  config.js             configuración y tarifas
-  db.js                 esquema SQLite
-  server.js / worker.js  API y procesador de secuencias
-  routes/               captura, tracking, panel
-  services/             presupuesto, scoring, correo, Sender, secuencias
-  templates/            10 plantillas de correo, bilingües
+  config.js               configuración, tarifas y ajustes de outbound
+  db.js                   esquema SQLite y migraciones
+  server.js / worker.js   API y proceso de agentes
+  prospecting/
+    icp.js                perfil de cliente ideal
+    guards.js             salvaguardas de envío
+    http.js               cliente HTTP con robots.txt y ritmo
+    pipeline.js           orquestador de las cinco etapas
+    sources/              registros públicos
+    agents/               discover · enrich · qualify · write · outreach
+  services/               presupuesto, scoring, correo, Sender, CRM, secuencias
+  templates/              14 plantillas de correo, bilingües
 public/
-  embed.js              widget embebible
-  index.html            landing de campañas
-  admin.html            panel de leads
-scripts/                pruebas de correo, datos de ejemplo, previsualización
-test/                   21 tests
+  prospects.html          panel de prospección
+  admin.html              panel de leads
+  embed.js                widget embebible
+  index.html              landing
+test/                     55 tests
 ```
 
 ```bash
-npm test                        # suite completa
-node scripts/seed.js 30         # leads de ejemplo para ver el panel
+npm test                              # suite completa
+node scripts/preview-emails.js        # ver los correos antes de enviarlos
+node scripts/seed.js 30               # datos de ejemplo
 ```
 
 ---
 
 ## Qué falta por decidir
 
-1. **Precios reales** — los de `src/config.js` son estimaciones de mercado.
-2. **Datos del negocio** — teléfono, dirección, ZIPs y enlace de reserva.
-3. **Credenciales de Sender** — SMTP o token de API.
-4. **Testimonios reales** — la landing lleva textos de ejemplo; sustitúyelos por
-   reseñas verdaderas de Google, con nombre y foto si es posible.
+1. **Qué CRM hay detrás de cali-clean.net** — para escribir el adaptador real.
+2. **Precios reales** en `src/config.js`.
+3. **Datos del negocio**: teléfono, dirección física, ZIPs y enlace de reserva.
+4. **Credenciales de Sender** (SMTP o API) y autenticación del dominio.
+5. **Revisar el ICP y los primeros correos** antes de encender el outbound.

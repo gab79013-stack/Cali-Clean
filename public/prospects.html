@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prospección · Cali Clean</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f1f5f9;color:#0f172a;font-size:14px}
+  header{background:#0f172a;color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  header h1{margin:0;font-size:17px;font-weight:700}
+  header nav a{color:#94a3b8;text-decoration:none;margin-right:14px;font-size:13.5px}
+  header nav a.on{color:#5eead4;font-weight:600}
+  .r{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  button,select,input[type=search],input[type=text]{border:1.5px solid #e2e8f0;border-radius:8px;padding:8px 12px;font-size:13.5px;font-family:inherit;background:#fff;color:#0f172a}
+  header button{background:#1e293b;color:#e2e8f0;border:none;cursor:pointer}
+  header button:hover{background:#334155}
+  .kill{border:none;border-radius:20px;padding:8px 15px;font-weight:700;cursor:pointer;font-size:13px}
+  .kill.on{background:#16a34a;color:#fff}.kill.off{background:#dc2626;color:#fff}
+  .wrap{padding:20px;max-width:1500px;margin:0 auto}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:13px;margin-bottom:18px}
+  .kpi{background:#fff;border-radius:12px;padding:15px 17px;border:1px solid #e2e8f0}
+  .kpi b{display:block;font-size:24px;font-weight:800;letter-spacing:-.6px}
+  .kpi span{color:#64748b;font-size:12.5px}
+  .kpi.warn b{color:#dc2626}.kpi.good b{color:#0f766e}
+  .cols{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+  .card{background:#fff;border-radius:12px;border:1px solid #e2e8f0;margin-bottom:16px;overflow:hidden}
+  .card h2{margin:0;padding:13px 16px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+  .card .in{padding:14px 16px}
+  .funnel{display:grid;gap:8px}
+  .fstep{display:flex;align-items:center;gap:10px}
+  .fstep .bar{flex:1;height:22px;background:#f1f5f9;border-radius:5px;overflow:hidden}
+  .fstep .bar i{display:block;height:100%;background:#0f766e}
+  .fstep .lb{min-width:98px;font-size:13px;color:#475569}
+  .fstep .n{min-width:44px;text-align:right;font-weight:700}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:10px 13px;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;white-space:nowrap}
+  td{padding:10px 13px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  tbody tr:hover td{background:#f8fafc;cursor:pointer}
+  .score{display:inline-block;min-width:36px;text-align:center;padding:3px 8px;border-radius:20px;font-weight:800;font-size:12.5px;background:#e0f2fe;color:#0369a1}
+  .score.hi{background:#fee2e2;color:#b91c1c}.score.mid{background:#fef3c7;color:#92400e}
+  .pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:650;background:#e2e8f0;color:#475569}
+  .st-discovered{background:#e0e7ff;color:#4338ca}.st-enriched{background:#ddd6fe;color:#6d28d9}
+  .st-qualified{background:#ccfbf1;color:#0f766e}.st-contacted{background:#d1fae5;color:#047857}
+  .st-rejected{background:#f1f5f9;color:#94a3b8}
+  .muted{color:#94a3b8;font-size:12.5px}
+  .em{color:#0f766e;text-decoration:none}
+  .rej{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f8fafc;font-size:13px}
+  .rej b{color:#475569}
+  .runs{font-size:12.5px}
+  .run{padding:8px 0;border-bottom:1px solid #f8fafc}
+  .run .ag{font-weight:700;color:#334155}
+  .run.err .ag{color:#b91c1c}
+  dialog{border:none;border-radius:16px;padding:0;max-width:680px;width:95%;box-shadow:0 20px 60px rgba(15,23,42,.3)}
+  dialog::backdrop{background:rgba(15,23,42,.55)}
+  .dh{background:#0f766e;color:#fff;padding:17px 22px;display:flex;justify-content:space-between;gap:12px}
+  .dh h3{margin:0;font-size:17px}
+  .dh button{background:rgba(255,255,255,.2);border:none;color:#fff;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:16px}
+  .db{padding:18px 22px;max-height:68vh;overflow:auto}
+  .row{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px}
+  .row span:first-child{color:#64748b;min-width:140px;flex-shrink:0}
+  .sec{margin-top:16px;font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.6px;color:#64748b}
+  .copy{background:#f8fafc;border-left:3px solid #0f766e;padding:12px 14px;border-radius:0 8px 8px 0;margin-top:9px;font-size:13.5px;line-height:1.6}
+  .copy b{display:block;margin-bottom:6px;color:#0f172a}
+  pre{background:#0f172a;color:#cbd5e1;padding:12px;border-radius:9px;overflow:auto;font-size:12px;max-height:230px}
+  .empty{padding:40px;text-align:center;color:#94a3b8}
+  @media(max-width:1050px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🛰 Cali Clean · Prospección</h1>
+    <nav style="margin-top:6px"><a href="/admin">Leads</a><a href="/prospects" class="on">Prospección</a></nav>
+  </div>
+  <div class="r">
+    <button id="kill" class="kill off">outbound</button>
+    <button id="runAll">▶ Ciclo completo</button>
+    <select id="stage1">
+      <option value="discover">descubrir</option><option value="enrich">enriquecer</option>
+      <option value="qualify">cualificar</option><option value="outreach">contactar</option>
+      <option value="crm">sincronizar CRM</option>
+    </select>
+    <button id="runStage">▶ Solo etapa</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="kpis" id="kpis"></div>
+  <div class="cols">
+    <div>
+      <div class="card">
+        <h2>Prospectos</h2>
+        <div class="in" style="display:flex;gap:9px;flex-wrap:wrap">
+          <input type="search" id="q" placeholder="Buscar negocio, correo, web, ZIP…" style="min-width:230px">
+          <select id="fStage"><option value="">Toda etapa</option>
+            <option value="discovered">Descubierto</option><option value="enriched">Enriquecido</option>
+            <option value="qualified">Cualificado</option><option value="contacted">Contactado</option>
+            <option value="rejected">Descartado</option></select>
+          <select id="fSegment"><option value="">Todo segmento</option></select>
+          <span class="muted" id="count"></span>
+        </div>
+        <div id="tableBox"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card"><h2>Embudo</h2><div class="in"><div class="funnel" id="funnel"></div></div></div>
+      <div class="card"><h2>Por qué se descartan</h2><div class="in" id="rejects"></div></div>
+      <div class="card"><h2>Últimas corridas</h2><div class="in runs" id="runs"></div></div>
+      <div class="card"><h2>Lista de supresión</h2><div class="in">
+        <div style="display:flex;gap:7px;margin-bottom:10px">
+          <input type="text" id="supValue" placeholder="correo o dominio" style="flex:1;min-width:0">
+          <select id="supKind" style="width:92px"><option value="email">correo</option><option value="domain">dominio</option></select>
+          <button id="supAdd">+</button>
+        </div>
+        <div id="supList" class="muted"></div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="dlg"><div id="dlgContent"></div></dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const api = (p, o) => fetch('/api/prospecting' + p, o).then(r => r.json());
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = (n) => '$' + Number(n || 0).toLocaleString('en-US');
+const fmt = (d) => d ? new Date(d.replace(' ', 'T') + 'Z').toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+const STAGE_ES = { discovered: 'Descubierto', enriched: 'Enriquecido', qualified: 'Cualificado', contacted: 'Contactado', rejected: 'Descartado' };
+const REJECT_ES = {
+  website_not_found: 'No se encontró su web', robots_disallow: 'Su web prohíbe el rastreo',
+  site_not_verified: 'La web no se pudo verificar', no_public_email: 'No publica correo',
+  out_of_service_area: 'Fuera del área', below_icp_threshold: 'Puntuación insuficiente',
+  already_a_lead: 'Ya estaba en el CRM', previously_unsubscribed: 'Se dio de baja antes',
+  email_suppressed: 'Correo suprimido', domain_suppressed: 'Dominio suprimido',
+  domain_cooldown: 'Dominio contactado hace poco', no_mx_record: 'Su dominio no recibe correo',
+  no_email: 'Sin correo',
+};
+let SEGMENTS = {};
+
+async function loadStatus() {
+  const s = await api('/status');
+  SEGMENTS = Object.fromEntries(s.segments.map(x => [x.key, x.label]));
+  if (!$('#fSegment').dataset.filled) {
+    $('#fSegment').insertAdjacentHTML('beforeend', s.segments.map(x => `<option value="${x.key}">${esc(x.label)}</option>`).join(''));
+    $('#fSegment').dataset.filled = '1';
+  }
+
+  const kill = $('#kill');
+  kill.className = 'kill ' + (s.outbound.enabled ? 'on' : 'off');
+  kill.textContent = s.outbound.enabled ? '● outbound activo' : '○ outbound apagado';
+
+  const stage = Object.fromEntries(s.funnel.byStage.map(r => [r.stage, r.n]));
+  const contacted = stage.contacted || 0;
+  const pipeline = s.funnel.bySegment.reduce((a, b) => a + b.annual, 0);
+
+  $('#kpis').innerHTML = `
+    <div class="kpi"><b>${(stage.discovered || 0) + (stage.enriched || 0)}</b><span>en el embudo</span></div>
+    <div class="kpi good"><b>${stage.qualified || 0}</b><span>listos para contactar</span></div>
+    <div class="kpi"><b>${contacted}</b><span>contactados</span></div>
+    <div class="kpi good"><b>${money(pipeline)}</b><span>valor anual potencial</span></div>
+    <div class="kpi ${s.outbound.budgetLeft ? '' : 'warn'}"><b>${s.outbound.sentToday}/${s.outbound.allowanceToday}</b><span>correos hoy</span></div>
+    <div class="kpi"><b>${s.crm.ready ? s.crm.driver : '—'}</b><span>CRM${s.crm.ready ? '' : ' sin configurar'}</span></div>
+    <div class="kpi"><b>${s.ai.enabled ? 'IA' : 'plantilla'}</b><span>redacción</span></div>
+    <div class="kpi"><b>${s.suppressed}</b><span>en supresión</span></div>`;
+
+  const order = ['discovered', 'enriched', 'qualified', 'contacted', 'rejected'];
+  const max = Math.max(1, ...order.map(k => stage[k] || 0));
+  $('#funnel').innerHTML = order.map(k => `
+    <div class="fstep"><span class="lb">${STAGE_ES[k]}</span>
+      <span class="bar"><i style="width:${((stage[k] || 0) / max) * 100}%"></i></span>
+      <span class="n">${stage[k] || 0}</span></div>`).join('');
+
+  $('#rejects').innerHTML = s.funnel.rejects.length
+    ? s.funnel.rejects.map(r => `<div class="rej"><span>${esc(REJECT_ES[r.reason] || r.reason)}</span><b>${r.n}</b></div>`).join('')
+    : '<div class="muted">Nada descartado todavía.</div>';
+
+  $('#runs').innerHTML = s.funnel.runs.length
+    ? s.funnel.runs.map(r => `<div class="run ${r.status === 'error' ? 'err' : ''}">
+        <span class="ag">${esc(r.agent)}</span> <span class="muted">${fmt(r.started_at)}</span>
+        <div class="muted">${esc(r.error || summarize(r.stats_json))}</div></div>`).join('')
+    : '<div class="muted">Sin corridas aún.</div>';
+}
+
+function summarize(json) {
+  try {
+    const s = JSON.parse(json || '{}');
+    return Object.entries(s).filter(([, v]) => typeof v === 'number' && v)
+      .map(([k, v]) => `${k}: ${v}`).join(' · ') || 'sin cambios';
+  } catch { return ''; }
+}
+
+async function loadProspects() {
+  const p = new URLSearchParams();
+  if ($('#q').value) p.set('q', $('#q').value);
+  if ($('#fStage').value) p.set('stage', $('#fStage').value);
+  if ($('#fSegment').value) p.set('segment', $('#fSegment').value);
+  const r = await api('/prospects?' + p);
+  $('#count').textContent = r.total + ' prospectos';
+
+  if (!r.prospects.length) { $('#tableBox').innerHTML = '<div class="empty">Sin prospectos. Lanza un ciclo para empezar.</div>'; return; }
+  $('#tableBox').innerHTML = `<table><thead><tr>
+      <th>ICP</th><th>Negocio</th><th>Segmento</th><th>Contacto</th><th>Valor anual</th><th>Etapa</th><th>Señal</th>
+    </tr></thead><tbody>${r.prospects.map(p => `
+      <tr data-uid="${p.uid}">
+        <td><span class="score ${p.icp_score >= 68 ? 'hi' : p.icp_score >= 45 ? 'mid' : ''}">${p.icp_score}</span></td>
+        <td><strong>${esc(p.business_name)}</strong>
+            ${p.website ? `<br><a class="em" href="${esc(p.website)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(p.website.replace(/^https?:\/\//, ''))}</a>` : ''}
+            <br><span class="muted">${esc(p.city || '')} ${esc(p.zip || '')}</span></td>
+        <td>${esc(SEGMENTS[p.segment] || p.segment)}</td>
+        <td>${p.email ? `<a class="em" href="mailto:${esc(p.email)}" onclick="event.stopPropagation()">${esc(p.email)}</a>` : '<span class="muted">—</span>'}
+            ${p.phone ? `<br><span class="muted">${esc(p.phone)}</span>` : ''}</td>
+        <td>${p.est_annual_value ? money(p.est_annual_value) : '—'}</td>
+        <td><span class="pill st-${p.stage}">${STAGE_ES[p.stage] || p.stage}</span>
+            ${p.reject_reason ? `<br><span class="muted">${esc(REJECT_ES[String(p.reject_reason).split(':')[0]] || p.reject_reason)}</span>` : ''}</td>
+        <td><span class="muted">${esc(p.signal_type || '')}<br>${esc(p.signal.finaledAt || p.signal.openedAt || '')}</span></td>
+      </tr>`).join('')}</tbody></table>`;
+  document.querySelectorAll('tr[data-uid]').forEach(tr => tr.onclick = () => openProspect(tr.dataset.uid));
+}
+
+async function openProspect(uid) {
+  const d = await api('/prospects/' + uid);
+  const p = d.prospect;
+  const row = (k, v) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  const ev = p.evidence || {};
+
+  $('#dlgContent').innerHTML = `
+    <div class="dh"><div><h3>${esc(p.business_name)}</h3>
+      <div style="opacity:.85;font-size:13px;margin-top:3px">ICP ${p.icp_score}/100 · ${esc(STAGE_ES[p.stage] || p.stage)}</div></div>
+      <button onclick="document.getElementById('dlg').close()">×</button></div>
+    <div class="db">
+      ${row('Segmento', esc(SEGMENTS[p.segment] || p.segment))}
+      ${row('Dirección', esc([p.address, p.city, p.zip].filter(Boolean).join(', ') || '—'))}
+      ${row('Web', p.website ? `<a class="em" href="${esc(p.website)}" target="_blank" rel="noopener">${esc(p.website)}</a>` : '—')}
+      ${row('Correo', p.email ? `<a class="em" href="mailto:${esc(p.email)}">${esc(p.email)}</a> <span class="muted">(${esc(p.email_source || '')})</span>` : '—')}
+      ${row('Teléfono', esc(p.phone || '—'))}
+      ${row('Fuente', esc(p.source))}
+      ${row('Señal', esc(JSON.stringify(p.signal)))}
+      ${row('Valor estimado', `${money(p.est_visit_value)} / visita · ${money(p.est_annual_value)} al año`)}
+      ${p.reject_reason ? row('Descartado por', `<b>${esc(REJECT_ES[String(p.reject_reason).split(':')[0]] || p.reject_reason)}</b>`) : ''}
+      ${row('CRM', p.crm_synced ? `sincronizado ${esc(p.crm_ref || '')}` : (p.crm_error ? `<span style="color:#b91c1c">${esc(p.crm_error)}</span>` : 'pendiente'))}
+
+      ${ev.enrich ? `<div class="sec">Cómo se verificó</div>
+        ${row('Coincidencias', esc((ev.enrich.match || []).join(', ')))}
+        ${row('Páginas leídas', esc((ev.enrich.pages || []).join(', ')))}
+        ${row('Correos hallados', esc((ev.enrich.emailsFound || []).join(', ')))}` : ''}
+
+      ${ev.qualify?.reasons?.length ? `<div class="sec">Por qué puntúa ${p.icp_score}</div>
+        ${ev.qualify.reasons.map(r => `<div class="row"><span>${r.points > 0 ? '+' : ''}${r.points}</span><span>${esc(r.reason)}</span></div>`).join('')}` : ''}
+
+      ${p.copy ? `<div class="sec">Correo redactado <span class="muted">(${esc(p.copy_author || '')})</span></div>
+        <div class="copy"><b>${esc(p.copy.subject)}</b>
+          <p style="margin:0 0 9px">${esc(p.copy.opener)}</p>
+          <p style="margin:0 0 9px">${esc(p.copy.value)}</p>
+          <p style="margin:0"><strong>${esc(p.copy.ask)}</strong></p></div>` : ''}
+
+      ${d.emails.length ? `<div class="sec">Correos enviados</div>
+        ${d.emails.map(e => `<div class="row"><span>${esc(e.template)}</span><span>${fmt(e.created_at)} · ${e.status}${e.opened_at ? ' · abierto 👁' : ''}${e.clicked_at ? ' · clic 🖱' : ''}</span></div>`).join('')}` : ''}
+      ${d.steps.length ? `<div class="sec">Secuencia</div>
+        ${d.steps.map(s => `<div class="row"><span>${esc(s.step)}</span><span>${fmt(s.scheduled_at)} · ${s.status}${s.error ? ` · ${esc(s.error)}` : ''}</span></div>`).join('')}` : ''}
+
+      ${d.crmPayload ? `<div class="sec">Lo que recibe el CRM</div><pre>${esc(JSON.stringify(d.crmPayload, null, 2))}</pre>` : ''}
+    </div>`;
+  $('#dlg').showModal();
+}
+
+async function loadSuppression() {
+  const r = await api('/suppression');
+  $('#supList').innerHTML = r.entries.length
+    ? r.entries.slice(0, 30).map(e => `<div>${esc(e.value)} <span class="muted">· ${esc(e.kind)} · ${esc(e.reason || '')}</span></div>`).join('')
+    : 'Vacía.';
+}
+
+$('#kill').onclick = async () => {
+  const on = $('#kill').classList.contains('on');
+  await api('/outbound/' + (on ? 'disable' : 'enable'), { method: 'POST' });
+  loadStatus();
+};
+$('#runAll').onclick = async () => run(null);
+$('#runStage').onclick = async () => run($('#stage1').value);
+
+async function run(stage) {
+  const btn = stage ? $('#runStage') : $('#runAll');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'ejecutando…';
+  try {
+    const r = stage
+      ? await api('/run/' + stage, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      : await api('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    alert(JSON.stringify(r.stats || r.results, null, 2));
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+    loadStatus(); loadProspects();
+  }
+}
+
+$('#supAdd').onclick = async () => {
+  const value = $('#supValue').value.trim();
+  if (!value) return;
+  await api('/suppression', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value, kind: $('#supKind').value, reason: 'añadido a mano' }),
+  });
+  $('#supValue').value = '';
+  loadSuppression(); loadStatus();
+};
+
+let debounce;
+$('#q').oninput = () => { clearTimeout(debounce); debounce = setTimeout(loadProspects, 280); };
+$('#fStage').onchange = loadProspects;
+$('#fSegment').onchange = loadProspects;
+
+loadStatus(); loadProspects(); loadSuppression();
+setInterval(() => { loadStatus(); loadProspects(); }, 60000);
+</script>
+</body>
+</html>

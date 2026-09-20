@@ -367,12 +367,111 @@ export const templates = {
       ctaUrl: links.booking,
     };
   },
+
+  // ── 11. Outbound · primer contacto en frío ──
+  // El cuerpo lo escribe el agente redactor; la plantilla solo garantiza la
+  // estructura, el aviso de procedencia y la baja.
+  outbound_intro: (ctx) => {
+    const { copy, locale, links } = ctx;
+    const es = locale === 'es';
+    return {
+      subject: copy.subject,
+      preheader: copy.ask.slice(0, 110),
+      heading: copy.subject,
+      body: `
+        <p style="margin:0 0 14px;">${esc(copy.opener)}</p>
+        <p style="margin:0 0 14px;">${esc(copy.value)}</p>
+        <p style="margin:0 0 14px;"><strong>${esc(copy.ask)}</strong></p>`,
+      cta: es ? 'Ver precios al instante' : 'See instant pricing',
+      ctaUrl: links.booking,
+      secondary: outboundDisclosure(locale),
+    };
+  },
+
+  // ── 12. Outbound · seguimiento breve (día 4) ──
+  outbound_bump: (ctx) => {
+    const { copy, lead, locale, links } = ctx;
+    const es = locale === 'es';
+    const company = esc(lead?.company || '');
+    return {
+      subject: es ? `Re: ${copy.subject}` : `Re: ${copy.subject}`,
+      preheader: es ? 'Una línea y lo dejo.' : 'One line and I am done.',
+      heading: es ? '¿Lo dejo por aquí?' : 'Should I leave it here?',
+      body: `
+        <p style="margin:0 0 14px;">${es
+          ? `Le escribí hace unos días sobre la limpieza de ${company}. Sé lo que es una bandeja llena, así que voy al grano:`
+          : `I wrote a few days ago about cleaning at ${company}. I know what a full inbox looks like, so straight to it:`}</p>
+        <p style="margin:0 0 14px;">${es
+          ? 'Si le interesa un número, se lo doy hoy. Si no, respóndame "no" y no vuelvo a escribir.'
+          : 'If you want a number, I can get you one today. If not, reply "no" and I will not write again.'}</p>`,
+      cta: es ? 'Quiero el número' : 'Send me the number',
+      ctaUrl: links.booking,
+      secondary: outboundDisclosure(locale),
+    };
+  },
+
+  // ── 13. Outbound · prueba concreta (día 9) ──
+  outbound_proof: (ctx) => {
+    const { quote, locale, links, lead } = ctx;
+    const es = locale === 'es';
+    return {
+      subject: es ? 'Cómo cobramos (sin letra pequeña)' : 'How we price it (no fine print)',
+      preheader: es ? `Desde ${money(quote?.price)} por visita.` : `From ${money(quote?.price)} per visit.`,
+      heading: es ? 'Los números, sin rodeos' : 'The numbers, plainly',
+      body: `
+        <p style="margin:0 0 14px;">${es
+          ? `Para un espacio como el de ${esc(lead?.company || 'su negocio')}, un servicio típico sale por <strong>${money(quote?.price)}</strong> por visita.`
+          : `For a space like ${esc(lead?.company || 'yours')}, a typical service runs <strong>${money(quote?.price)}</strong> per visit.`}</p>
+        <ul style="margin:0 0 14px;padding-left:20px;color:#334155;line-height:1.7;">
+          <li>${es ? 'Sin contrato de permanencia' : 'No lock-in contract'}</li>
+          <li>${es ? 'Si faltamos una visita, no se cobra y se compensa la siguiente' : 'Miss a visit and you do not pay — the next one is credited'}</li>
+          <li>${es ? 'Seguro de responsabilidad civil y compensación laboral' : 'Liability insurance and workers comp'}</li>
+        </ul>
+        <p style="margin:0 0 14px;">${es
+          ? 'Puede calcular su propio precio en 30 segundos, sin hablar con nadie:'
+          : 'You can price it yourself in 30 seconds, without talking to anyone:'}</p>`,
+      cta: es ? 'Calcular mi precio' : 'Price it myself',
+      ctaUrl: links.booking,
+      secondary: outboundDisclosure(locale),
+    };
+  },
+
+  // ── 14. Outbound · cierre (día 16) ──
+  outbound_close: (ctx) => {
+    const { locale, links } = ctx;
+    const es = locale === 'es';
+    return {
+      subject: es ? 'Cierro su ficha' : 'Closing your file',
+      preheader: es ? 'Sin respuesta, sin más correos.' : 'No reply, no more email.',
+      heading: es ? 'Último correo, de verdad' : 'Last email, for real',
+      body: `<p style="margin:0 0 14px;">${es
+        ? 'No he sabido nada, así que cierro su ficha y dejo de escribir. Si en algún momento necesita limpieza, aquí estamos y el precio se calcula solo desde el enlace.'
+        : 'I have not heard back, so I am closing your file and will stop writing. If you ever need cleaning, we are here and the price calculates itself from the link.'}</p>`,
+      cta: es ? 'Guardar el enlace' : 'Keep the link',
+      ctaUrl: links.booking,
+      secondary: outboundDisclosure(locale),
+    };
+  },
 };
+
+const isUsableCopy = (copy) =>
+  Boolean(copy && ['subject', 'opener', 'value', 'ask'].every((k) => typeof copy[k] === 'string' && copy[k].trim()));
+
+/** Aviso de procedencia: por qué recibe este correo alguien que no lo pidió. */
+function outboundDisclosure(locale) {
+  const text = locale === 'es' ? config.outbound.disclosureEs : config.outbound.disclosureEn;
+  return `<span style="font-size:12.5px;color:#94a3b8;">${esc(text)}</span>`;
+}
 
 /** Renderiza una plantilla al HTML y texto plano definitivos. */
 export function renderTemplate(name, ctx) {
   const fn = templates[name];
   if (!fn) throw new Error(`Plantilla desconocida: ${name}`);
+  // Un correo en frío sin el texto del agente redactor sería un correo genérico
+  // a alguien que no pidió nada. Antes que eso, no se envía.
+  if (name.startsWith('outbound_') && !isUsableCopy(ctx.copy)) {
+    throw new Error(`La plantilla ${name} necesita el texto redactado del prospecto`);
+  }
   const locale = pickLocale(ctx.locale || ctx.lead?.locale);
   const parts = fn({ ...ctx, locale });
   const html = layout({

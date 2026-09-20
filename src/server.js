@@ -5,6 +5,7 @@ import './db.js';
 import leadsRouter from './routes/leads.js';
 import trackRouter from './routes/track.js';
 import adminRouter, { requireAdmin } from './routes/admin.js';
+import prospectingRouter from './routes/prospecting.js';
 import { processDueSteps } from './services/sequences.js';
 import { cleanupRateLimits } from './utils/ratelimit.js';
 
@@ -35,8 +36,10 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'cali-clean-leadg
 app.use('/api', leadsRouter);
 app.use('/', trackRouter);
 app.use('/api/admin', requireAdmin, adminRouter);
+app.use('/api/prospecting', requireAdmin, prospectingRouter);
 app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(ROOT, 'public', 'admin.html')));
 app.get('/admin/', requireAdmin, (req, res) => res.sendFile(path.join(ROOT, 'public', 'admin.html')));
+app.get('/prospects', requireAdmin, (req, res) => res.sendFile(path.join(ROOT, 'public', 'prospects.html')));
 
 app.use(express.static(path.join(ROOT, 'public'), { maxAge: config.env === 'production' ? '1h' : 0 }));
 

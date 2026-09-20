@@ -41,9 +41,15 @@ test('todas las plantillas renderizan en ambos idiomas con baja y píxel', () =>
   const lead = { id: 1, uid: 'u1', name: 'Ana Ruiz', email: 'a@b.com', phone: '+13105550123', zip: '90012', segment: 'residential', service_type: 'deep', frequency: 'biweekly', score: 70, temperature: 'hot', score_reasons: '[]' };
   const q = { size: '3 bd / 2 ba', serviceType: 'deep', frequency: 'biweekly', addons: ['oven'], price: 370, low: 325, high: 415, estimatedHours: 6.5, discountLabel: '15%', annualValue: 9635, recurring: true };
   const links = { booking: 'https://x/b', admin: 'https://x/a', unsubscribe: 'https://x/u', pixel: 'https://x/p' };
+  const copy = {
+    subject: 'Ana Ruiz: limpieza profesional',
+    opener: 'Vi que Ana Ruiz abrió hace poco.',
+    value: 'Trabajamos con negocios como el suyo.',
+    ask: '¿Le paso un número esta semana?',
+  };
   for (const name of Object.keys(templates)) {
     for (const locale of ['es', 'en']) {
-      const r = renderTemplate(name, { lead, quote: q, links, locale });
+      const r = renderTemplate(name, { lead, quote: q, links, locale, copy });
       assert.ok(r.subject.length > 5, `${name}/${locale} sin asunto`);
       assert.ok(r.html.includes('</html>'), `${name}/${locale} HTML incompleto`);
       assert.ok(r.text.length > 50, `${name}/${locale} sin versión de texto`);
@@ -58,4 +64,14 @@ test('el HTML de los datos del lead se escapa', () => {
   const q = { size: '1 bd', serviceType: 'standard', frequency: 'one_time', addons: [], price: 150, low: 130, high: 170, estimatedHours: 2, annualValue: 0 };
   const r = renderTemplate('internal_new_lead', { lead, quote: q, links: { booking: '#', admin: '#' }, locale: 'es' });
   assert.ok(!r.html.includes('<script>alert(1)</script>'));
+});
+
+test('un correo en frío sin texto del agente no se renderiza', () => {
+  const lead = { id: 1, uid: 'u1', email: 'a@b.com', company: 'Acme', locale: 'es' };
+  const links = { booking: '#', unsubscribe: '#', pixel: '' };
+  assert.throws(() => renderTemplate('outbound_intro', { lead, links, locale: 'es' }), /necesita el texto redactado/);
+  assert.throws(
+    () => renderTemplate('outbound_intro', { lead, links, locale: 'es', copy: { subject: 'x' } }),
+    /necesita el texto redactado/,
+  );
 });

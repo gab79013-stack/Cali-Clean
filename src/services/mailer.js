@@ -39,10 +39,10 @@ export function linksFor(lead, template) {
  * Envía una plantilla. Nunca lanza: registra el fallo en la tabla emails para
  * que un problema de SMTP no tumbe la captura del lead.
  */
-export async function sendTemplate({ template, lead, quote, to, locale }) {
+export async function sendTemplate({ template, lead, quote, to, locale, copy }) {
   const recipient = to || lead?.email;
   const links = linksFor(lead, template);
-  const rendered = renderTemplate(template, { lead, quote, links, locale: locale || lead?.locale });
+  const rendered = renderTemplate(template, { lead, quote, links, copy, locale: locale || lead?.locale });
   const from = `"${config.mail.fromName}" <${config.mail.fromEmail}>`;
 
   const row = db.prepare(

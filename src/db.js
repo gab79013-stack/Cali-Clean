@@ -107,12 +107,103 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_lead ON events(lead_id);
 
+CREATE TABLE IF NOT EXISTS prospects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+  source TEXT NOT NULL,
+  source_id TEXT,
+  dedupe_key TEXT NOT NULL,
+
+  business_name TEXT NOT NULL,
+  contact_name TEXT,
+  segment TEXT NOT NULL DEFAULT 'office_clinic',
+  address TEXT,
+  city TEXT,
+  zip TEXT,
+  phone TEXT,
+  website TEXT,
+  email TEXT,
+  email_source TEXT,
+  locale TEXT NOT NULL DEFAULT 'en',
+
+  signal_type TEXT,
+  signal_json TEXT,
+  raw_json TEXT,
+  evidence_json TEXT,
+
+  icp_score INTEGER NOT NULL DEFAULT 0,
+  est_visit_value INTEGER,
+  est_annual_value INTEGER,
+
+  stage TEXT NOT NULL DEFAULT 'discovered',
+  reject_reason TEXT,
+  copy_json TEXT,
+  copy_author TEXT,
+
+  lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  crm_synced INTEGER NOT NULL DEFAULT 0,
+  crm_ref TEXT,
+  crm_error TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prospects_dedupe ON prospects(dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_prospects_stage ON prospects(stage);
+CREATE INDEX IF NOT EXISTS idx_prospects_score ON prospects(icp_score DESC);
+
+-- Nunca volver a contactar: bajas, quejas, rebotes duros y exclusiones manuales.
+CREATE TABLE IF NOT EXISTS suppression (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  kind TEXT NOT NULL,            -- email | domain
+  value TEXT NOT NULL,
+  reason TEXT,
+  UNIQUE(kind, value)
+);
+
+-- Un registro por envío outbound: sostiene el límite diario y el calentamiento.
+CREATE TABLE IF NOT EXISTS outbound_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+  day TEXT NOT NULL DEFAULT (date('now')),
+  prospect_id INTEGER REFERENCES prospects(id) ON DELETE SET NULL,
+  lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  email TEXT NOT NULL,
+  domain TEXT,
+  step TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_day ON outbound_log(day);
+CREATE INDEX IF NOT EXISTS idx_outbound_domain ON outbound_log(domain);
+
+-- Trazabilidad de cada corrida del pipeline de agentes.
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  agent TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  stats_json TEXT,
+  error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0,
   window_start TEXT NOT NULL
 );
 `);
+
+// Migraciones: columnas que no existían en la primera versión del esquema.
+const leadColumns = new Set(db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name));
+for (const [name, ddl] of [
+  ['company', 'TEXT'],
+  ['website', 'TEXT'],
+  ['contact_channel', "TEXT NOT NULL DEFAULT 'inbound'"],
+  ['prospect_uid', 'TEXT'],
+]) {
+  if (!leadColumns.has(name)) db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${ddl}`);
+}
 
 export function logEvent(leadId, type, data = null) {
   db.prepare('INSERT INTO events (lead_id, type, data) VALUES (?, ?, ?)')
