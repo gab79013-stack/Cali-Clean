@@ -104,6 +104,104 @@ const SITES = {
   },
 };
 
+/**
+ * Filas del portal de San Diego, que publica CSV plano en vez de Socrata.
+ * Incluye a propósito casos que deben caer fuera: un negocio de Los Ángeles,
+ * uno de Borrego Springs (ZIP del condado pero a 75 millas) y uno antiguo.
+ */
+export const SD_BUSINESS_ROWS = [
+  {
+    account_key: 'SD-3001', dba_name: 'Gaslamp Dental Studio',
+    ownership_name: 'Nguyen Tran', address_no: '410', address_road: 'Fifth', address_sfx: 'Ave',
+    address_city: 'San Diego', address_zip: '92101', business_phone: '6195550188',
+    naics_code: '621210', naics_description: 'Offices of dentists',
+    date_business_start: daysAgo(25),
+  },
+  {
+    account_key: 'SD-3002', dba_name: 'Bayview Property Management',
+    ownership_name: '', address_no: '77', address_road: 'Bay', address_sfx: 'Blvd',
+    address_city: 'Chula Vista', address_zip: '91910', business_phone: '6195550233',
+    naics_code: '531311', naics_description: 'Residential property managers',
+    date_business_start: daysAgo(48),
+  },
+  {
+    account_key: 'SD-3003', dba_name: 'Oceanside Taco House',
+    address_no: '15', address_road: 'Coast', address_sfx: 'Hwy',
+    address_city: 'Oceanside', address_zip: '92054', business_phone: '7605550101',
+    naics_code: '722511', naics_description: 'Full-service restaurants',
+    date_business_start: daysAgo(12),
+  },
+  {
+    // Fuera del área: Los Ángeles. Debe descartarse por el filtro geográfico.
+    account_key: 'SD-3004', dba_name: 'Wilshire Med Offices',
+    address_no: '900', address_road: 'Wilshire', address_sfx: 'Blvd',
+    address_city: 'Los Angeles', address_zip: '90010', business_phone: '2135550111',
+    naics_code: '621210', naics_description: 'Offices of dentists',
+    date_business_start: daysAgo(9),
+  },
+  {
+    // ZIP del condado de San Diego, pero a 75 millas: fuera del radio.
+    account_key: 'SD-3005', dba_name: 'Borrego Desert Clinic',
+    address_no: '3', address_road: 'Palm Canyon', address_sfx: 'Dr',
+    address_city: 'Borrego Springs', address_zip: '92004', business_phone: '7605550777',
+    naics_code: '621210', naics_description: 'Offices of dentists',
+    date_business_start: daysAgo(11),
+  },
+  {
+    // Demasiado antiguo: fuera de la ventana de tiempo.
+    account_key: 'SD-3006', dba_name: 'Old Town Antiques',
+    address_no: '2', address_road: 'San Diego', address_sfx: 'Ave',
+    address_city: 'San Diego', address_zip: '92110', business_phone: '6195550999',
+    naics_code: '722511', naics_description: 'Full-service restaurants',
+    date_business_start: daysAgo(4000),
+  },
+];
+
+/** Webs de los negocios de San Diego. */
+const SD_SITES = {
+  'gaslampdentalstudio.com': {
+    robots: '',
+    pages: {
+      '/': `<html><body><h1>Gaslamp Dental Studio</h1>
+        <p>410 Fifth Ave, San Diego, CA 92101</p><p>(619) 555-0188</p>
+        <a href="/contact">Contact</a></body></html>`,
+      '/contact': `<html><body><h1>Gaslamp Dental Studio</h1>
+        <p><a href="mailto:office@gaslampdentalstudio.com">office@gaslampdentalstudio.com</a></p>
+        <p>410 Fifth Ave, San Diego, CA 92101 · (619) 555-0188</p></body></html>`,
+    },
+  },
+  'bayviewpropertymanagement.com': {
+    robots: 'User-agent: *\nDisallow: /portal\n',
+    pages: {
+      '/': `<html><body><h1>Bayview Property Management</h1>
+        <p>77 Bay Blvd, Chula Vista, CA 91910 · (619) 555-0233</p>
+        <p>Email: <a href="mailto:hello@bayviewpropertymanagement.com">hello@bayviewpropertymanagement.com</a></p>
+        </body></html>`,
+    },
+  },
+  'oceansidetacohouse.com': {
+    robots: '',
+    pages: {
+      // Sin correo publicado: debe rechazarse, no inventarse uno.
+      '/': `<html><body><h1>Oceanside Taco House</h1>
+        <p>15 Coast Hwy, Oceanside CA 92054 · (760) 555-0101</p></body></html>`,
+    },
+  },
+};
+
+/** Convierte filas a CSV, con comillas donde hagan falta. */
+function toCsv(rows) {
+  const header = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const cell = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [header.join(','), ...rows.map((r) => header.map((h) => cell(r[h])).join(','))].join('\n');
+}
+
+/** Cuántas veces se ha descargado el CSV: sirve para comprobar la caché. */
+export const counters = { csvDownloads: 0 };
+
 export function createFakeServer() {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -131,9 +229,34 @@ export function createFakeServer() {
       return send(200, JSON.stringify(rows.slice(0, limit)), 'application/json');
     }
 
+    // ── Portal de San Diego: fichero CSV plano ──
+    if (url.pathname === '/ttcs/sd_businesses_active_datasd.csv') {
+      counters.csvDownloads++;
+      return send(200, toCsv(SD_BUSINESS_ROWS), 'text/csv');
+    }
+    // La misma fuente servida desde otra ruta: la que anuncia el catálogo CKAN
+    // cuando la ruta conocida ha caducado.
+    if (url.pathname === '/ttcs/moved/sd_businesses_active_datasd.csv') {
+      return send(200, toCsv(SD_BUSINESS_ROWS), 'text/csv');
+    }
+
+    // ── Catálogo CKAN de San Diego ──
+    if (url.pathname === '/api/3/action/package_show') {
+      return send(200, JSON.stringify({
+        success: true,
+        result: {
+          id: url.searchParams.get('id'),
+          resources: [
+            { format: 'PDF', url: 'https://seshat.datasd.org/ttcs/diccionario.pdf' },
+            { format: 'CSV', url: 'https://seshat.datasd.org/ttcs/moved/sd_businesses_active_datasd.csv' },
+          ],
+        },
+      }), 'application/json');
+    }
+
     // ── Webs de prospectos, enrutadas por el host solicitado ──
     const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0];
-    const site = SITES[host.replace(/^www\./, '')];
+    const site = { ...SITES, ...SD_SITES }[host.replace(/^www\./, '')];
     if (!site) return send(404, 'not found');
 
     if (url.pathname === '/robots.txt') return send(site.robots ? 200 : 404, site.robots || '', 'text/plain');
@@ -147,4 +270,4 @@ export function createFakeServer() {
   });
 }
 
-export const FAKE_SITE_HOSTS = Object.keys(SITES);
+export const FAKE_SITE_HOSTS = [...Object.keys(SITES), ...Object.keys(SD_SITES)];

@@ -35,7 +35,7 @@ export function dedupeKey({ businessName, address, zip, website, phone }) {
   return `name:${crypto.createHash('sha1').update(basis).digest('hex').slice(0, 20)}`;
 }
 
-export async function discover({ sources, sinceDays = 30, limit, baseOverride } = {}) {
+export async function discover({ sources, sinceDays = 30, limit, offset = 0, baseOverride } = {}) {
   const active = (sources || config.prospecting.sources).filter((k) => SOURCES[k]);
   const cap = limit ?? config.prospecting.discoverLimit;
   const stats = { sources: active.length, fetched: 0, inserted: 0, duplicates: 0, unclassified: 0, errors: [] };
@@ -44,7 +44,7 @@ export async function discover({ sources, sinceDays = 30, limit, baseOverride } 
     if (stats.inserted >= cap) break;
     let rows = [];
     try {
-      rows = await fetchFromSource(key, { sinceDays, limit: Math.min(200, cap * 2), baseOverride });
+      rows = await fetchFromSource(key, { sinceDays, limit: Math.min(200, cap * 2), offset, baseOverride });
     } catch (err) {
       stats.errors.push(`${key}: ${err.message}`);
       continue;
