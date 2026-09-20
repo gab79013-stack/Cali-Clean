@@ -2,6 +2,7 @@ import dns from 'node:dns/promises';
 import { config } from '../../config.js';
 import { db } from '../../db.js';
 import { politeFetch } from '../http.js';
+import { findPlace, corroborates, isEnabled as placesEnabled } from '../places.js';
 
 /**
  * Agente enriquecedor.
@@ -114,16 +115,18 @@ async function domainResolves(domain) {
  * verificando que la página corresponde al negocio.
  */
 export async function resolveWebsite(prospect, { skipDns = false } = {}) {
-  const candidates = prospect.website ? [prospect.website] : domainCandidates(prospect.business_name);
+  const candidates = await websiteCandidates(prospect);
   // Se guarda por qué falló cada intento: "el sitio nos prohíbe el paso" y "no
   // encontramos el sitio" son cosas distintas y el panel debe distinguirlas.
   let lastReason = 'website_not_found';
 
   for (const candidate of candidates) {
-    const domain = candidate.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    if (!skipDns && !prospect.website && !(await domainResolves(domain))) continue;
+    const domain = candidate.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    // Un dominio que Places declara existe; solo los adivinados hay que comprobarlos.
+    const needsDnsCheck = !skipDns && candidate.from === 'guess';
+    if (needsDnsCheck && !(await domainResolves(domain))) continue;
 
-    const url = candidate.startsWith('http') ? candidate : `https://${domain}`;
+    const url = candidate.url.startsWith('http') ? candidate.url : `https://${domain}`;
     const res = await politeFetch(url);
     if (!res.ok) {
       if (res.reason === 'robots_disallow') lastReason = 'robots_disallow';
@@ -136,11 +139,50 @@ export async function resolveWebsite(prospect, { skipDns = false } = {}) {
       zip: prospect.zip,
       address: prospect.address,
     });
-    if (!match.matched) { lastReason = 'site_not_verified'; continue; }
 
-    return { url: res.url || url, domain, html: res.html, evidence: match.evidence };
+    // Places ya cruzó nombre y dirección. Si además su ficha coincide en
+    // teléfono o código postal con nuestro registro, eso vale como una prueba
+    // más: una web moderna con poco texto puede no dar dos por sí sola.
+    const evidence = [...match.evidence, ...candidate.evidence];
+    const matched = match.matched || evidence.length >= 2;
+    if (!matched) { lastReason = 'site_not_verified'; continue; }
+
+    return { url: res.url || url, domain, html: res.html, evidence, source: candidate.from };
   }
   return { failed: true, reason: lastReason };
+}
+
+/**
+ * De dónde sale la web a visitar, en orden de fiabilidad:
+ * la que ya tenemos, la que declara Places, y por último las adivinadas a
+ * partir del nombre.
+ */
+async function websiteCandidates(prospect) {
+  if (prospect.website) return [{ url: prospect.website, from: 'known', evidence: [] }];
+
+  const out = [];
+  if (placesEnabled()) {
+    const place = await findPlace({
+      businessName: prospect.business_name,
+      address: prospect.address,
+      city: prospect.city,
+      zip: prospect.zip,
+    });
+    if (place?.website) {
+      out.push({
+        url: place.website,
+        from: 'places',
+        evidence: corroborates(place, prospect) ? ['places'] : [],
+      });
+    }
+  }
+
+  const guessed = domainCandidates(prospect.business_name)
+    .map((url) => ({ url, from: 'guess', evidence: [] }))
+    // Places ya nos llevó ahí: no repetir la visita.
+    .filter((c) => !out.some((o) => o.url.includes(c.url.replace(/\.(com|net)$/, ''))));
+
+  return [...out, ...guessed];
 }
 
 /** Enriquece un prospecto. Devuelve el estado resultante. */
@@ -176,7 +218,10 @@ export async function enrichOne(prospect, opts = {}) {
     email: emails[0],
     email_source: 'published_on_website',
     phone,
-    evidence: { match: site.evidence, pages: pagesVisited, emailsFound: emails.slice(0, 4) },
+    evidence: {
+      match: site.evidence, pages: pagesVisited, emailsFound: emails.slice(0, 4),
+      websiteSource: site.source,
+    },
   };
 }
 

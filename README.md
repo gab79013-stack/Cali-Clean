@@ -147,8 +147,19 @@ verifica contra la página (nombre + teléfono, ZIP o dirección) y solo entonce
 lee el correo publicado. Funciona bien con negocios cuyo dominio se parece a su
 nombre, y falla con los que no. En las pruebas, de 5 prospectos descubiertos se
 enriquecieron 2 — esa proporción es la realidad del método, no un error.
-Si en algún momento quieres más cobertura, la Google Places API cubre
-exactamente ese hueco y el conector encaja donde están los demás.
+**Ese hueco ya tiene tapa.** `GOOGLE_PLACES_API_KEY` activa el conector de
+Google Places: en vez de adivinar el dominio, el agente pregunta cuál es la web
+declarada del negocio. Es opcional y de pago; sin clave, todo funciona
+exactamente como antes.
+
+El sitio que devuelve Places **se sigue verificando** contra la página, porque
+una búsqueda por texto puede traer al vecino. Lo que cambia es que si la ficha
+de Places coincide en teléfono o código postal con nuestro registro, eso cuenta
+como una prueba de identidad más — que es lo que salva a las webs modernas con
+poco texto, donde la página por sí sola no da las dos que se exigen.
+
+Es la palanca que más sube el número final de correos: `website_not_found` es
+el motivo de descarte más común, y es justo el que esto elimina.
 
 ---
 

@@ -27,13 +27,14 @@ async function politeDelay(host) {
   lastHit.set(host, Date.now());
 }
 
-async function rawFetch(url, { method = 'GET', headers = {}, timeoutMs } = {}) {
+async function rawFetch(url, { method = 'GET', headers = {}, body, timeoutMs } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || config.prospecting.requestTimeoutMs);
   const target = rewriter ? rewriter(url) : { url, headers: {} };
   try {
     return await fetch(target.url, {
       method,
+      body,
       redirect: 'follow',
       headers: {
         'User-Agent': config.prospecting.userAgent,

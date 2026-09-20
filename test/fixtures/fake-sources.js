@@ -148,6 +148,15 @@ export const SD_BUSINESS_ROWS = [
     date_business_start: daysAgo(11),
   },
   {
+    // Su web no se parece a su nombre: adivinando el dominio es imposible
+    // encontrarla. Es el caso que Places resuelve.
+    account_key: 'SD-3007', dba_name: 'El Rinconcito Cocina',
+    address_no: '600', address_road: 'Broadway', address_sfx: 'St',
+    address_city: 'El Cajon', address_zip: '92020', business_phone: '6195550444',
+    naics_code: '722511', naics_description: 'Full-service restaurants',
+    date_business_start: daysAgo(30),
+  },
+  {
     // Demasiado antiguo: fuera de la ventana de tiempo.
     account_key: 'SD-3006', dba_name: 'Old Town Antiques',
     address_no: '2', address_road: 'San Diego', address_sfx: 'Ave',
@@ -179,6 +188,14 @@ const SD_SITES = {
         </body></html>`,
     },
   },
+  'saborsd.com': {
+    robots: '',
+    pages: {
+      '/': `<html><body><h1>El Rinconcito Cocina</h1>
+        <p>600 Broadway St, El Cajon</p>
+        <p><a href="mailto:hola@saborsd.com">hola@saborsd.com</a></p></body></html>`,
+    },
+  },
   'oceansidetacohouse.com': {
     robots: '',
     pages: {
@@ -200,7 +217,17 @@ function toCsv(rows) {
 }
 
 /** Cuántas veces se ha descargado el CSV: sirve para comprobar la caché. */
-export const counters = { csvDownloads: 0 };
+export const counters = { csvDownloads: 0, placesCalls: 0 };
+
+/** Junta el cuerpo de una petición POST. */
+function collectBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (c) => { data += c; });
+    req.on('end', () => resolve(data));
+    req.on('error', () => resolve(''));
+  });
+}
 
 export function createFakeServer() {
   const server = http.createServer((req, res) => {
@@ -238,6 +265,24 @@ export function createFakeServer() {
     // cuando la ruta conocida ha caducado.
     if (url.pathname === '/ttcs/moved/sd_businesses_active_datasd.csv') {
       return send(200, toCsv(SD_BUSINESS_ROWS), 'text/csv');
+    }
+
+    // ── Google Places (Text Search) simulado ──
+    if (url.pathname === '/v1/places:searchText') {
+      counters.placesCalls++;
+      return void collectBody(req).then((raw) => {
+        let query = '';
+        try { query = JSON.parse(raw || '{}').textQuery || ''; } catch { query = ''; }
+        const match = /rinconcito/i.test(query)
+          ? {
+            displayName: { text: 'El Rinconcito Cocina' },
+            websiteUri: 'https://saborsd.com',
+            nationalPhoneNumber: '(619) 555-0444',
+            formattedAddress: '600 Broadway St, El Cajon, CA 92020, USA',
+          }
+          : null;
+        send(200, JSON.stringify({ places: match ? [match] : [] }), 'application/json');
+      });
     }
 
     // ── Catálogo CKAN de San Diego ──

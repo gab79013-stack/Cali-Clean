@@ -98,6 +98,9 @@ export const config = {
       ? list(process.env.PROSPECT_SOURCES)
       : ['sd_active_businesses', 'sd_development_permits'],
     socrataAppToken: process.env.SOCRATA_APP_TOKEN || '',
+    // Opcional y de pago. Sin clave, el enriquecedor adivina el dominio a
+    // partir del nombre, que es como funcionaba antes de existir esto.
+    googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || '',
   },
 
   crm: {

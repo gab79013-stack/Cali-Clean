@@ -209,3 +209,64 @@ test('la exportación escribe solo los correos verificados', async () => {
   assert.equal(written.length, rows.length);
   for (const email of written) assert.match(email, /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i);
 });
+
+// ── Google Places ────────────────────────────────────────────
+//
+// El enriquecedor adivina el dominio del nombre del negocio. "El Rinconcito
+// Cocina" vive en saborsd.com, así que adivinando es inalcanzable: es
+// exactamente el prospecto que hoy se pierde y el que Places recupera.
+const { config } = await import('../src/config.js');
+const { findPlace, corroborates } = await import('../src/prospecting/places.js');
+const { resolveWebsite } = await import('../src/prospecting/agents/enrich.js');
+
+const RINCONCITO = {
+  business_name: 'El Rinconcito Cocina',
+  address: '600 Broadway St',
+  city: 'El Cajon',
+  zip: '92020',
+  phone: '6195550444',
+};
+
+test('sin clave de Places, un dominio que no se parece al nombre se pierde', async () => {
+  config.prospecting.googlePlacesApiKey = '';
+  const site = await resolveWebsite(RINCONCITO, { skipDns: true });
+  assert.equal(site.failed, true);
+  assert.equal(site.reason, 'website_not_found');
+});
+
+test('con Places, ese mismo prospecto se resuelve', async () => {
+  config.prospecting.googlePlacesApiKey = 'clave-de-prueba';
+  try {
+    const site = await resolveWebsite(RINCONCITO, { skipDns: true });
+    assert.equal(site.failed, undefined, `debería haber encontrado el sitio, dio ${site.reason}`);
+    assert.equal(site.domain, 'saborsd.com');
+    assert.equal(site.source, 'places');
+    assert.ok(site.evidence.includes('places'), 'el teléfono de la ficha corrobora la identidad');
+  } finally {
+    config.prospecting.googlePlacesApiKey = '';
+  }
+});
+
+test('Places devuelve null cuando no conoce el negocio, y no rompe nada', async () => {
+  config.prospecting.googlePlacesApiKey = 'clave-de-prueba';
+  try {
+    assert.equal(await findPlace({ businessName: 'Negocio Que No Existe' }), null);
+  } finally {
+    config.prospecting.googlePlacesApiKey = '';
+  }
+});
+
+test('sin clave no se llama a Places siquiera', async () => {
+  config.prospecting.googlePlacesApiKey = '';
+  counters.placesCalls = 0;
+  await resolveWebsite({ business_name: 'Cualquier Cosa', zip: '92101' }, { skipDns: true });
+  assert.equal(counters.placesCalls, 0);
+});
+
+test('la ficha de Places debe corroborar por teléfono o código postal', () => {
+  const place = { phone: '(619) 555-0444', address: '600 Broadway St, El Cajon, CA 92020, USA' };
+  assert.equal(corroborates(place, { phone: '6195550444' }), true, 'mismo teléfono');
+  assert.equal(corroborates(place, { zip: '92020' }), true, 'mismo código postal');
+  assert.equal(corroborates(place, { phone: '6195559999', zip: '92101' }), false, 'ni uno ni otro');
+  assert.equal(corroborates(null, { zip: '92020' }), false);
+});
