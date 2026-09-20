@@ -188,6 +188,18 @@ ficheros en `data/`:
 Opciones: `--target` (cuántos), `--since` (ventana de días, por defecto 365),
 `--sources`, `--out`.
 
+### Antes de la primera corrida
+
+```bash
+node scripts/inspect-source.js sd_active_businesses
+```
+
+Enseña qué está devolviendo el portal hoy: las columnas reales, cómo queda la
+primera fila ya mapeada y si la fecha se encuentra. Existe porque el mapeo de
+San Diego va por lista de variantes: si algún día ninguna acierta, la corrida
+diría "0 descubiertos" sin explicar nada, y esto lo convierte en diez segundos
+de diagnóstico que además dice qué línea tocar.
+
 **Si no llega al objetivo, lo dice y explica por qué**, desglosado por motivo de
 descarte (`no_public_email`, `website_not_found`, `robots_disallow`,
 `site_not_verified`). No rellena el hueco con direcciones inventadas: cada correo
