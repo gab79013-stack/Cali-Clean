@@ -8,3 +8,8 @@ data/*.db
 preview/-wal
 *.log
 .DS_Store
+
+# Listas de contactos exportadas: son datos de negocios reales y no tienen
+# por qué acabar en el repositorio.
+data/leads-*.txt
+data/leads-*.csv
