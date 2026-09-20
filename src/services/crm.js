@@ -1,21 +1,47 @@
-import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { db, logEvent } from '../db.js';
+import { adapters, ADAPTER_KEYS } from './crm/adapters.js';
+import { detectCrm } from './crm/detect.js';
 
 /**
  * Conector al CRM.
  *
  * Los agentes alimentan primero la base local —que ya es un CRM funcional con
  * su panel— y desde ahí empujan cada lead al CRM externo. Así, si el CRM está
- * caído o cambia, la prospección no se detiene ni se pierde un solo contacto:
- * los envíos fallidos quedan marcados y se reintentan.
+ * caído o cambia, la prospección no se detiene ni se pierde un contacto: los
+ * envíos fallidos quedan marcados y se reintentan.
  *
- * `webhook` sirve para cualquier CRM que acepte un POST (incluido n8n, Make o
- * Zapier). `hubspot` y `gohighlevel` están listos para cuando se confirme cuál
- * hay detrás de cali-clean.net.
+ * Los adaptadores concretos viven en `crm/adapters.js`.
  */
 
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 15000;
+
+/** Cliente HTTP compartido por todos los adaptadores. Se inyecta en las pruebas. */
+export const http = {
+  async request(url, { method = 'GET', body, headers = {}, form } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const init = { method, headers: { Accept: 'application/json', ...headers }, signal: controller.signal };
+      if (form) {
+        init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        init.body = new URLSearchParams(form).toString();
+      } else if (body !== undefined) {
+        if (!init.headers['Content-Type']) init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, init);
+      const text = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status} en ${new URL(url).host}: ${text.slice(0, 200)}`);
+      try { return JSON.parse(text); } catch { return { raw: text }; }
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+  get(url, headers) { return http.request(url, { method: 'GET', headers }); },
+  post(url, body, headers) { return http.request(url, { method: 'POST', body, headers }); },
+  form(url, form, headers) { return http.request(url, { method: 'POST', form, headers }); },
+};
 
 /** Forma canónica del lead. Es lo que recibe el webhook genérico. */
 export function toPayload(lead, prospect = null) {
@@ -32,7 +58,12 @@ export function toPayload(lead, prospect = null) {
       website: lead.website || null,
       locale: lead.locale,
     },
-    location: { address: lead.address || null, zip: lead.zip || null, in_service_area: Boolean(lead.in_service_area) },
+    location: {
+      address: lead.address || null,
+      city: lead.city || null,
+      zip: lead.zip || null,
+      in_service_area: Boolean(lead.in_service_area),
+    },
     service: {
       segment: lead.segment,
       type: lead.service_type,
@@ -68,112 +99,69 @@ export function toPayload(lead, prospect = null) {
   };
 }
 
-async function post(url, body, headers = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    try { return JSON.parse(text); } catch { return { raw: text }; }
-  } finally {
-    clearTimeout(timer);
-  }
+/** Configuración del adaptador activo, leída del entorno. */
+export function adapterConfig() {
+  return {
+    webhookUrl: config.crm.webhookUrl,
+    webhookSecret: config.crm.webhookSecret,
+    apiKey: config.crm.apiKey,
+    apiSecret: config.crm.apiSecret,
+    apiUser: config.crm.apiUser,
+    baseUrl: config.crm.baseUrl,
+    locationId: config.crm.locationId,
+    assignedUserId: config.crm.assignedUserId,
+  };
 }
 
-const drivers = {
-  /** Webhook genérico, firmado con HMAC para que el receptor pueda verificarlo. */
-  async webhook(payload) {
-    if (!config.crm.webhookUrl) throw new Error('CRM_WEBHOOK_URL no configurado');
-    const headers = {};
-    if (config.crm.webhookSecret) {
-      const signature = crypto.createHmac('sha256', config.crm.webhookSecret)
-        .update(JSON.stringify(payload)).digest('hex');
-      headers['X-CaliClean-Signature'] = `sha256=${signature}`;
-    }
-    const res = await post(config.crm.webhookUrl, payload, headers);
-    return { ref: res?.id || res?.contact_id || null, raw: res };
-  },
+/** ¿Está el CRM listo para recibir? Dice también qué le falta. */
+export function crmStatus() {
+  const driver = config.crm.driver;
+  if (driver === 'none') return { ready: false, driver, missing: [], reason: 'sin_configurar' };
+  const adapter = adapters[driver];
+  if (!adapter) return { ready: false, driver, missing: [], reason: `adaptador_desconocido:${driver}` };
 
-  async hubspot(payload) {
-    if (!config.crm.apiKey) throw new Error('CRM_API_KEY no configurado');
-    const base = config.crm.baseUrl || 'https://api.hubapi.com';
-    const res = await post(`${base}/crm/v3/objects/contacts`, {
-      properties: {
-        email: payload.contact.email,
-        firstname: (payload.contact.name || '').split(' ')[0] || undefined,
-        lastname: (payload.contact.name || '').split(' ').slice(1).join(' ') || undefined,
-        phone: payload.contact.phone || undefined,
-        company: payload.company || undefined,
-        website: payload.contact.website || undefined,
-        zip: payload.location.zip || undefined,
-        hs_lead_status: payload.status,
-        lifecyclestage: 'lead',
-      },
-    }, { Authorization: `Bearer ${config.crm.apiKey}` });
-    return { ref: res?.id || null, raw: res };
-  },
-
-  async gohighlevel(payload) {
-    if (!config.crm.apiKey) throw new Error('CRM_API_KEY no configurado');
-    const base = config.crm.baseUrl || 'https://services.leadconnectorhq.com';
-    const res = await post(`${base}/contacts/`, {
-      locationId: config.crm.locationId || undefined,
-      email: payload.contact.email,
-      phone: payload.contact.phone || undefined,
-      name: payload.contact.name || payload.company || undefined,
-      companyName: payload.company || undefined,
-      website: payload.contact.website || undefined,
-      postalCode: payload.location.zip || undefined,
-      source: payload.attribution.source,
-      tags: [payload.channel, payload.service.segment, payload.scoring.temperature].filter(Boolean),
-    }, {
-      Authorization: `Bearer ${config.crm.apiKey}`,
-      Version: '2021-07-28',
-    });
-    return { ref: res?.contact?.id || res?.id || null, raw: res };
-  },
-};
-
-export function crmReady() {
-  const d = config.crm.driver;
-  if (d === 'none' || !drivers[d]) return false;
-  if (d === 'webhook') return Boolean(config.crm.webhookUrl);
-  return Boolean(config.crm.apiKey);
+  const cfg = adapterConfig();
+  const missing = adapter.needs.filter((k) => !cfg[k]);
+  return {
+    ready: missing.length === 0,
+    driver,
+    label: adapter.label,
+    missing,
+    reason: missing.length ? `faltan_datos:${missing.join(',')}` : null,
+  };
 }
+
+export const crmReady = () => crmStatus().ready;
 
 /** Empuja un lead al CRM. Nunca lanza: marca el error y deja el reintento vivo. */
-export async function pushLead(lead, prospect = null) {
-  if (!crmReady()) return { ok: false, skipped: true, reason: 'crm_not_configured' };
+export async function pushLead(lead, prospect = null, { client = http } = {}) {
+  const status = crmStatus();
+  if (!status.ready) return { ok: false, skipped: true, reason: status.reason };
 
   const payload = toPayload(lead, prospect);
   try {
-    const { ref } = await drivers[config.crm.driver](payload);
+    const { ref } = await adapters[status.driver].push(payload, adapterConfig(), client);
     if (prospect) {
       db.prepare('UPDATE prospects SET crm_synced=1, crm_ref=?, crm_error=NULL WHERE id=?')
         .run(ref, prospect.id);
     }
-    logEvent(lead.id, 'crm_synced', { driver: config.crm.driver, ref });
+    logEvent(lead.id, 'crm_synced', { driver: status.driver, ref });
     return { ok: true, ref };
   } catch (err) {
     const message = String(err.message).slice(0, 300);
     if (prospect) db.prepare('UPDATE prospects SET crm_error=? WHERE id=?').run(message, prospect.id);
-    logEvent(lead.id, 'crm_sync_failed', { driver: config.crm.driver, error: message });
+    logEvent(lead.id, 'crm_sync_failed', { driver: status.driver, error: message });
     return { ok: false, error: message };
   }
 }
 
 /** Reintenta los prospectos contactados que aún no llegaron al CRM. */
-export async function syncPending({ limit = 50 } = {}) {
-  if (!crmReady()) return { skipped: true, reason: 'crm_not_configured' };
+export async function syncPending({ limit = 50, client = http } = {}) {
+  const status = crmStatus();
+  if (!status.ready) return { skipped: true, reason: status.reason };
 
   const rows = db.prepare(`
-    SELECT p.*, l.id AS l_id FROM prospects p
+    SELECT p.* FROM prospects p
       JOIN leads l ON l.id = p.lead_id
      WHERE p.crm_synced = 0 AND p.lead_id IS NOT NULL
      ORDER BY p.updated_at LIMIT ?`).all(limit);
@@ -183,10 +171,16 @@ export async function syncPending({ limit = 50 } = {}) {
     const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(prospect.lead_id);
     if (!lead) continue;
     stats.attempted++;
-    const res = await pushLead(lead, prospect);
+    const res = await pushLead(lead, prospect, { client });
     if (res.ok) stats.synced++; else stats.failed++;
   }
   return stats;
 }
 
-export default { pushLead, syncPending, crmReady, toPayload };
+/** Empuja también los leads que entraron por el widget, no solo los prospectos. */
+export async function pushInboundLead(lead, opts) {
+  return pushLead(lead, null, opts);
+}
+
+export { adapters, ADAPTER_KEYS, detectCrm };
+export default { pushLead, pushInboundLead, syncPending, crmReady, crmStatus, toPayload, detectCrm };

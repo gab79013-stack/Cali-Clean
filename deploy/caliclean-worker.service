@@ -1,0 +1,23 @@
+[Unit]
+Description=Cali Clean · agentes de prospección y cola de correo
+After=network.target caliclean.service
+
+[Service]
+Type=simple
+User=caliclean
+WorkingDirectory=/opt/caliclean
+EnvironmentFile=/opt/caliclean/.env
+ExecStart=/usr/bin/node src/worker.js
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/caliclean/data
+
+[Install]
+WantedBy=multi-user.target

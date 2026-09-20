@@ -155,24 +155,53 @@ Es el archivo que se toca para cambiar a quién se persigue.
 
 ## Conectar el CRM real
 
-No pude ver qué CRM hay detrás de cali-clean.net, así que el sistema trae su
-propio CRM (base + panel) y cuatro formas de enchufar el externo:
+El sistema trae su propio CRM (base de datos + panel), y además puede alimentar
+el que ya tengas. **Si no sabes cuál tienes instalado, lo detecta solo:**
 
-```ini
-CRM_DRIVER=webhook          # POST de cada lead a tu URL, firmado con HMAC
-CRM_WEBHOOK_URL=https://...
-CRM_WEBHOOK_SECRET=...
-
-CRM_DRIVER=hubspot          # API de contactos de HubSpot
-CRM_DRIVER=gohighlevel      # API de contactos de Go High Level
-CRM_DRIVER=none             # solo CRM local
+```bash
+node scripts/crm.js detect https://tu-crm.com   # dice cuál es y qué configurar
+node scripts/crm.js status                      # ¿falta algún dato?
+node scripts/crm.js test                        # crea un lead de prueba real
 ```
 
-El payload va en `src/services/crm.js` (`toPayload`) y se puede ver entero en la
-ficha de cualquier prospecto. Lleva contacto, servicio estimado, valor anual,
-scoring con sus razones, atribución y el rastro completo de prospección.
+Adaptadores nativos: **EspoCRM, SuiteCRM, Perfex, Vtiger** (los que instala
+Hostinger con un clic), **HubSpot** y **Go High Level**. Para cualquier otro, el
+genérico:
 
-Dime cuál es el CRM y escribo el adaptador exacto.
+```ini
+CRM_DRIVER=webhook          # POST firmado con HMAC-SHA256 a tu URL
+CRM_WEBHOOK_URL=https://...
+CRM_WEBHOOK_SECRET=...
+```
+
+Cada lead llega al CRM con una nota que explica **por qué** está ahí: precio
+estimado, valor anual del contrato, la puntuación desglosada punto por punto y
+—si vino de prospección— la señal que lo activó y de dónde salió su correo. El
+payload completo está en `src/services/crm.js` (`toPayload`) y se puede ver en
+la ficha de cualquier prospecto.
+
+Los leads del widget también se sincronizan (`CRM_SYNC_INBOUND=true`), para que
+el equipo no trabaje en dos sitios.
+
+## Despliegue
+
+`deploy/HOSTINGER.md` tiene los pasos exactos. En un VPS:
+
+```bash
+bash deploy/install-vps.sh crm.cali-clean.net tu@correo.com
+```
+
+Deja funcionando la API, los dos paneles y el worker de agentes, detrás de nginx
+con SSL renovado solo, cada uno con su usuario sin privilegios.
+
+**Un cliente por instalación, aislados:**
+
+```bash
+bash deploy/new-client.sh acme "Acme Cleaning" crm.acme.com tu@correo.com
+```
+
+Carpeta, base de datos, `.env`, usuario, servicios y dominio propios. No
+comparten datos ni reputación de remitente.
 
 ---
 
@@ -224,7 +253,7 @@ public/
   admin.html              panel de leads
   embed.js                widget embebible
   index.html              landing
-test/                     55 tests
+test/                     75 tests
 ```
 
 ```bash
@@ -237,7 +266,8 @@ node scripts/seed.js 30               # datos de ejemplo
 
 ## Qué falta por decidir
 
-1. **Qué CRM hay detrás de cali-clean.net** — para escribir el adaptador real.
+1. **Qué CRM hay en Hostinger** — `node scripts/crm.js detect <url>` lo dice.
+   Si es uno de los siete soportados, solo hay que rellenar el `.env`.
 2. **Precios reales** en `src/config.js`.
 3. **Datos del negocio**: teléfono, dirección física, ZIPs y enlace de reserva.
 4. **Credenciales de Sender** (SMTP o API) y autenticación del dominio.

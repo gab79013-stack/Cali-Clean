@@ -6,6 +6,7 @@ import { scoreLead, isInServiceArea } from '../services/scoring.js';
 import { enrollLead, processDueSteps } from '../services/sequences.js';
 import { notifyTeam } from '../services/mailer.js';
 import senderApi from '../services/sender-api.js';
+import { pushInboundLead } from '../services/crm.js';
 import { clean, validEmail, normalizePhone, validZip, validDate } from '../utils/validate.js';
 import { hitRateLimit } from '../utils/ratelimit.js';
 import { newUid } from '../utils/tokens.js';
@@ -143,6 +144,9 @@ router.post('/leads', async (req, res) => {
           logEvent(lead.id, 'sender_sync_failed', { error: err.message });
         }
       }
+      // El CRM debe ver también lo que entra por el widget, no solo lo que
+      // traen los agentes: si no, el equipo trabaja en dos sitios distintos.
+      if (config.crm.syncInbound) await pushInboundLead(lead);
     } catch (err) {
       console.error('[lead:post-process]', err);
     }

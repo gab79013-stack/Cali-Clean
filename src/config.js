@@ -101,13 +101,19 @@ export const config = {
   },
 
   crm: {
-    // Adaptador: webhook | hubspot | gohighlevel | none
+    // Adaptador: none | webhook | espocrm | suitecrm | perfex | vtiger |
+    //            hubspot | gohighlevel
     driver: (process.env.CRM_DRIVER || 'none').toLowerCase(),
     webhookUrl: process.env.CRM_WEBHOOK_URL || '',
     webhookSecret: process.env.CRM_WEBHOOK_SECRET || '',
-    apiKey: process.env.CRM_API_KEY || '',
     baseUrl: process.env.CRM_BASE_URL || '',
+    apiKey: process.env.CRM_API_KEY || '',
+    apiSecret: process.env.CRM_API_SECRET || '',
+    apiUser: process.env.CRM_API_USER || '',
     locationId: process.env.CRM_LOCATION_ID || '',
+    assignedUserId: process.env.CRM_ASSIGNED_USER_ID || '',
+    // Empujar también los leads del widget, no solo los de prospección.
+    syncInbound: bool(process.env.CRM_SYNC_INBOUND, true),
   },
 
   ai: {
