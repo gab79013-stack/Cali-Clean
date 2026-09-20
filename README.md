@@ -125,9 +125,21 @@ credenciales:
 | `la_active_businesses` | Licencias de negocio nuevas en Los Ángeles | Acaba de abrir: sin proveedor fijo |
 | `sf_building_permits` | Permisos completados en San Francisco | Obra terminada |
 | `sf_registered_businesses` | Negocios registrados en San Francisco | Acaba de abrir |
+| `sd_active_businesses` | Licencias de negocio de la ciudad de San Diego | Acaba de abrir |
+| `sd_development_permits` | Permisos de obra cerrados en San Diego | Obra terminada |
 
 Añadir una ciudad es añadir una entrada en `src/prospecting/sources/index.js`
 con su dataset y el mapeo de campos. El resto del pipeline no cambia.
+
+**Dos formatos, no uno.** Los Ángeles y San Francisco publican en Socrata, con
+filtros en el servidor (`$where`, `$order`). San Diego publica ficheros CSV
+planos: no hay filtros, así que se descarga el fichero y se filtra aquí. Por eso
+esas fuentes llevan `kind: 'csv'`. Si el portal mueve el fichero de sitio, la
+fuente lo vuelve a localizar preguntando al catálogo CKAN en vez de romperse.
+
+Los nombres de columna se declaran como **lista de variantes** (`pick(row, ['dba_name',
+'business_name'])`). Los portales renombran columnas entre versiones, y una fuente
+que asume un único nombre empieza a devolver filas vacías sin avisar.
 
 **Límite honesto:** los registros públicos dan nombre y dirección, nunca web ni
 correo. El agente enriquecedor deduce el dominio del nombre del negocio, lo
@@ -135,8 +147,79 @@ verifica contra la página (nombre + teléfono, ZIP o dirección) y solo entonce
 lee el correo publicado. Funciona bien con negocios cuyo dominio se parece a su
 nombre, y falla con los que no. En las pruebas, de 5 prospectos descubiertos se
 enriquecieron 2 — esa proporción es la realidad del método, no un error.
-Si en algún momento quieres más cobertura, la Google Places API cubre
-exactamente ese hueco y el conector encaja donde están los demás.
+**Ese hueco ya tiene tapa.** `GOOGLE_PLACES_API_KEY` activa el conector de
+Google Places: en vez de adivinar el dominio, el agente pregunta cuál es la web
+declarada del negocio. Es opcional y de pago; sin clave, todo funciona
+exactamente como antes.
+
+El sitio que devuelve Places **se sigue verificando** contra la página, porque
+una búsqueda por texto puede traer al vecino. Lo que cambia es que si la ficha
+de Places coincide en teléfono o código postal con nuestro registro, eso cuenta
+como una prueba de identidad más — que es lo que salva a las webs modernas con
+poco texto, donde la página por sí sola no da las dos que se exigen.
+
+Es la palanca que más sube el número final de correos: `website_not_found` es
+el motivo de descarte más común, y es justo el que esto elimina.
+
+---
+
+## El área de servicio: San Diego y 50 millas
+
+Un registro público no trae un radio, trae una dirección. `src/prospecting/geo.js`
+decide si esa dirección cae dentro del área, con la mejor prueba que tenga:
+
+1. **Coordenadas en la fila** → distancia real (haversine). Es exacto.
+2. **Ciudad reconocida** → las 18 ciudades del condado más las comunidades que
+   aparecen como "ciudad" en los registros.
+3. **Código postal del condado** → rango 91901-92199.
+
+Lo lejano se descarta **antes** que nada, porque su ZIP sí pertenece al condado y
+colaría por la regla 3: Borrego Springs, Warner Springs, Palomar Mountain y la
+franja este hacia Imperial están a más de 50 millas aunque el código postal diga
+"San Diego". Si ninguna regla resuelve, el prospecto queda fuera: es preferible
+perder uno bueno que escribirle a un negocio de Los Ángeles diciéndole que
+estamos aquí al lado.
+
+---
+
+## Sacar la lista de correos
+
+```bash
+node scripts/export-emails.js --target=300
+```
+
+Corre el pipeline en tandas hasta juntar los correos pedidos y escribe dos
+ficheros en `data/`:
+
+| Fichero | Qué tiene |
+|---|---|
+| `leads-san-diego-<fecha>.txt` | Un correo por línea, para pegar donde haga falta |
+| `leads-san-diego-<fecha>.csv` | Lo mismo con negocio, teléfono, web, ciudad, segmento, ICP y **en qué página se encontró el correo** |
+
+Opciones: `--target` (cuántos), `--since` (ventana de días, por defecto 365),
+`--sources`, `--out`.
+
+### Antes de la primera corrida
+
+```bash
+node scripts/inspect-source.js sd_active_businesses
+```
+
+Enseña qué está devolviendo el portal hoy: las columnas reales, cómo queda la
+primera fila ya mapeada y si la fecha se encuentra. Existe porque el mapeo de
+San Diego va por lista de variantes: si algún día ninguna acierta, la corrida
+diría "0 descubiertos" sin explicar nada, y esto lo convierte en diez segundos
+de diagnóstico que además dice qué línea tocar.
+
+**Si no llega al objetivo, lo dice y explica por qué**, desglosado por motivo de
+descarte (`no_public_email`, `website_not_found`, `robots_disallow`,
+`site_not_verified`). No rellena el hueco con direcciones inventadas: cada correo
+del fichero lo publica el negocio en su propia web y queda registrado dónde. Un
+patrón adivinado tipo `info@` rebota, y los rebotes queman el dominio desde el
+que escribes.
+
+Cuando falten, las dos palancas reales son subir `--since` y añadir fuentes de
+ciudades vecinas.
 
 ---
 

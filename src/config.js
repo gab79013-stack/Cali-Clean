@@ -96,8 +96,11 @@ export const config = {
     requestTimeoutMs: num(process.env.PROSPECT_TIMEOUT_MS, 12000),
     sources: list(process.env.PROSPECT_SOURCES).length
       ? list(process.env.PROSPECT_SOURCES)
-      : ['la_building_permits', 'la_active_businesses'],
+      : ['sd_active_businesses', 'sd_development_permits'],
     socrataAppToken: process.env.SOCRATA_APP_TOKEN || '',
+    // Opcional y de pago. Sin clave, el enriquecedor adivina el dominio a
+    // partir del nombre, que es como funcionaba antes de existir esto.
+    googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || '',
   },
 
   crm: {

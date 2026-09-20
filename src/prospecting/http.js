@@ -27,13 +27,14 @@ async function politeDelay(host) {
   lastHit.set(host, Date.now());
 }
 
-async function rawFetch(url, { method = 'GET', headers = {}, timeoutMs } = {}) {
+async function rawFetch(url, { method = 'GET', headers = {}, body, timeoutMs } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || config.prospecting.requestTimeoutMs);
   const target = rewriter ? rewriter(url) : { url, headers: {} };
   try {
     return await fetch(target.url, {
       method,
+      body,
       redirect: 'follow',
       headers: {
         'User-Agent': config.prospecting.userAgent,
@@ -174,6 +175,29 @@ export async function apiFetch(url, opts = {}) {
     throw err;
   }
   return res.json();
+}
+
+/**
+ * Descarga un fichero de datos como texto (CSV). Mismo ritmo que apiFetch, pero
+ * sin exigir JSON y con un tope de tamaño: el listado de negocios de San Diego
+ * son decenas de megas y no hay motivo para quedarse sin memoria por una fuente
+ * que un día crezca de más.
+ */
+export async function apiFetchText(url, { maxBytes = 64 * 1024 * 1024, ...opts } = {}) {
+  const host = hostOf(url);
+  if (host) await politeDelay(host);
+  const res = await rawFetch(url, { timeoutMs: 120_000, ...opts });
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status} en ${host}`);
+    err.status = res.status;
+    throw err;
+  }
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared && declared > maxBytes) {
+    throw new Error(`Fichero demasiado grande en ${host}: ${declared} bytes`);
+  }
+  const text = await res.text();
+  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
 }
 
 export function _resetCachesForTests() {
