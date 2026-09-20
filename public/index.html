@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cali Clean · Instant Cleaning Quote / Presupuesto Instantáneo</title>
+<meta name="description" content="Get an instant price for home or commercial cleaning in California. No phone call needed — 30 seconds, insured cleaners, satisfaction guaranteed.">
+<meta name="robots" content="index,follow">
+<meta property="og:title" content="Instant cleaning quote · Cali Clean">
+<meta property="og:description" content="Your price in 30 seconds. Insured, background-checked cleaners.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧼</text></svg>">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;background:#fff;line-height:1.6}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+  header{background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:50}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+  .logo{font-size:20px;font-weight:800;color:#0f766e;text-decoration:none;letter-spacing:-.4px}
+  .nav-r{display:flex;align-items:center;gap:14px}
+  .tel{color:#0f172a;text-decoration:none;font-weight:700;font-size:15px}
+  .lang{border:1.5px solid #e2e8f0;background:#fff;border-radius:8px;padding:6px 11px;font-size:13px;cursor:pointer;font-weight:600;color:#475569;font-family:inherit}
+  .hero{background:linear-gradient(160deg,#f0fdfa 0%,#fff 62%);padding:52px 0 60px}
+  .hero-grid{display:grid;grid-template-columns:1fr 520px;gap:44px;align-items:start}
+  h1{font-size:44px;line-height:1.1;margin:0 0 16px;letter-spacing:-1.4px;font-weight:800}
+  h1 em{font-style:normal;color:#0f766e}
+  .lead{font-size:18px;color:#475569;margin:0 0 26px;max-width:38ch}
+  .ticks{list-style:none;padding:0;margin:0 0 26px;display:grid;gap:10px}
+  .ticks li{display:flex;gap:10px;align-items:flex-start;font-size:15.5px;color:#334155}
+  .ticks span{color:#0f766e;font-weight:800}
+  .trust{display:flex;gap:22px;flex-wrap:wrap;padding-top:22px;border-top:1px solid #e2e8f0}
+  .trust div{font-size:13px;color:#64748b}
+  .trust b{display:block;font-size:22px;color:#0f172a;font-weight:800}
+  section{padding:56px 0}
+  h2{font-size:30px;margin:0 0 10px;letter-spacing:-.8px;font-weight:800}
+  .sub{color:#64748b;margin:0 0 34px;font-size:17px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(238px,1fr));gap:18px}
+  .card{border:1px solid #e2e8f0;border-radius:14px;padding:22px}
+  .card .ic{font-size:26px}
+  .card h3{margin:11px 0 7px;font-size:17px}
+  .card p{margin:0;color:#64748b;font-size:14.5px}
+  .alt{background:#f8fafc}
+  .quotes{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:18px}
+  .qc{background:#fff;border-radius:14px;padding:22px;border:1px solid #e2e8f0}
+  .qc p{margin:0 0 12px;font-style:italic;color:#334155}
+  .qc .who{font-size:13.5px;color:#64748b}
+  .stars{color:#f59e0b;margin-bottom:9px}
+  .faq details{border-bottom:1px solid #e2e8f0;padding:16px 0}
+  .faq summary{cursor:pointer;font-weight:650;font-size:16.5px;list-style:none}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::before{content:'+';color:#0f766e;font-weight:800;margin-right:10px}
+  .faq details[open] summary::before{content:'−'}
+  .faq p{margin:11px 0 0 24px;color:#475569}
+  .cta{background:#0f766e;color:#fff;text-align:center;padding:56px 0}
+  .cta h2{color:#fff}
+  .cta p{color:#99f6e4;margin:0 0 24px;font-size:17px}
+  .btn-w{display:inline-block;background:#fff;color:#0f766e;text-decoration:none;padding:15px 32px;border-radius:11px;font-weight:700;font-size:16.5px}
+  footer{background:#0f172a;color:#94a3b8;padding:34px 0;font-size:14px}
+  footer a{color:#5eead4;text-decoration:none}
+  [data-es]{display:none}
+  html[lang="es"] [data-en]{display:none}
+  html[lang="es"] [data-es]{display:block}
+  html[lang="es"] li[data-es],html[lang="es"] span[data-es],html[lang="es"] b[data-es],html[lang="es"] em[data-es]{display:inline}
+  @media(max-width:920px){.hero-grid{grid-template-columns:1fr;gap:34px}h1{font-size:34px}}
+</style>
+</head>
+<body>
+<header><div class="wrap nav">
+  <a class="logo" href="/">Cali Clean</a>
+  <div class="nav-r">
+    <a class="tel" id="phoneLink" href="#">📞</a>
+    <button class="lang" id="langBtn">ES / EN</button>
+  </div>
+</div></header>
+
+<div class="hero"><div class="wrap hero-grid">
+  <div>
+    <h1>
+      <span data-en>Know your cleaning price <em>before</em> you call anyone.</span>
+      <span data-es>Conoce el precio de tu limpieza <em>antes</em> de llamar a nadie.</span>
+    </h1>
+    <p class="lead">
+      <span data-en>Most cleaning companies make you wait a day for a quote. Answer 5 questions and get yours in 30 seconds — no phone call, no pressure.</span>
+      <span data-es>La mayoría te hace esperar un día por un presupuesto. Responde 5 preguntas y ten el tuyo en 30 segundos: sin llamadas, sin presión.</span>
+    </p>
+    <ul class="ticks">
+      <li><span>✓</span><span data-en>Insured, background-checked cleaners</span><span data-es>Personal asegurado y con antecedentes verificados</span></li>
+      <li><span>✓</span><span data-en>Supplies and equipment included</span><span data-es>Productos y equipo incluidos</span></li>
+      <li><span>✓</span><span data-en>Re-clean free if you're not happy</span><span data-es>Volvemos gratis si algo no quedó bien</span></li>
+      <li><span>✓</span><span data-en>Homes, offices, move-outs and Airbnb turnovers</span><span data-es>Casas, oficinas, mudanzas y rotación de Airbnb</span></li>
+    </ul>
+    <div class="trust">
+      <div><b>4.9★</b><span data-en>average rating</span><span data-es>valoración media</span></div>
+      <div><b>30s</b><span data-en>to your quote</span><span data-es>para tu presupuesto</span></div>
+      <div><b>100%</b><span data-en>satisfaction guarantee</span><span data-es>garantía de satisfacción</span></div>
+    </div>
+  </div>
+  <div id="cali-quote"></div>
+</div></div>
+
+<section><div class="wrap">
+  <h2><span data-en>What we clean</span><span data-es>Lo que limpiamos</span></h2>
+  <p class="sub"><span data-en>One team, every kind of space in California.</span><span data-es>Un solo equipo para cada tipo de espacio en California.</span></p>
+  <div class="cards">
+    <div class="card"><div class="ic">🏠</div><h3><span data-en>Home cleaning</span><span data-es>Limpieza residencial</span></h3>
+      <p><span data-en>Weekly, biweekly or monthly upkeep, plus deep cleans when the house needs a reset.</span><span data-es>Mantenimiento semanal, quincenal o mensual, más limpieza profunda cuando la casa lo pide.</span></p></div>
+    <div class="card"><div class="ic">🏢</div><h3><span data-en>Offices & commercial</span><span data-es>Oficinas y comercial</span></h3>
+      <p><span data-en>Contracts for offices, clinics, retail and restaurants, with a signed checklist every visit.</span><span data-es>Contratos para oficinas, clínicas, locales y restaurantes, con checklist firmado en cada visita.</span></p></div>
+    <div class="card"><div class="ic">📦</div><h3><span data-en>Move in / move out</span><span data-es>Mudanzas</span></h3>
+      <p><span data-en>Deposit-back cleanings for tenants, landlords and property managers.</span><span data-es>Limpiezas para recuperar el depósito: inquilinos, propietarios y administradores.</span></p></div>
+    <div class="card"><div class="ic">🔑</div><h3><span data-en>Airbnb turnovers</span><span data-es>Rotación de Airbnb</span></h3>
+      <p><span data-en>Same-day turnovers with linen change, restock and photo confirmation.</span><span data-es>Rotación el mismo día con cambio de ropa de cama, reposición y confirmación con fotos.</span></p></div>
+    <div class="card"><div class="ic">🏗️</div><h3><span data-en>Post-construction</span><span data-es>Post-construcción</span></h3>
+      <p><span data-en>Dust, residue and debris removal after remodeling or new builds.</span><span data-es>Retiro de polvo, residuos y escombro tras remodelaciones u obra nueva.</span></p></div>
+    <div class="card"><div class="ic">✨</div><h3><span data-en>Specialty work</span><span data-es>Servicios especializados</span></h3>
+      <p><span data-en>Carpets, upholstery, interior and exterior windows, floor stripping and wax.</span><span data-es>Alfombras, tapicería, ventanas por dentro y por fuera, pulido y encerado de pisos.</span></p></div>
+  </div>
+</div></section>
+
+<section class="alt"><div class="wrap">
+  <h2><span data-en>What clients say</span><span data-es>Lo que dicen los clientes</span></h2>
+  <p class="sub"><span data-en>Trust is the product. The cleaning is the delivery.</span><span data-es>El producto es la confianza. La limpieza es la entrega.</span></p>
+  <div class="quotes">
+    <div class="qc"><div class="stars">★★★★★</div>
+      <p><span data-en>"Eight months of biweekly service. They have never missed an appointment and the house is spotless every time."</span><span data-es>"Ocho meses de servicio quincenal. Nunca han fallado una cita y la casa queda impecable."</span></p>
+      <div class="who"><span data-en>Residential client, Los Angeles</span><span data-es>Cliente residencial, Los Ángeles</span></div></div>
+    <div class="qc"><div class="stars">★★★★★</div>
+      <p><span data-en>"They clean our office at night. One year in: zero incidents, zero complaints from staff."</span><span data-es>"Limpian nuestra oficina de noche. En un año: cero incidencias y cero quejas del equipo."</span></p>
+      <div class="who"><span data-en>Commercial client</span><span data-es>Cliente comercial</span></div></div>
+    <div class="qc"><div class="stars">★★★★★</div>
+      <p><span data-en>"Got the full deposit back after the move-out clean. Worth every dollar."</span><span data-es>"Recuperé el depósito completo tras la limpieza de mudanza. Valió cada dólar."</span></p>
+      <div class="who"><span data-en>Move-out client</span><span data-es>Cliente de mudanza</span></div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap faq">
+  <h2><span data-en>Straight answers</span><span data-es>Respuestas claras</span></h2>
+  <p class="sub"><span data-en>The questions people actually ask before booking.</span><span data-es>Las preguntas que la gente realmente hace antes de reservar.</span></p>
+  <details open><summary><span data-en>Is the online price the final price?</span><span data-es>¿El precio de la web es el precio final?</span></summary>
+    <p><span data-en>It's a tight estimate based on your space. We confirm it before starting, and we hold it for 7 days.</span><span data-es>Es un estimado ajustado a tu espacio. Lo confirmamos antes de empezar y lo mantenemos 7 días.</span></p></details>
+  <details><summary><span data-en>Do I need to be home?</span><span data-es>¿Tengo que estar en casa?</span></summary>
+    <p><span data-en>No. Many clients give us access and come back to a clean home.</span><span data-es>No hace falta. Muchos clientes nos dejan acceso y encuentran todo limpio al volver.</span></p></details>
+  <details><summary><span data-en>Do you bring your own supplies?</span><span data-es>¿Traen sus propios productos?</span></summary>
+    <p><span data-en>Yes, everything included — and kid- and pet-safe products on request.</span><span data-es>Sí, todo incluido, y con productos seguros para niños y mascotas si lo pides.</span></p></details>
+  <details><summary><span data-en>Are you insured?</span><span data-es>¿Están asegurados?</span></summary>
+    <p><span data-en>Liability insurance and workers comp on every job, residential and commercial.</span><span data-es>Seguro de responsabilidad civil y compensación laboral en cada trabajo, residencial y comercial.</span></p></details>
+  <details><summary><span data-en>What if I'm not satisfied?</span><span data-es>¿Y si no quedo satisfecho?</span></summary>
+    <p><span data-en>Tell us within 24 hours and we come back and re-clean at no cost.</span><span data-es>Avísanos en 24 horas y volvemos a limpiar sin costo.</span></p></details>
+</div></section>
+
+<div class="cta"><div class="wrap">
+  <h2><span data-en>Your price is 30 seconds away</span><span data-es>Tu precio está a 30 segundos</span></h2>
+  <p><span data-en>No phone call required. No obligation.</span><span data-es>Sin llamadas. Sin compromiso.</span></p>
+  <a class="btn-w" href="#cali-quote"><span data-en>Get my instant quote</span><span data-es>Ver mi presupuesto</span></a>
+</div></div>
+
+<footer><div class="wrap">
+  <strong style="color:#fff">Cali Clean</strong> ·
+  <a href="https://cali-clean.net">cali-clean.net</a> ·
+  <span id="footerPhone"></span>
+  <p style="margin:10px 0 0;font-size:13px" id="footerAddress"></p>
+</div></footer>
+
+<script>
+  // Idioma: detecta el del navegador y recuerda la elección manual.
+  (function () {
+    var saved = null;
+    try { saved = localStorage.getItem('cc_lang'); } catch (e) {}
+    var lang = saved || ((navigator.language || 'en').toLowerCase().indexOf('es') === 0 ? 'es' : 'en');
+    document.documentElement.lang = lang;
+    document.getElementById('langBtn').onclick = function () {
+      var next = document.documentElement.lang === 'es' ? 'en' : 'es';
+      document.documentElement.lang = next;
+      try { localStorage.setItem('cc_lang', next); } catch (e) {}
+    };
+  })();
+  // Teléfono y dirección se leen de la configuración del servidor: un solo sitio que editar.
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
+    var tel = c.business.phone || '';
+    var link = document.getElementById('phoneLink');
+    link.href = 'tel:' + tel.replace(/[^+\d]/g, '');
+    link.textContent = '📞 ' + tel;
+    document.getElementById('footerPhone').textContent = tel;
+  }).catch(function () {});
+</script>
+<script src="/embed.js" data-target="#cali-quote" async></script>
+</body>
+</html>

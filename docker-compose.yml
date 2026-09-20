@@ -1,0 +1,12 @@
+services:
+  leadmachine:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"
+    volumes:
+      # La base de datos vive fuera del contenedor: los leads sobreviven a un redeploy.
+      - ./data:/app/data
+    environment:
+      DB_PATH: /app/data/leads.db
