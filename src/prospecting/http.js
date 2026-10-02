@@ -1,3 +1,4 @@
+import robotsParser from 'robots-parser';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { config } from '../config.js';
 
@@ -8,7 +9,7 @@ import { config } from '../config.js';
  */
 
 const lastHit = new Map();   // host → timestamp del último request
-const robotsCache = new Map(); // host → { rules, fetchedAt, crawlDelayMs }
+const robotsCache = new Map(); // host → { isAllowed, crawlDelayMs, fetchedAt }
 const ROBOTS_TTL_MS = 6 * 3600 * 1000;
 
 const hostOf = (url) => { try { return new URL(url).host; } catch { return null; } };
@@ -48,56 +49,37 @@ async function rawFetch(url, { method = 'GET', headers = {}, timeoutMs } = {}) {
   }
 }
 
-/** Parser mínimo de robots.txt: solo lo que necesitamos, Allow/Disallow y Crawl-delay. */
-export function parseRobots(text, agent = 'caliclean') {
-  const lines = String(text || '').split(/\r?\n/);
-  const groups = [];
-  let current = null;
+/**
+ * Lectura de robots.txt delegada en el parser de referencia (RFC 9309), en vez
+ * de uno propio: los comodines, el anclaje `$` y la precedencia por longitud
+ * son justo donde un parser casero se equivoca, y aquí equivocarse significa
+ * rastrear a quien nos pidió que no.
+ *
+ * Las reglas se comparan contra el **mismo** User-Agent que anunciamos, así que
+ * un sitio que nos nombre por nuestro nombre nos encuentra.
+ */
+const ALLOW_ALL = { isAllowed: () => true, crawlDelayMs: null };
 
-  for (const raw of lines) {
-    const line = raw.split('#')[0].trim();
-    if (!line) continue;
-    const idx = line.indexOf(':');
-    if (idx === -1) continue;
-    const field = line.slice(0, idx).trim().toLowerCase();
-    const value = line.slice(idx + 1).trim();
-
-    if (field === 'user-agent') {
-      // Varios User-agent seguidos comparten el mismo bloque de reglas.
-      if (!current || current.rules.length) { current = { agents: [], rules: [], crawlDelay: null }; groups.push(current); }
-      current.agents.push(value.toLowerCase());
-    } else if (current && (field === 'allow' || field === 'disallow')) {
-      current.rules.push({ type: field, path: value });
-    } else if (current && field === 'crawl-delay') {
-      const n = Number(value);
-      if (!Number.isNaN(n)) current.crawlDelay = n * 1000;
-    }
-  }
-
-  const ua = agent.toLowerCase();
-  const specific = groups.find((g) => g.agents.some((a) => a !== '*' && ua.includes(a)));
-  const wildcard = groups.find((g) => g.agents.includes('*'));
-  const group = specific || wildcard;
-  return { rules: group?.rules || [], crawlDelayMs: group?.crawlDelay ?? null };
+export function parseRobots(text, origin = 'https://robots.invalid', agent = config.prospecting.userAgent) {
+  const robots = robotsParser(new URL('/robots.txt', origin).toString(), String(text || ''));
+  const delay = robots.getCrawlDelay(agent);
+  return {
+    // `isAllowed` devuelve undefined si la ruta no es de este host o no es
+    // válida; ahí se mantiene el criterio de siempre: permitir.
+    isAllowed(target) {
+      try {
+        return robots.isAllowed(new URL(target, origin).toString(), agent) !== false;
+      } catch {
+        return true;
+      }
+    },
+    crawlDelayMs: Number.isFinite(delay) ? delay * 1000 : null,
+  };
 }
 
-/** La regla más larga gana; con la misma longitud, Allow gana sobre Disallow. */
-export function robotsAllows(rules, pathname) {
-  let best = null;
-  for (const rule of rules) {
-    if (rule.path === '') continue;
-    const pattern = rule.path;
-    const matches = pattern.endsWith('$')
-      ? pathname === pattern.slice(0, -1)
-      : pathname.startsWith(pattern.replace(/\*.*$/, ''));
-    if (!matches) continue;
-    if (!best || pattern.length > best.path.length
-      || (pattern.length === best.path.length && rule.type === 'allow')) {
-      best = rule;
-    }
-  }
-  if (!best) return true;
-  return best.type === 'allow';
+/** Sin reglas aplicables se rastrea: permitir es el criterio por defecto. */
+export function robotsAllows(robots, target) {
+  return robots?.isAllowed ? robots.isAllowed(target) : true;
 }
 
 async function loadRobots(origin) {
@@ -105,13 +87,13 @@ async function loadRobots(origin) {
   const cached = robotsCache.get(host);
   if (cached && Date.now() - cached.fetchedAt < ROBOTS_TTL_MS) return cached;
 
-  let parsed = { rules: [], crawlDelayMs: null };
+  let parsed = ALLOW_ALL;
   try {
     await politeDelay(host);
     const res = await rawFetch(new URL('/robots.txt', origin).toString(), { timeoutMs: 8000 });
     // 404 significa "sin restricciones"; un 5xx no nos autoriza a asumirlo, pero
     // tampoco debe bloquear la prospección de un sitio que quizá sí permite.
-    if (res.ok) parsed = parseRobots(await res.text(), 'caliclean');
+    if (res.ok) parsed = parseRobots(await res.text(), origin);
   } catch {
     // Sin robots.txt legible seguimos con las reglas por defecto (permitir).
   }
@@ -130,7 +112,8 @@ export async function politeFetch(url, opts = {}) {
   if (!/^https?:$/.test(parsed.protocol)) return { ok: false, blocked: true, reason: 'bad_protocol' };
 
   const robots = await loadRobots(parsed.origin);
-  if (!robotsAllows(robots.rules, parsed.pathname)) {
+  // Con la query incluida: hay reglas que solo aplican a ciertos parámetros.
+  if (!robotsAllows(robots, parsed.pathname + parsed.search)) {
     return { ok: false, blocked: true, reason: 'robots_disallow' };
   }
 

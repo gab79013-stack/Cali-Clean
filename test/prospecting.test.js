@@ -71,20 +71,44 @@ test('el dominio manda sobre el nombre al deduplicar', () => {
 
 // ── robots.txt ───────────────────────────────────────────────
 test('respeta un robots.txt que prohíbe todo', () => {
-  const { rules } = parseRobots('User-agent: *\nDisallow: /\n');
-  assert.equal(robotsAllows(rules, '/'), false);
-  assert.equal(robotsAllows(rules, '/contact'), false);
+  const robots = parseRobots('User-agent: *\nDisallow: /\n');
+  assert.equal(robotsAllows(robots, '/'), false);
+  assert.equal(robotsAllows(robots, '/contact'), false);
 });
 
 test('la regla más específica gana sobre la general', () => {
-  const { rules } = parseRobots('User-agent: *\nDisallow: /\nAllow: /contact\n');
-  assert.equal(robotsAllows(rules, '/contact'), true);
-  assert.equal(robotsAllows(rules, '/private'), false);
+  const robots = parseRobots('User-agent: *\nDisallow: /\nAllow: /contact\n');
+  assert.equal(robotsAllows(robots, '/contact'), true);
+  assert.equal(robotsAllows(robots, '/private'), false);
 });
 
 test('sin robots.txt se permite el rastreo', () => {
-  const { rules } = parseRobots('');
-  assert.equal(robotsAllows(rules, '/cualquier-cosa'), true);
+  const robots = parseRobots('');
+  assert.equal(robotsAllows(robots, '/cualquier-cosa'), true);
+});
+
+// Los cuatro casos que el parser propio resolvía mal. Dos bloqueaban de más
+// (prospectos perdidos) y dos de menos (rastrear a quien dijo que no).
+test('el comodín intermedio no se traga la rama entera', () => {
+  const robots = parseRobots('User-agent: *\nDisallow: /*/admin\n');
+  assert.equal(robotsAllows(robots, '/sucursal/admin'), false);
+  assert.equal(robotsAllows(robots, '/publico'), true);
+});
+
+test('el anclaje $ cierra la regla al final de la ruta', () => {
+  const robots = parseRobots('User-agent: *\nDisallow: /*.pdf$\n');
+  assert.equal(robotsAllows(robots, '/tarifas.pdf'), false);
+  assert.equal(robotsAllows(robots, '/tarifas.pdf.html'), true);
+});
+
+test('un User-agent sin valor no secuestra las reglas del comodín', () => {
+  const robots = parseRobots('User-agent:\nDisallow: /\n\nUser-agent: *\nAllow: /\n');
+  assert.equal(robotsAllows(robots, '/contacto'), true);
+});
+
+test('obedece a quien nos nombra por el User-Agent que anunciamos', () => {
+  const robots = parseRobots('User-agent: CaliCleanProspector\nDisallow: /\n\nUser-agent: *\nAllow: /\n');
+  assert.equal(robotsAllows(robots, '/contacto'), false);
 });
 
 // ── Extracción ───────────────────────────────────────────────
