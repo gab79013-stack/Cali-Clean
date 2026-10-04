@@ -1,4 +1,5 @@
 import http from 'node:http';
+import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 
 /**
@@ -33,6 +34,13 @@ export const PII_PROHIBIDA = [
   '5350123400', '32.711230', '-117.160450', 'TA-99881', 'DWG-2026-4412',
   'GIS_APN', 'GIS_LATITUDE', 'GIS_LONGITUDE', 'PROJECT_TRUST_ACCOUNT_NO', 'JOB_DRAWING_NUMBER',
   'HOLDER_PHONE', 'HOLDER_EMAIL',
+  // Del volcado de ABC: el domicilio postal del titular y los identificadores
+  // geograficos, mas los titulares que son personas.
+  'ORTEGA, JOSE RAMON', 'MARIA LOPEZ', 'ANA RUIZ',
+  '1180 PRIVATE LN', 'LA MESA', '91942', '0053.01',
+  'Mail Addr 1', 'Mail Addr 2', 'Mail City', 'Mail State', 'Mail Zip',
+  'Prem Census Tract #', 'Geo Code',
+  'Owner Phone', 'Owner Email',
 ];
 
 /** Escapa un campo de CSV: comillas, comas y saltos de línea. */
@@ -551,6 +559,218 @@ export function createFakeCityDevServer({ mode = 'ok', body = null, etag = '"cit
       etag,
       lastModified,
       downloadUrl: `http://127.0.0.1:${server.address().port}/development_permits/approvals_issued_2026_datasd.csv`,
+      close: () => server.close(),
+    }));
+  });
+}
+
+// ── 4. California ABC · volcado diario zipeado ────────────────
+//
+// Cabecera REAL del archivo, leída con un GET de rango sobre
+// DailyExport-CSV.zip el 2026-10-04 e inflada parcialmente: 26 columnas, en ese
+// orden, y con el espacio delante en ' Prem Addr 2' y ' Prem State' tal como lo
+// publica ABC. El espacio está a propósito: el lector recorta los nombres de la
+// cabecera y esta prueba comprueba que lo sigue haciendo.
+export const ABC_HEADER = [
+  'License Type', 'File Number', 'Lic or App', 'Type Status', 'Type Orig Iss Date', 'Expir Date',
+  'Fee Codes', 'Dup Counts', 'Master Ind', 'Term in # of Months', 'Geo Code', 'District',
+  'Primary Name', 'Prem Addr 1', ' Prem Addr 2', 'Prem City', ' Prem State', 'Prem Zip',
+  'DBA Name', 'Mail Addr 1', 'Mail Addr 2', 'Mail City', 'Mail State', 'Mail Zip',
+  'Prem County', 'Prem Census Tract #',
+];
+
+/** El sello que ABC pone en la línea 1, antes de la cabecera. */
+export const ABC_BANNER = 'Updated Sunday 4th of October 2026 03:50:21 AM';
+
+export function abcRow(partial) {
+  const base = {
+    'License Type': '41', 'File Number': '', 'Lic or App': 'LIC', 'Type Status': 'ACTIVE',
+    'Type Orig Iss Date': '15-JAN-2019', 'Expir Date': '31-JAN-2027',
+    'Fee Codes': 'NA', 'Dup Counts': '001', 'Master Ind': 'Y', 'Term in # of Months': '12',
+    'Geo Code': '3701', 'District': '20',
+    'Primary Name': '', 'Prem Addr 1': '750 FIFTH AVE', 'Prem Addr 2': '',
+    'Prem City': 'SAN DIEGO', 'Prem State': 'CA', 'Prem Zip': '92101',
+    'DBA Name': '',
+    // Bloque postal: el domicilio del titular. Nunca debe sobrevivir.
+    'Mail Addr 1': '1180 PRIVATE LN', 'Mail Addr 2': 'APT 7B', 'Mail City': 'LA MESA',
+    'Mail State': 'CA', 'Mail Zip': '91942',
+    'Prem County': 'SAN DIEGO', 'Prem Census Tract #': '0053.01',
+  };
+  return { ...base, ...partial };
+}
+
+export const ABC_ROWS = [
+  // ── Aceptables ──
+  abcRow({ 'File Number': '00610001', 'DBA Name': 'GASLAMP TAP HOUSE', 'Primary Name': 'GASLAMP HOSPITALITY LLC' }),
+  abcRow({
+    'File Number': '00610002', 'DBA Name': '', 'Primary Name': 'MESA MARKET INC',
+    'License Type': '21', 'Prem Addr 1': '4040 KEARNY MESA RD', 'Prem Zip': '92111',
+  }),
+  abcRow({
+    // DBA con forma de persona, pero el titular es una entidad: gana el titular.
+    'File Number': '00610003', 'DBA Name': 'JOHN SMITH', 'Primary Name': 'HARBOR RESTAURANTS LLC',
+    'License Type': '47', 'Prem Addr 1': '98 MARKET ST', 'Prem Addr 2': 'SUITE 200',
+  }),
+  abcRow({
+    'File Number': '00610004', 'DBA Name': 'NORTH PARK BREWPUB', 'Primary Name': 'NP BREWING CO',
+    'License Type': '75', 'Prem City': 'SAN DIEGO', 'Prem Zip': '92104',
+  }),
+  // ── Mismo local, dos licencias: una sola Company, gana el expediente más bajo ──
+  abcRow({ 'File Number': '00610050', 'DBA Name': 'GASLAMP TAP HOUSE', 'Primary Name': 'GASLAMP HOSPITALITY LLC', 'License Type': '40' }),
+  // ── Fuera de condado / de estado ──
+  abcRow({ 'File Number': '00610010', 'DBA Name': 'ORANGE GRILL', 'Primary Name': 'ORANGE GRILL LLC', 'Prem County': 'ORANGE' }),
+  abcRow({ 'File Number': '00610011', 'DBA Name': 'RENO BAR', 'Primary Name': 'RENO BAR LLC', 'Prem State': 'NV' }),
+  // ── Estado que no es ACTIVE ──
+  abcRow({ 'File Number': '00610020', 'DBA Name': 'CERRADO CANTINA', 'Primary Name': 'CERRADO LLC', 'Type Status': 'SURRENDER' }),
+  abcRow({ 'File Number': '00610021', 'DBA Name': 'SUSPENDIDO BAR', 'Primary Name': 'SUSPENDIDO LLC', 'Type Status': 'SUSPEND' }),
+  abcRow({ 'File Number': '00610022', 'DBA Name': 'PENDIENTE CAFE', 'Primary Name': 'PENDIENTE LLC', 'Type Status': 'PENDING' }),
+  // ── Tipos sin premisa fija relevante ──
+  abcRow({ 'File Number': '00610030', 'DBA Name': 'VINEDOS DEL SUR', 'Primary Name': 'VINEDOS LLC', 'License Type': '02' }),
+  abcRow({ 'File Number': '00610031', 'DBA Name': 'MAYORISTA SD', 'Primary Name': 'MAYORISTA LLC', 'License Type': '17' }),
+  abcRow({ 'File Number': '00610032', 'DBA Name': 'CRUCERO BAY', 'Primary Name': 'CRUCERO LLC', 'License Type': '54' }),
+  abcRow({ 'File Number': '00610033', 'DBA Name': 'EVENTO UN DIA', 'Primary Name': 'EVENTO LLC', 'License Type': '77' }),
+  abcRow({ 'File Number': '00610034', 'DBA Name': 'CASA DE HUESPEDES', 'Primary Name': 'CASA LLC', 'License Type': '67' }),
+  // ── Premisa que no es una dirección física ──
+  abcRow({ 'File Number': '00610040', 'DBA Name': 'APARTADO BAR', 'Primary Name': 'APARTADO LLC', 'Prem Addr 1': 'P.O. BOX 9912' }),
+  abcRow({ 'File Number': '00610041', 'DBA Name': 'SIN CALLE BAR', 'Primary Name': 'SIN CALLE LLC', 'Prem Addr 1': '' }),
+  abcRow({ 'File Number': '00610042', 'DBA Name': 'SIN ZIP BAR', 'Primary Name': 'SIN ZIP LLC', 'Prem Zip': '' }),
+  abcRow({ 'File Number': '00610043', 'DBA Name': 'EN CASA BAR', 'Primary Name': 'EN CASA LLC', 'Prem Addr 1': '12 ISLAND AVE APT 7B' }),
+  // ── Titular que es una persona y sin DBA utilizable ──
+  abcRow({ 'File Number': '00610060', 'DBA Name': '', 'Primary Name': 'ORTEGA, JOSE RAMON' }),
+  abcRow({ 'File Number': '00610061', 'DBA Name': 'MARIA LOPEZ', 'Primary Name': 'MARIA LOPEZ' }),
+  abcRow({ 'File Number': '00610062', 'DBA Name': '', 'Primary Name': 'ANA RUIZ - FLOW TAVERN' }),
+  abcRow({ 'File Number': '00610063', 'DBA Name': '', 'Primary Name': '' }),
+  // ── Sin número de expediente ──
+  abcRow({ 'File Number': '', 'DBA Name': 'SIN EXPEDIENTE BAR', 'Primary Name': 'SIN EXPEDIENTE LLC' }),
+];
+
+export function abcCsv(rows = ABC_ROWS, { header = ABC_HEADER, banner = ABC_BANNER } = {}) {
+  // La cabecera se escribe TAL CUAL la publica ABC, con el espacio delante en dos
+  // columnas; las filas se buscan por el nombre recortado, que es con el que el
+  // lector las entrega. Si alguien quita el recorte, estas pruebas se caen.
+  const lineas = [campo(banner), header.map(campo).join(',')];
+  for (const r of rows) lineas.push(header.map((h) => campo(r[h.trim()])).join(','));
+  // Con BOM delante, como llega el archivo real. Sin él, el fixture no reproduce
+  // el fallo que la primera preview real encontró.
+  return `\uFEFF${lineas.join('\n')}\n`;
+}
+
+/** CRC32, para construir un ZIP que cualquier lector acepte. */
+const TABLA_CRC = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+const crc32 = (buf) => {
+  let r = 0xFFFFFFFF;
+  for (const b of buf) r = TABLA_CRC[(r ^ b) & 0xFF] ^ (r >>> 8);
+  return (r ^ 0xFFFFFFFF) >>> 0;
+};
+
+/**
+ * Construye un ZIP de verdad, con encabezado local, directorio central y EOCD.
+ * Un fixture que no fuera un ZIP real no probaría nada del lector.
+ */
+export function buildZip(nombre, contenido, { metodo = 8 } = {}) {
+  const datos = Buffer.from(contenido, 'utf8');
+  const comp = metodo === 8 ? zlib.deflateRawSync(datos) : datos;
+  const crc = crc32(datos);
+  const nb = Buffer.from(nombre, 'utf8');
+
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(metodo, 8); local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(comp.length, 18); local.writeUInt32LE(datos.length, 22);
+  local.writeUInt16LE(nb.length, 26);
+
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6);
+  cd.writeUInt16LE(metodo, 10); cd.writeUInt32LE(crc, 16);
+  cd.writeUInt32LE(comp.length, 20); cd.writeUInt32LE(datos.length, 24);
+  cd.writeUInt16LE(nb.length, 28); cd.writeUInt32LE(0, 42);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(46 + nb.length, 12); eocd.writeUInt32LE(30 + nb.length + comp.length, 16);
+
+  return Buffer.concat([local, nb, comp, cd, nb, eocd]);
+}
+
+export const ABC_ZIP = buildZip('ABC-DailyDataExport.csv', abcCsv());
+
+/**
+ * Servidor del volcado diario de ABC.
+ * mode: ok | notModified | truncated | oversize | notZip | twoEntries |
+ *       wrongExtension | missingColumn | unknownColumns | empty | stored
+ */
+export function createFakeAbcServer({ mode = 'ok', body = null, etag = '"abc-1"', lastModified = 'Sun, 04 Oct 2026 10:50:26 GMT' } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    requests.push({
+      method: req.method, path: url.pathname,
+      ifNoneMatch: req.headers['if-none-match'] ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+      range: req.headers.range ?? null,
+    });
+    if (url.pathname !== '/wp-content/uploads/DailyExport-CSV.zip') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('not found');
+    }
+    if (mode === 'notModified' || (mode === 'ok' && req.headers['if-none-match'] === etag)) {
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastModified });
+      return res.end();
+    }
+
+    let payload = body ?? ABC_ZIP;
+    if (mode === 'stored') payload = buildZip('ABC-DailyDataExport.csv', abcCsv(), { metodo: 0 });
+    if (mode === 'notZip') payload = Buffer.from('esto no es un zip, es texto\n');
+    if (mode === 'wrongExtension') payload = buildZip('ABC-DailyDataExport.txt', abcCsv());
+    if (mode === 'missingColumn') {
+      payload = buildZip('ABC-DailyDataExport.csv',
+        abcCsv(ABC_ROWS, { header: ABC_HEADER.filter((h) => h !== 'Prem County') }));
+    }
+    if (mode === 'unknownColumns') {
+      payload = buildZip('ABC-DailyDataExport.csv', abcCsv([{
+        ...abcRow({ 'File Number': '00610200', 'DBA Name': 'COLUMNA NUEVA BAR', 'Primary Name': 'COLUMNA NUEVA LLC' }),
+        'Owner Phone': '(619) 555-0101',
+        'Owner Email': 'privado@ejemplo.invalid',
+      }], { header: [...ABC_HEADER, 'Owner Phone', 'Owner Email'] }));
+    }
+    if (mode === 'twoEntries') {
+      const a = buildZip('ABC-DailyDataExport.csv', abcCsv());
+      // Dos entradas de verdad requieren otro EOCD; para la prueba basta con que
+      // el directorio central anuncie dos, que es lo que el lector mira.
+      const dos = Buffer.from(a);
+      dos.writeUInt16LE(2, dos.length - 22 + 8);
+      dos.writeUInt16LE(2, dos.length - 22 + 10);
+      payload = dos;
+    }
+    if (mode === 'empty') payload = Buffer.alloc(0);
+
+    const headers = { 'Content-Type': 'application/zip', ETag: etag, 'Last-Modified': lastModified };
+    if (mode === 'oversize') {
+      headers['Content-Length'] = String(1024 * 1024 * 1024);
+      res.writeHead(200, headers);
+      return res.end(payload);
+    }
+    headers['Content-Length'] = String(payload.length);
+    res.writeHead(200, headers);
+    if (mode === 'truncated') {
+      res.write(payload.subarray(0, Math.floor(payload.length / 3)));
+      return res.destroy();
+    }
+    return res.end(payload);
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      server, requests, etag, lastModified,
+      downloadUrl: `http://127.0.0.1:${server.address().port}/wp-content/uploads/DailyExport-CSV.zip`,
       close: () => server.close(),
     }));
   });

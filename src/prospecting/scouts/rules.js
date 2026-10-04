@@ -428,6 +428,145 @@ export function evaluateCityDevRow(row, manifest, { now = Date.now() } = {}) {
   };
 }
 
+// ── 4. CaliClean ABC Active License Scout · California ABC ───
+//
+// Aquí la Company es el NEGOCIO con premisa, no el titular de la licencia. La
+// distinción importa porque `Primary Name` es el titular y puede ser una persona
+// física: en este registro conviven "J DUSI INC" y el nombre y apellido de quien
+// tiene la licencia a su nombre. El `DBA Name` —el nombre comercial— es el que
+// describe el establecimiento, así que se prefiere, y el titular solo se usa
+// cuando es inequívocamente una entidad.
+
+/** Una dirección que no es una premisa física donde haya algo que limpiar. */
+const ABC_NON_PREMISE = [
+  /\bp\.?\s?o\.?\s*box\b/i,
+  /\bpost\s+office\s+box\b/i,
+  /\bpmb\b/i,
+  /^\s*(?:none|n\/?a|unknown|same)\s*$/i,
+];
+
+/** Marcadores de vivienda en una dirección de premisa. */
+const ABC_RESIDENTIAL = [
+  /\bapt\b|\bapartment\s+\d/i,
+  /\bresiden(ce|tial)\b/i,
+  /\bmobile\s*home\b/i,
+  /\btrailer\b/i,
+];
+
+/**
+ * ¿Este nombre sirve como nombre de empresa?
+ *
+ * Mismo criterio que el de los permisos de desarrollo y por la misma razón: hace
+ * falta una señal POSITIVA de entidad, porque la ausencia de forma de persona no
+ * basta cuando el campo admite personas. Devuelve el nivel que lo aceptó para que
+ * la procedencia pueda decir con qué regla entró cada Company.
+ */
+export function abcBusinessName(dba, primary) {
+  const comercial = clean(dba);
+  const titular = clean(primary);
+
+  // 1. El nombre comercial, si existe y no es el nombre de alguien.
+  if (comercial) {
+    const c = comercial.replace(/[.,\s]+$/, '');
+    if (!PERSON_SHAPES.some((re) => re.test(c))
+      && !(/^[\p{Lu}][\p{L}'’-]+\s+[\p{Lu}][\p{L}'’-]+$/u.test(c) && !BUSINESS_ACTIVITY.test(c) && !ENTITY_HINTS.test(c))) {
+      return { ok: true, name: c, rule: 'nombre comercial (DBA)', tier: 'dba' };
+    }
+    // Un DBA con forma de persona no descalifica la fila: puede haber un titular
+    // que sí sea una entidad. Se sigue mirando.
+  }
+
+  // 2. El titular, solo si es una entidad inequívoca.
+  if (titular) {
+    const t = titular.replace(/[.,\s]+$/, '');
+    const compuesto = t.split(/\s*[/|]\s*|\s+-\s+|\s*\b(?:and|&)\b\s*/i).filter(Boolean);
+    const parecePersona = (x) => {
+      const y = x.trim().replace(/[.,]+$/, '');
+      if (!y) return false;
+      if (PERSON_SHAPES.some((re) => re.test(y))) return true;
+      return /^[\p{Lu}][\p{L}'’-]+\s+[\p{Lu}][\p{L}'’-]+$/u.test(y) && !BUSINESS_ACTIVITY.test(y) && !ENTITY_HINTS.test(y);
+    };
+    if (compuesto.length > 1 && compuesto.some(parecePersona)) {
+      return { ok: false, reason: 'el titular mezcla el nombre de una persona con el de una empresa' };
+    }
+    if (!parecePersona(t) && ENTITY_HINTS.test(t)) {
+      return { ok: true, name: t, rule: 'razón social del titular, con marca de entidad', tier: 'entity' };
+    }
+    if (parecePersona(t)) {
+      return { ok: false, reason: 'el titular es una persona física' };
+    }
+  }
+
+  return { ok: false, reason: 'ni el nombre comercial ni el del titular se pueden afirmar empresa' };
+}
+
+/**
+ * Una licencia de ABC se acepta solo si las seis cosas se cumplen: condado,
+ * estado activo, tipo de licencia con premisa fija, dirección de premisa real,
+ * número de expediente y nombre de negocio defendible.
+ *
+ * Ningún `reason` lleva el valor de la fila dentro.
+ */
+export function evaluateAbcRow(row, manifest) {
+  const val = (k) => clean(row?.[k]);
+  const f = manifest.filters;
+
+  if (val('Prem County').toUpperCase() !== String(f.county).toUpperCase()) {
+    return { ok: false, kind: 'out_of_area', reason: `condado "${val('Prem County') || '—'}"` };
+  }
+  if (f.premiseState && val('Prem State').toUpperCase() !== String(f.premiseState).toUpperCase()) {
+    return { ok: false, kind: 'out_of_area', reason: `estado de la premisa "${val('Prem State') || '—'}"` };
+  }
+  if (val('Type Status').toUpperCase() !== String(f.typeStatus).toUpperCase()) {
+    return { ok: false, kind: 'inactive', reason: `estado "${val('Type Status') || '—'}", no "${f.typeStatus}"` };
+  }
+
+  // ── Tipo de licencia: premisa fija y relevante ──
+  const tipo = val('License Type').padStart(2, '0');
+  const descripcion = f.licenseTypesAllowed?.[tipo];
+  if (!descripcion) {
+    return { ok: false, kind: 'not_relevant', reason: `tipo de licencia ${tipo || '—'} sin premisa fija relevante` };
+  }
+
+  const expediente = val('File Number');
+  if (!expediente) return { ok: false, kind: 'unverifiable', reason: 'sin File Number' };
+
+  // ── Dirección de la premisa, nunca la postal ──
+  const calle = [val('Prem Addr 1'), val('Prem Addr 2')].filter(Boolean).join(' ').trim();
+  const ciudad = val('Prem City');
+  const zip = val('Prem Zip').slice(0, 5);
+  if (f.requirePremiseAddress && (!calle || !ciudad || !/^\d{5}$/.test(zip))) {
+    return { ok: false, kind: 'unverifiable', reason: 'dirección de la premisa incompleta' };
+  }
+  if (f.excludePoBoxPremise && ABC_NON_PREMISE.some((re) => re.test(calle))) {
+    return { ok: false, kind: 'unverifiable', reason: 'la premisa no es una dirección física' };
+  }
+  if (ABC_RESIDENTIAL.some((re) => re.test(calle))) {
+    return { ok: false, kind: 'residential', reason: 'la dirección de la premisa señala una vivienda' };
+  }
+
+  // ── Nombre de negocio ──
+  const nombre = abcBusinessName(row?.['DBA Name'], row?.['Primary Name']);
+  if (!nombre.ok) return { ok: false, kind: 'personal', reason: `nombre: ${nombre.reason}` };
+
+  return {
+    ok: true, kind: null, reason: null,
+    fileNumber: expediente,
+    businessName: nombre.name,
+    nameRule: nombre.rule,
+    nameTier: nombre.tier,
+    licenseType: tipo,
+    licenseTypeName: descripcion,
+    typeStatus: val('Type Status').toUpperCase(),
+    issueDate: /^\s*$/.test(val('Type Orig Iss Date')) ? null : val('Type Orig Iss Date'),
+    expirationDate: /^\s*$/.test(val('Expir Date')) ? null : val('Expir Date'),
+    address: calle,
+    city: ciudad,
+    zip,
+    county: val('Prem County'),
+  };
+}
+
 /** Clave de comparación cruzada: nombre + calle, normalizados. */
 export function crossKey(name, street) {
   const n = normalizeForMatch(name);
@@ -441,4 +580,4 @@ export function nameKey(name) {
   return n || null;
 }
 
-export default { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow };
+export default { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow, evaluateAbcRow };

@@ -194,19 +194,40 @@ export async function* streamCsvObjects(file, {
   chunkBytes = CSV_DEFAULTS.readChunkBytes,
   delimiter = ',',
   onHeader = null,
+  // Algunos publicadores ponen un sello antes de la cabecera. El de ABC trae
+  // "Updated Sunday 4th of October 2026…" en la línea 1, pese a que su página
+  // dice que la primera línea son los nombres de campo. Se salta de forma
+  // explícita y se entrega a quien llama, porque es la fecha que el dato declara
+  // de sí mismo y vale como procedencia.
+  skipLeadingLines = 0,
+  onSkippedLine = null,
 } = {}) {
   const parser = new CsvParser({ delimiter });
   const fd = fs.openSync(file, 'r');
   const buf = Buffer.alloc(chunkBytes);
   let header = null;
   let lineNo = 0;
+  let saltadas = 0;
+  let primerTrozo = true;
 
   try {
     for (;;) {
       const read = fs.readSync(fd, buf, 0, chunkBytes, null);
-      const rows = read === 0 ? parser.end() : parser.push(buf.toString('utf8', 0, read));
+      let texto = read === 0 ? '' : buf.toString('utf8', 0, read);
+      // El BOM del primer trozo se quita antes de parsear. No es un detalle
+      // estético: con el BOM delante, el parser ve un carácter y después una
+      // comilla en medio de un campo sin entrecomillar, y la primera línea del
+      // archivo se vuelve un error de formato. El volcado de ABC llega así.
+      if (primerTrozo && texto.charCodeAt(0) === 0xFEFF) texto = texto.slice(1);
+      primerTrozo = false;
+      const rows = read === 0 ? parser.end() : parser.push(texto);
       for (const cells of rows) {
         lineNo++;
+        if (saltadas < skipLeadingLines) {
+          saltadas++;
+          if (onSkippedLine) onSkippedLine(cells);
+          continue;
+        }
         if (!header) {
           header = cells.map((c) => c.trim());
           // La cabecera se entrega antes de la primera fila, para que quien

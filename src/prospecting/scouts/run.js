@@ -21,9 +21,10 @@ import {
   emptyScoutMetrics, countRejection, allowedFields,
 } from './registry.js';
 import { writeStaging, newRunId } from './staging.js';
-import { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow, crossKey, nameKey } from './rules.js';
+import { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow, evaluateAbcRow, crossKey, nameKey } from './rules.js';
 import { queryArcgis } from './arcgis-client.js';
 import { fetchCsvToTemp, streamCsvObjects } from '../sources/csv-client.js';
+import { extractZipEntry } from '../sources/zip-client.js';
 
 /** Recorta una fila a la allowlist cerrada del scout. */
 export function trimToAllowed(scoutId, row) {
@@ -391,10 +392,156 @@ async function runCityDev(scoutId, m, metrics, opts) {
   }
 }
 
+// ── 4. CaliClean ABC Active License Scout · California ABC ───
+async function runAbc(scoutId, m, metrics, opts) {
+  // El volcado diario viene zipeado, así que hay un paso más que en las otras:
+  // descargar el ZIP, inflar su única entrada CSV a otro temporal, y borrar los
+  // dos siempre. El archivo trae nombres de titulares y su dirección postal, así
+  // que ninguno de los dos se queda en disco.
+  const url = opts.downloadUrlOverride || m.downloadUrl;
+  const permitidas = m.robots?.allowedResources || [];
+  if (!opts.downloadUrlOverride && !permitidas.includes(url)) {
+    throw new Error(`La URL "${url}" no está en los recursos permitidos de la auditoría de ${scoutId}.`);
+  }
+
+  metrics.requests = 1;
+  const descarga = await fetchCsvToTemp(url, {
+    fetchImpl: opts.fetchImpl,
+    etag: opts.etag,
+    lastModified: opts.lastModified,
+    userAgent: opts.userAgent,
+    maxBytes: m.limits.maxBytes,
+    timeoutMs: m.limits.timeoutMs,
+  });
+  let inflado = null;
+  try {
+    if (descarga.notModified) {
+      return { rows: 0, consumed: false, aceptados: [], notModified: true, provenance: {} };
+    }
+    metrics.bytes += descarga.bytes;
+
+    inflado = await extractZipEntry(descarga.file, {
+      expectExtension: m.zipEntryExtension || '.csv',
+      maxInflatedBytes: m.limits.maxInflatedBytes,
+    });
+    metrics.inflated_bytes = inflado.bytes;
+
+    const esperados = allowedFields(scoutId);
+    let cabecera = null;
+    let banner = null;
+    const comprobarCabecera = (cols) => {
+      cabecera = cols;
+      const faltan = esperados.filter((c) => !cols.includes(c));
+      if (faltan.length) {
+        throw new Error(
+          `El esquema del volcado de ${scoutId} cambió: faltan ${faltan.join(', ')}. `
+          + 'La allowlist atestiguada ya no describe este archivo, así que no se procesa.',
+        );
+      }
+    };
+
+    const porClave = new Map();
+    const ahora = opts.clock ? opts.clock() : Date.now();
+    const verificadoEn = new Date(ahora).toISOString();
+
+    for await (const parsed of streamCsvObjects(inflado.file, {
+      delimiter: m.limits.delimiter || ',',
+      skipLeadingLines: 1,
+      onSkippedLine: (cells) => { if (banner === null) banner = (cells[0] || '').trim() || null; },
+      onHeader: comprobarCabecera,
+    })) {
+      metrics.fetched++;
+      if (!parsed.ok) { metrics.rejected_malformed++; continue; }
+
+      const v = evaluateAbcRow(parsed.row, m);
+      if (!v.ok) { countRejection(metrics, v.kind); continue; }
+
+      const { row: safe } = trimToAllowed(scoutId, parsed.row);
+      assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+      // Un negocio, una Company. El mismo local puede tener dos licencias —una
+      // de cerveza y otra general— y eso no son dos clientes.
+      const firma = crossKey(v.businessName, v.address) || nameKey(v.businessName);
+      if (!firma) { metrics.rejected_personal++; continue; }
+      const previo = porClave.get(firma);
+      if (previo) {
+        metrics.deduped++;
+        // Gana el expediente más bajo: estable y sin depender del orden de lectura.
+        if (Number(previo.fileNumber) <= Number(v.fileNumber)) continue;
+      }
+      porClave.set(firma, v);
+    }
+
+    const elegidos = [...porClave.values()]
+      .sort((a, b) => Number(a.fileNumber) - Number(b.fileNumber))
+      .slice(0, m.limits.maxAcceptedPerRun);
+    metrics.over_cap = Math.max(0, porClave.size - elegidos.length);
+    metrics.accepted = elegidos.length;
+
+    const aceptados = elegidos.map((v) => ({
+      dedupKey: `${m.dedupNamespace}:${v.fileNumber}`,
+      sourceId: v.fileNumber,
+      businessName: v.businessName,
+      address: v.address,
+      city: v.city,
+      zip: v.zip,
+      serviceArea: m.serviceArea,
+      sourceUrl: m.portalPage,
+      lastVerified: verificadoEn,
+      evidence: {
+        fileNumber: v.fileNumber,
+        licenseType: v.licenseType,
+        licenseTypeName: v.licenseTypeName,
+        typeStatus: v.typeStatus,
+        issueDate: v.issueDate,
+        expirationDate: v.expirationDate,
+        county: v.county,
+        // Con qué regla se eligió el nombre. Importa: uno viene del nombre
+        // comercial y otro de la razón social del titular.
+        nameRule: v.nameRule,
+      },
+      matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
+    }));
+
+    return {
+      rows: aceptados.length,
+      consumed: true,
+      aceptados,
+      provenance: {
+        authority: m.authority,
+        portalPage: m.portalPage,
+        downloadUrl: m.downloadUrl,
+        downloadLabel: m.downloadLabelObserved,
+        license: m.license,
+        zipSha256: descarga.sha256,
+        zipBytes: descarga.bytes,
+        csvSha256: inflado.sha256,
+        csvBytes: inflado.bytes,
+        zipEntry: inflado.entry.name,
+        fileEtag: descarga.headers?.etag ?? null,
+        fileLastModified: descarga.headers?.lastModified ?? null,
+        // El sello que el propio archivo trae en su primera línea.
+        datasetStamp: banner,
+        verifiedAt: verificadoEn,
+        updateCadence: m.downloadVerification?.updateCadence ?? null,
+        nameRule: m.filters.nameRule,
+        headerColumns: cabecera ? cabecera.length : null,
+        headerUnexpectedCount: cabecera ? cabecera.filter((c) => !esperados.includes(c)
+          && !(m.fields?.neverRequested || []).includes(c)).length : null,
+      },
+    };
+  } finally {
+    // Los dos, siempre: el ZIP y el CSV inflado.
+    if (inflado) inflado.dispose();
+    descarga.dispose();
+  }
+}
+
 const EJECUTORES = {
   hud_multifamily: runHud,
   cde_schools: runCde,
   city_development_permits: runCityDev,
+  ca_abc_active_licenses: runAbc,
 };
 
 /**

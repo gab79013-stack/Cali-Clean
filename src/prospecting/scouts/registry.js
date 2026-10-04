@@ -31,7 +31,9 @@ import { attestationFor } from '../sources/attestation.js';
  * sortear, así que dejó de ser una opción activa y la sustituye
  * `city_development_permits`. Las dos tienen su expediente en docs/retired/.
  */
-export const SCOUT_IDS = Object.freeze(['hud_multifamily', 'cde_schools', 'city_development_permits']);
+export const SCOUT_IDS = Object.freeze([
+  'hud_multifamily', 'cde_schools', 'city_development_permits', 'ca_abc_active_licenses',
+]);
 
 /** Dónde vive el manifiesto de cada scout. */
 const manifestDir = () => process.env.SCOUT_MANIFEST_DIR || path.join(ROOT, 'config', 'scouts');
@@ -226,6 +228,9 @@ export function requiredEgressHosts() {
 export const emptyScoutMetrics = () => ({
   requests: 0,
   bytes: 0,
+  // Bytes tras inflar, cuando la fuente publica zipeado: un ZIP de 7 MB que se
+  // convierte en 27 MB es un dato que conviene ver en el informe.
+  inflated_bytes: 0,
   fetched: 0,
   accepted: 0,
   rejected_personal: 0,

@@ -5,7 +5,8 @@
  *   node scripts/phase3-run.js preview --only cde_schools
  *   node scripts/phase3-run.js plan                     # capa central sobre los staging
  *   node scripts/phase3-run.js apply --confirm \
- *        --expect-hashes <id>=<hash>,... --allow-writes  # exige todo a la vez
+ *        --expect-hashes <id>=<hash>,... --allow-writes \
+ *        [--max-creates 10]                              # exige todo a la vez
  *
  * Qué garantiza, y cada una está comprobada por una prueba:
  *
@@ -28,6 +29,7 @@ import {
 } from '../src/prospecting/scouts/registry.js';
 import { runScout } from '../src/prospecting/scouts/run.js';
 import { latestStagingPerScout } from '../src/prospecting/scouts/staging.js';
+import { checkQuota } from '../src/prospecting/sources/quota.js';
 import {
   validateStaging, reconcile, refusalsFor, prioritizedScoutIds, PRIORITY_RATIONALE,
 } from '../src/prospecting/scouts/intake.js';
@@ -47,6 +49,15 @@ const confirmado = rest.includes('--confirm');
 const permitirEscrituras = rest.includes('--allow-writes');
 const soloUno = flag('only', null);
 const esperados = String(flag('expect-hashes', '') || '');
+// Tope de creaciones POR FUENTE en un apply. Estaba usándose sin declararse, así
+// que `porFuente[scoutId] > undefined` era siempre falso y el tope no existía: el
+// apply habría creado todo lo que el plan trajera. Por defecto, el mismo tope que
+// la cuota de una corrida.
+const maxCreates = Number(flag('max-creates', 50));
+if (!Number.isInteger(maxCreates) || maxCreates < 1) {
+  console.error('--max-creates tiene que ser un entero de 1 o más.');
+  process.exit(1);
+}
 
 const banner = (t) => console.log(`\n${'═'.repeat(72)}\n${t}\n${'═'.repeat(72)}`);
 
@@ -339,16 +350,32 @@ async function apply() {
   );
   if (!autorizados.size) die('--expect-hashes no trae ningún par <scoutId>=<hash>.');
 
-  // Cerrojo de integración: mientras un scout del catálogo no tenga su preview
-  // revisada, el apply central no corre. Se añadió al sustituir HCAI por
-  // cde_schools: aplicar con una fuente del catálogo sin previsualizar sería
-  // escribir con el reemplazo a medio integrar.
-  const sinPreview = scoutStatus()
-    .filter((s2) => s2.enabled === true && !latestStagingPerScout({ scoutIds: [s2.scoutId] })[s2.scoutId])
-    .map((s2) => s2.scoutId);
+  // Cerrojo de integración: un scout habilitado del catálogo sin preview detiene
+  // el apply. Se añadió al sustituir HCAI por cde_schools, porque aplicar con una
+  // fuente a medio integrar es escribir sin haber revisado lo que escribes.
+  //
+  // Con una excepción, y tiene su motivo: una fuente **bloqueada por su propia
+  // cuota de 24 h** no está sin revisar, está esperando su turno. Sin esta
+  // excepción el apply central solo podría correr el día en que las cuatro
+  // fuentes coincidieran en ventana, que con una corrida cada 24 h es casi nunca.
+  // Se nombra en el informe para que nadie confunda "esperando cuota" con
+  // "nadie la ha mirado".
+  const enEspera = [];
+  const sinPreview = [];
+  for (const s2 of scoutStatus()) {
+    if (s2.enabled !== true) continue;
+    if (latestStagingPerScout({ scoutIds: [s2.scoutId] })[s2.scoutId]) continue;
+    const cuota = checkQuota(s2.scoutId);
+    if (cuota && cuota.allowed === false) enEspera.push(`${s2.scoutId} (${cuota.reason})`);
+    else sinPreview.push(s2.scoutId);
+  }
   if (sinPreview.length) {
-    die(`estas fuentes están habilitadas y no tienen preview: ${sinPreview.join(', ')}. `
+    die(`estas fuentes están habilitadas, no tienen preview y su cuota no las bloquea: ${sinPreview.join(', ')}. `
       + 'El apply central espera a que todo el catálogo habilitado se haya previsualizado.');
+  }
+  if (enEspera.length) {
+    console.log(`\n  Fuentes habilitadas sin staging por su propia cuota: ${enEspera.join(', ')}.`);
+    console.log('  No es un descuido: es la cuota haciendo su trabajo. Se aplica solo lo autorizado.');
   }
 
   const archivos = latestStagingPerScout({ scoutIds: SCOUT_IDS });

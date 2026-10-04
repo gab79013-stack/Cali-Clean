@@ -157,10 +157,12 @@ ningún sitio; el CSV descargado se borra al terminar.
     npm run phase3:preview                # los tres scouts de la fase 3 (deshabilitados)
     npm run phase3:plan                   # capa central: valida, deduplica, planifica
 
-La **fase 3** añade tres scouts más —propiedades multifamiliares de HUD, centros
-educativos del CDE y permisos de desarrollo comercial de la Ciudad de San Diego— y
-una capa central que valida sus staging, deduplica contra lo que ya hay y
-planifica Companies. **HUD y los permisos de desarrollo cruzaron la puerta**; CDE
+La **fase 3** añade cuatro scouts más —propiedades multifamiliares de HUD, centros
+educativos del CDE, permisos de desarrollo comercial de la Ciudad de San Diego y
+licencias activas de ABC— y una capa central que valida sus staging, deduplica
+contra lo que ya hay y planifica Companies. **HUD, los permisos de desarrollo y
+ABC cruzaron la puerta**, y ABC es la única con dominio público declarado por el
+publicador; CDE
 pasó cuatro de las cinco comprobaciones de su auditoría en vivo —robots, esquema,
 archivo oficial y términos— pero su declaración de copyright no es legible desde
 aquí, así que no se afirma la licencia y se queda apagada. Dos candidatas se

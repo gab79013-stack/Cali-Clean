@@ -1,0 +1,180 @@
+{
+  "$comment": "Evidencia del scout de licencias de ABC, recogida EN VIVO el 2026-10-04 contra www.abc.ca.gov. Siete artefactos con huella reproducible, ninguno pendiente, y ninguna redireccion fuera del host auditado.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T19:25:43Z",
+  "evidenceCollectedAt": "2026-10-04T19:25:43Z",
+  "collectedFrom": {
+    "method": "GET y HEAD directos desde el contenedor de Claude Cloud, a traves del proxy del entorno",
+    "liveVerifiedFromCloud": true,
+    "requestsMade": 7,
+    "note": "Siete peticiones: robots.txt, la pagina de reportes, las Conditions of Use, el record layout, la lista de tipos de licencia, un HEAD del ZIP y un GET con Range de 128 KiB para leer la cabecera sin bajar los 7 MB. El ZIP completo lo descarga el scout, una sola vez."
+  },
+  "sources": {
+    "ca_abc_active_licenses": {
+      "sourceId": "ca_abc_active_licenses",
+      "displayName": "CaliClean ABC Active License Scout",
+      "publisher": "California Department of Alcoholic Beverage Control (ABC)",
+      "portalPage": "https://www.abc.ca.gov/licensing/licensing-reports/",
+      "downloadUrl": "https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip",
+      "egressHost": "www.abc.ca.gov",
+      "license": {
+        "status": "VERIFICADA",
+        "name": "Dominio publico (California, Conditions of Use de ABC)",
+        "termsUrl": "https://www.abc.ca.gov/conditions-of-use/",
+        "quote": "In general, the information presented on this web site, unless otherwise indicated, is considered in the public domain. It may be distributed or copied as permitted by law.",
+        "commercialUseRestricted": false,
+        "attributionRequired": false,
+        "findings": "Se busco expresamente lo contrario y no hay nada: ni prohibicion de reutilizacion, ni clausula de uso no comercial, ni exigencia de permiso escrito, ni restriccion de automatizacion o de descarga masiva. El unico 'prohibit' del documento habla de informacion personal de menores, que no es este dato. El 'unless otherwise indicated' se refiere a material con copyright de terceros, como fotografias; la pagina de reportes no indica nada en contra para estos ficheros."
+      },
+      "robots": {
+        "status": "LEIDO",
+        "url": "https://www.abc.ca.gov/robots.txt",
+        "httpStatus": 200,
+        "bytes": 157,
+        "sha256": "212662af03e57ac701fedbbc257dcc5d60925f21f39e354ddac8e1b852e3572a",
+        "fullPolicy": "User-agent: * · Disallow: /wp-admin/ · Allow: /wp-admin/admin-ajax.php",
+        "disallowsOurPath": false,
+        "disallowsOurPathBasis": "La unica ruta prohibida es /wp-admin/. La descarga vive en /wp-content/uploads/, que no esta prohibida.",
+        "interpretation": "Aqui el robots SI es legible y SI se pronuncia, y lo que prohibe no es nuestra ruta. El permiso de reutilizacion lo da aparte las Conditions of Use.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip"
+        ]
+      },
+      "limits": {
+        "maxValidCandidatesPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "requestsPerRun": 1,
+        "maxBytes": 67108864,
+        "maxInflatedBytes": 134217728,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000,
+          "jitter": "full",
+          "respectRetryAfter": true
+        }
+      },
+      "schema": {
+        "recordLayoutSource": "https://www.abc.ca.gov/weekly-data-export-fixed-width-layout-definition/",
+        "recordLayoutFields": 26,
+        "method": "GET con Range 0-131071 sobre el ZIP e inflado parcial del comienzo del flujo deflate: cabecera sin descargar los 7 MB",
+        "observedFieldCount": 26,
+        "observedFields": [
+          "License Type",
+          "File Number",
+          "Lic or App",
+          "Type Status",
+          "Type Orig Iss Date",
+          "Expir Date",
+          "Fee Codes",
+          "Dup Counts",
+          "Master Ind",
+          "Term in # of Months",
+          "Geo Code",
+          "District",
+          "Primary Name",
+          "Prem Addr 1",
+          "Prem Addr 2",
+          "Prem City",
+          "Prem State",
+          "Prem Zip",
+          "DBA Name",
+          "Mail Addr 1",
+          "Mail Addr 2",
+          "Mail City",
+          "Mail State",
+          "Mail Zip",
+          "Prem County",
+          "Prem Census Tract #"
+        ],
+        "allowlistFieldsAllExist": true,
+        "bannerLine": "La PRIMERA linea del CSV no es la cabecera: es un sello, 'Updated Sunday 4th of October 2026 03:50:21 AM'. La pagina oficial dice que la primera linea son los nombres de campo, y no es exacto. Se salta como banner y ademas se CONSERVA como procedencia: es la fecha que el propio dato declara.",
+        "quirks": "Dos columnas llegan con un espacio delante en la cabecera (' Prem Addr 2', ' Prem State'). El lector recorta los nombres de la cabecera, asi que las claves quedan limpias; se deja escrito para que nadie 'arregle' ese recorte.",
+        "headerAssertion": "Al descargar se contrasta la cabecera real contra la allowlist y se para si falta una columna permitida."
+      },
+      "downloadVerification": {
+        "method": "HEAD",
+        "httpStatus": 200,
+        "redirects": 0,
+        "sameHostAsAudited": true,
+        "contentType": "application/zip",
+        "contentLength": 7439547,
+        "etag": "\"6ac22f72-7184bb\"",
+        "lastModified": "Sun, 04 Oct 2026 10:50:26 GMT",
+        "acceptRanges": "bytes",
+        "zipEntry": {
+          "name": "ABC-DailyDataExport.csv",
+          "method": "deflate (8)",
+          "compressedBytes": 7439403,
+          "declaredInflatedBytes": 27874199
+        },
+        "updateCadence": "Cada dia habil a las 7 a.m. PT, declarado en la pagina oficial de reportes. El propio CSV trae en su primera linea su sello de actualizacion.",
+        "note": "Sin redireccion: 200 directo en el host auditado. Es la diferencia con CDPH, cuya descarga saltaba a s3.amazonaws.com."
+      },
+      "personalDataNotice": "'Primary Name' es el titular de la licencia y puede ser una persona fisica. Se lee para decidir y solo se conserva cuando la regla lo declara entidad. El bloque postal completo (Mail Addr 1/2, Mail City/State/Zip), que es donde aparece el domicilio del titular, no se pide ni se persiste. El archivo NO trae telefono, correo ni coordenadas: comprobado contra el record layout oficial de 26 campos.",
+      "artifacts": {
+        "robotsTxt": {
+          "url": "https://www.abc.ca.gov/robots.txt",
+          "httpStatus": 200,
+          "bytes": 157,
+          "sha256": "212662af03e57ac701fedbbc257dcc5d60925f21f39e354ddac8e1b852e3572a",
+          "sha256Scope": "Cuerpo completo del robots.txt.",
+          "finding": "Politica entera: 'User-agent: *', 'Disallow: /wp-admin/', 'Allow: /wp-admin/admin-ajax.php'. La descarga vive en /wp-content/uploads/: no prohibida."
+        },
+        "reportsPage": {
+          "url": "https://www.abc.ca.gov/licensing/licensing-reports/",
+          "httpStatus": 200,
+          "bytes": 136506,
+          "sha256": "1fc3ed9bf20ff4a34f8a36316a91d8ba34e480169efecb1a4c0a29a4e3e2dbdc",
+          "sha256Scope": "Cuerpo HTML completo de la pagina oficial de Licensing Reports.",
+          "finding": "Declara 'Daily Data Export · Refreshed each business day at 7 a.m. PT' y enlaza 'Download Data as CSV' a la URL exacta del manifiesto."
+        },
+        "conditionsOfUse": {
+          "url": "https://www.abc.ca.gov/conditions-of-use/",
+          "httpStatus": 200,
+          "bytes": 240814,
+          "sha256": "e3321cf6ec781e1e94087f5b75308d765bee25978d0afb10992a311cf2b3d131",
+          "sha256Scope": "Cuerpo HTML completo de las Conditions of Use.",
+          "finding": "Seccion OWNERSHIP: la informacion del sitio se considera de DOMINIO PUBLICO salvo indicacion contraria, y puede distribuirse o copiarse. Sin restriccion comercial ni exigencia de atribucion."
+        },
+        "recordLayout": {
+          "url": "https://www.abc.ca.gov/weekly-data-export-fixed-width-layout-definition/",
+          "httpStatus": 200,
+          "bytes": 118465,
+          "sha256": "f5fe4e0d385786c8aae7f6ee0503c79be0052121cb49bbc49b0f4f2bfd1c1e2b",
+          "sha256Scope": "Cuerpo HTML completo del record layout oficial.",
+          "finding": "26 campos, 460 caracteres por registro. Confirma que no hay telefono, correo ni coordenadas en el archivo."
+        },
+        "licenseTypes": {
+          "url": "https://www.abc.ca.gov/licensing/license-types/",
+          "httpStatus": 200,
+          "bytes": 461190,
+          "sha256": "ba1fa8693bba8812c6236d93d7287cfc3e789d385007950024d909dbe25cf1a1",
+          "sha256Scope": "Cuerpo HTML completo de la lista oficial de tipos de licencia.",
+          "finding": "85 codigos con su descripcion. De ahi sale la lista de 18 tipos con premisa fija relevante, y el motivo de excluir el resto."
+        },
+        "zipHead": {
+          "url": "https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip",
+          "httpStatus": 200,
+          "bytes": 1202,
+          "sha256": "e0302ce21932e8db0d497fa05bcd30fffdc2f07165521eab6ae8e09084dacd10",
+          "sha256Scope": "Cabeceras de la respuesta al HEAD, sin cuerpo.",
+          "finding": "200 directo, CERO redirecciones, mismo host. content-length 7439547, etag \"6ac22f72-7184bb\", last-modified Sun 04 Oct 2026 10:50:26 GMT."
+        },
+        "csvHeader": {
+          "url": "https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip",
+          "httpStatus": 206,
+          "httpStatusIsEvidence": true,
+          "bytes": 131072,
+          "sha256": "726c100b1e59579ca811c22ce6891069367d447d5f5345d9ea3e37c3fb7e11a2",
+          "sha256Scope": "Primeros 131072 bytes del ZIP real (rango 0-131071): el encabezado local y el comienzo del flujo deflate, suficiente para inflar la cabecera del CSV sin descargar los 7 MB.",
+          "finding": "La entrada del ZIP es ABC-DailyDataExport.csv, deflate, 7439403 comprimidos y 27874199 al inflarse. 26 columnas, las 13 de la allowlist presentes. La linea 1 es un sello de actualizacion, no la cabecera."
+        }
+      },
+      "decision": "HABILITADA. Es la primera fuente de esta fase que pasa las nueve comprobaciones sin una sola salvedad: robots legible que no prohibe la ruta, dominio publico declarado por el publicador, autoridad y cadencia confirmadas, URL exacta copiada de la pagina oficial, cero redirecciones, record layout oficial y cabecera real contrastada."
+    }
+  },
+  "digest": "sha256:b71ac0529e942cf3bd1773a5143ba0b237d2a50705d10533d41ec5707d0ffca8"
+}

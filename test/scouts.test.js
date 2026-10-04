@@ -31,8 +31,11 @@ const attDir = path.join(tmpDir, 'att');
 fs.mkdirSync(manifestDir, { recursive: true });
 fs.mkdirSync(attDir, { recursive: true });
 
-const SCOUTS = ['hud_multifamily', 'cde_schools', 'city_development_permits'];
-const SLUG = { hud_multifamily: 'hud', cde_schools: 'cde', city_development_permits: 'city-dev' };
+const SCOUTS = ['hud_multifamily', 'cde_schools', 'city_development_permits', 'ca_abc_active_licenses'];
+const SLUG = {
+  hud_multifamily: 'hud', cde_schools: 'cde', city_development_permits: 'city-dev',
+  ca_abc_active_licenses: 'abc',
+};
 
 // Manifiestos: copia del real con enabled=true.
 for (const id of SCOUTS) {
@@ -97,6 +100,7 @@ const ZIPS = ['92101', '92103', '92111', '92123', '91910'];
 async function corre(scoutId, servidor, extra = {}) {
   const override = {
     city_development_permits: { downloadUrlOverride: servidor.downloadUrl },
+    ca_abc_active_licenses: { downloadUrlOverride: servidor.downloadUrl },
     hud_multifamily: { queryUrlOverride: servidor.queryUrl },
     cde_schools: { downloadUrlOverride: servidor.downloadUrl },
   }[scoutId];
@@ -164,6 +168,41 @@ test('el estado versionado de cada scout es el que la verificación real encontr
     'PROJECT_TRUST_ACCOUNT_NO', 'JOB_DRAWING_NUMBER']) {
     assert.ok(city.fields.neverRequested.includes(prohibido), `${prohibido} tiene que estar prohibida`);
   }
+
+  // ABC: la primera que pasa las nueve comprobaciones sin salvedades, y la
+  // única con licencia de DOMINIO PÚBLICO declarada por el publicador.
+  const abc = leer('ca_abc_active_licenses');
+  assert.equal(abc.enabled, true);
+  assert.equal(abc.state, 'ENABLED');
+  assert.deepEqual(abc.blockers, []);
+  assert.equal(abc.license.status, 'VERIFICADA');
+  assert.equal(abc.license.commercialUseRestricted, false);
+  assert.equal(abc.license.attributionRequired, false);
+  assert.match(abc.license.quote, /considered in the public domain/);
+  for (const k of ['robotsVerified', 'termsVerified', 'licenseVerified', 'authorityVerified',
+    'cadenceVerified', 'exactUrlVerified', 'noRedirectVerified', 'recordLayoutVerified', 'schemaVerified']) {
+    assert.equal(abc.verification[k], true, `${k} se dio por hecho`);
+  }
+  // El robots se leyó y lo que prohíbe no es nuestra ruta.
+  assert.equal(abc.robots.httpStatus, 200);
+  assert.equal(abc.robots.disallowsOurPath, false);
+  assert.match(abc.robots.fullPolicy, /wp-admin/);
+  // Cero redirecciones: es la diferencia con CDPH, que saltaba a S3.
+  assert.equal(abc.downloadVerification.redirects, 0);
+  assert.equal(abc.downloadVerification.sameHostAsAudited, true);
+  // El bloque postal completo está prohibido, y ahí vive el domicilio del titular.
+  assert.equal(abc.schemaVerification.observedFieldCount, 26);
+  assert.deepEqual(
+    [...abc.fields.allowed, ...abc.fields.neverRequested].sort(),
+    [...abc.schemaVerification.observedFields].sort(),
+  );
+  for (const prohibido of ['Mail Addr 1', 'Mail Addr 2', 'Mail City', 'Mail State', 'Mail Zip',
+    'Prem Census Tract #', 'Geo Code']) {
+    assert.ok(abc.fields.neverRequested.includes(prohibido), `${prohibido} tiene que estar prohibida`);
+  }
+  // Y los Bed & Breakfast quedan fuera por ambiguos, no por olvido.
+  for (const t of ['67', '80']) assert.equal(abc.filters.licenseTypesAllowed[t], undefined);
+  for (const t of ['41', '47', '21', '75']) assert.ok(abc.filters.licenseTypesAllowed[t]);
 
   // CDE: auditada en vivo. Cuatro de cinco comprobaciones pasaron; la licencia
   // no, porque la declaración de copyright del sitio no es legible desde aquí.
@@ -288,7 +327,7 @@ test('el robots del publicador bloquea aunque alguien ponga enabled=true', async
     disallowReason: 'Disallow: /schooldirectory/ para User-agent: *',
   };
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(m, null, 2));
-  for (const otro of ['hud_multifamily', 'city_development_permits']) {
+  for (const otro of SCOUTS.filter((x) => x !== 'cde_schools')) {
     fs.copyFileSync(new URL(`../config/scouts/${otro}.json`, import.meta.url), path.join(dir, `${otro}.json`));
   }
 
@@ -321,7 +360,7 @@ test('un robots que no se ha leído tampoco abre la puerta', async () => {
   // tiene que seguir mordiendo.
   m.robots = { status: 'NO_LEIDO', disallowsOurPath: null, interpretation: 'no se ha leído' };
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(m, null, 2));
-  for (const otro of ['hud_multifamily', 'city_development_permits']) {
+  for (const otro of SCOUTS.filter((x) => x !== 'cde_schools')) {
     fs.copyFileSync(new URL(`../config/scouts/${otro}.json`, import.meta.url), path.join(dir, `${otro}.json`));
   }
 
@@ -362,7 +401,8 @@ test('la evidencia de HUD está verificada en vivo; la de los otros dos, no', as
 });
 
 test('los hosts que harían falta para una preview real son exactamente tres', () => {
-  assert.deepEqual(registry.requiredEgressHosts(), ['egis.hud.gov', 'www.cde.ca.gov', 'seshat.datasd.org']);
+  assert.deepEqual(registry.requiredEgressHosts(),
+    ['egis.hud.gov', 'www.cde.ca.gov', 'seshat.datasd.org', 'www.abc.ca.gov']);
 });
 
 // ══ Guard duro del outbound ═══════════════════════════════════
@@ -526,7 +566,7 @@ test('solo se descarga el recurso exacto que la auditoría permite', async () =>
   const otro = JSON.parse(JSON.stringify(m));
   otro.downloadUrl = 'https://www.cde.ca.gov/schooldirectory/report?rid=dl2&tp=txt';
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(otro, null, 2));
-  for (const id of ['hud_multifamily', 'city_development_permits']) {
+  for (const id of SCOUTS.filter((x) => x !== 'cde_schools')) {
     fs.copyFileSync(path.join(manifestDir, `${id}.json`), path.join(dir, `${id}.json`));
   }
 
@@ -1094,6 +1134,359 @@ test('la procedencia dice el dataset, la regla de aceptación y de dónde sale l
   } finally { s.close(); }
 });
 
+// ══ 4. ABC · volcado diario zipeado ═══════════════════════════
+test('el lector de ZIP infla la entrada y la borra siempre', async () => {
+  const { extractZipEntry, listZipEntries, ZipError } = await import('../src/prospecting/sources/zip-client.js');
+  const dir = path.join(tmpDir, 'zips');
+  fs.mkdirSync(dir, { recursive: true });
+  const csv = 'A,B\nuno,"con, coma"\n';
+
+  // Los dos métodos que usa cualquier publicador: deflate y almacenado.
+  for (const metodo of [8, 0]) {
+    const f = path.join(dir, `z${metodo}.zip`);
+    fs.writeFileSync(f, fx.buildZip('datos.csv', csv, { metodo }));
+    assert.deepEqual(listZipEntries(f).map((e) => e.nombre), ['datos.csv']);
+    const r = await extractZipEntry(f, { expectExtension: '.csv', dir });
+    try {
+      assert.equal(fs.readFileSync(r.file, 'utf8'), csv);
+      assert.equal(r.bytes, Buffer.byteLength(csv));
+      assert.match(r.sha256, /^[0-9a-f]{64}$/);
+    } finally { r.dispose(); }
+    assert.equal(fs.existsSync(r.file), false, 'el inflado se quedó en disco');
+  }
+
+  // Y lo que no se acepta, no se acepta.
+  const noZip = path.join(dir, 'no.zip');
+  fs.writeFileSync(noZip, 'texto cualquiera');
+  assert.throws(() => listZipEntries(noZip), (err) => {
+    assert.ok(err instanceof ZipError); assert.equal(err.code, 'NOT_ZIP'); return true;
+  });
+
+  const otraExt = path.join(dir, 'ext.zip');
+  fs.writeFileSync(otraExt, fx.buildZip('datos.txt', csv));
+  await assert.rejects(() => extractZipEntry(otraExt, { expectExtension: '.csv', dir }),
+    (err) => { assert.equal(err.code, 'WRONG_EXTENSION'); return true; });
+
+  // Una bomba de descompresión se corta por el tope, no por confiar en lo que
+  // el ZIP declara de sí mismo.
+  const bomba = path.join(dir, 'bomba.zip');
+  fs.writeFileSync(bomba, fx.buildZip('b.csv', 'x'.repeat(200000)));
+  await assert.rejects(() => extractZipEntry(bomba, { dir, maxInflatedBytes: 1000 }),
+    (err) => { assert.equal(err.code, 'TOO_LARGE'); return true; });
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.startsWith('cc-unzip-')), [],
+    'quedó un inflado a medias en disco');
+});
+
+test('el volcado de ABC se descarga una vez, del recurso exacto y nada más', async () => {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    assert.equal(r.blocked, null);
+    assert.equal(s.requests.length, 1, `hubo ${s.requests.length} peticiones`);
+    assert.equal(s.requests[0].method, 'GET');
+    assert.equal(s.requests[0].path, '/wp-content/uploads/DailyExport-CSV.zip');
+    assert.equal(s.requests[0].range, null);
+    assert.ok(s.requests[0].userAgent);
+    assert.equal(r.metrics.requests, 1);
+    assert.ok(r.metrics.inflated_bytes > r.metrics.bytes, 'el inflado tiene que ser mayor que el ZIP');
+  } finally { s.close(); }
+});
+
+test('solo se descarga el recurso que la auditoría permite', async () => {
+  const m = registry.manifestFor('ca_abc_active_licenses');
+  assert.deepEqual(m.robots.allowedResources, [m.downloadUrl]);
+  assert.equal(m.downloadUrl, 'https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip');
+  assert.equal(m.downloadLabelObserved, 'Download Data as CSV');
+
+  const dir = path.join(tmpDir, 'scouts-otro-abc');
+  fs.mkdirSync(dir, { recursive: true });
+  const otro = JSON.parse(JSON.stringify(m));
+  // El hermano de ancho fijo existe en la misma página y NO es el auditado.
+  otro.downloadUrl = 'https://www.abc.ca.gov/wp-content/uploads/DailyExport.zip';
+  fs.writeFileSync(path.join(dir, 'ca_abc_active_licenses.json'), JSON.stringify(otro, null, 2));
+  for (const id of SCOUTS.filter((x) => x !== 'ca_abc_active_licenses')) {
+    fs.copyFileSync(path.join(manifestDir, `${id}.json`), path.join(dir, `${id}.json`));
+  }
+  const original = process.env.SCOUT_MANIFEST_DIR;
+  process.env.SCOUT_MANIFEST_DIR = dir;
+  try {
+    registry.loadManifests({ reload: true, dir });
+    await assert.rejects(
+      () => runScout('ca_abc_active_licenses', {
+        quotaOptions: nuevoEstado(), sleep: async () => {},
+        fetchImpl: () => { throw new Error('no debería llegar a pedir nada'); },
+      }),
+      /no está en los recursos permitidos/,
+    );
+  } finally {
+    process.env.SCOUT_MANIFEST_DIR = original;
+    registry.loadManifests({ reload: true, dir: manifestDir });
+  }
+});
+
+test('ABC acepta solo licencias activas con premisa comercial, y cuenta cada rechazo', async () => {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    const nombres = r.staging.doc.candidates.map((c) => c.businessName).sort();
+    assert.deepEqual(nombres, [
+      'GASLAMP TAP HOUSE', 'MESA MARKET INC', 'HARBOR RESTAURANTS LLC', 'NORTH PARK BREWPUB',
+    ].sort());
+
+    assert.equal(r.metrics.fetched, fx.ABC_ROWS.length, 'el sello de la línea 1 se contó como fila');
+    assert.equal(r.metrics.accepted, 4);
+    assert.equal(r.metrics.rejected_out_of_area, 2, 'condado Orange y estado NV');
+    assert.equal(r.metrics.rejected_inactive, 3, 'SURRENDER, SUSPEND y PENDING');
+    assert.equal(r.metrics.rejected_not_relevant, 5,
+      'viñedo, mayorista, barco, permiso de evento y bed & breakfast');
+    assert.equal(r.metrics.rejected_unverifiable, 4, 'PO Box, sin calle, sin ZIP y sin expediente');
+    assert.equal(r.metrics.rejected_residential, 1, 'premisa con APT');
+    assert.equal(r.metrics.rejected_personal, 4,
+      'un titular persona, un nombre pelado, un compuesto persona+empresa y una fila sin nombre');
+    assert.equal(r.metrics.deduped, 1, 'el mismo local con dos licencias');
+    assert.equal(r.metrics.crm_writes, 0);
+    assert.equal(r.metrics.outbound, 0);
+
+    const sumado = r.metrics.accepted + r.metrics.deduped + r.metrics.over_cap
+      + r.metrics.rejected_out_of_area + r.metrics.rejected_inactive + r.metrics.rejected_not_relevant
+      + r.metrics.rejected_unverifiable + r.metrics.rejected_residential + r.metrics.rejected_personal;
+    assert.equal(sumado, r.metrics.fetched, 'hay filas que no acabaron en ningún contador');
+  } finally { s.close(); }
+});
+
+test('la Company es el negocio, no el titular de la licencia', () => {
+  // `Primary Name` es el titular y PUEDE ser una persona. Esta es la regla que
+  // decide, y el nivel con el que entró queda escrito en la evidencia.
+  for (const [dba, primary, esperado] of [
+    ['GASLAMP TAP HOUSE', 'GASLAMP HOSPITALITY LLC', 'GASLAMP TAP HOUSE'],
+    ['', 'MESA MARKET INC', 'MESA MARKET INC'],
+    ['JOHN SMITH', 'HARBOR RESTAURANTS LLC', 'HARBOR RESTAURANTS LLC'],
+    ['BAYSIDE MARKET', '', 'BAYSIDE MARKET'],
+  ]) {
+    const r = rules.abcBusinessName(dba, primary);
+    assert.equal(r.ok, true, `dba=${dba} primary=${primary}: ${r.reason}`);
+    assert.equal(r.name, esperado);
+    assert.ok(r.rule, 'sin regla escrita no se puede auditar de dónde salió el nombre');
+  }
+  for (const [dba, primary] of [
+    ['', 'ORTEGA, JOSE RAMON'], ['MARIA LOPEZ', 'MARIA LOPEZ'], ['', 'ANA RUIZ - FLOW TAVERN'],
+    ['', 'JOSE R ORTEGA'], ['', ''],
+  ]) {
+    const r = rules.abcBusinessName(dba, primary);
+    assert.equal(r.ok, false, `dba=${dba} primary=${primary} se aceptó como empresa`);
+    assert.ok(r.reason);
+  }
+});
+
+test('los filtros de ABC rechazan cada caso por su motivo', () => {
+  const m = registry.manifestFor('ca_abc_active_licenses');
+  const base = fx.abcRow({ 'File Number': '00699999', 'DBA Name': 'HARBOR TAP HOUSE', 'Primary Name': 'HARBOR HOSPITALITY LLC' });
+  assert.equal(rules.evaluateAbcRow(base, m).ok, true);
+
+  for (const [patch, kind] of [
+    [{ 'Prem County': 'ORANGE' }, 'out_of_area'],
+    [{ 'Prem State': 'NV' }, 'out_of_area'],
+    [{ 'Type Status': 'SURRENDER' }, 'inactive'],
+    [{ 'Type Status': '' }, 'inactive'],
+    [{ 'License Type': '02' }, 'not_relevant'],
+    [{ 'License Type': '17' }, 'not_relevant'],
+    [{ 'License Type': '54' }, 'not_relevant'],
+    [{ 'License Type': '67' }, 'not_relevant'],
+    [{ 'License Type': '99' }, 'not_relevant'],
+    [{ 'File Number': '' }, 'unverifiable'],
+    [{ 'Prem Addr 1': '' }, 'unverifiable'],
+    [{ 'Prem Zip': '' }, 'unverifiable'],
+    [{ 'Prem City': '' }, 'unverifiable'],
+    [{ 'Prem Addr 1': 'P.O. BOX 9912' }, 'unverifiable'],
+    [{ 'Prem Addr 1': 'PMB 440' }, 'unverifiable'],
+    [{ 'Prem Addr 1': '12 ISLAND AVE APT 7B' }, 'residential'],
+    [{ 'DBA Name': '', 'Primary Name': 'ORTEGA, JOSE RAMON' }, 'personal'],
+  ]) {
+    const v = rules.evaluateAbcRow({ ...base, ...patch }, m);
+    assert.equal(v.ok, false, `${JSON.stringify(patch)} se aceptó`);
+    assert.equal(v.kind, kind, `${JSON.stringify(patch)} → ${v.kind}`);
+    assert.ok(v.reason);
+  }
+});
+
+test('el motivo de un rechazo de ABC no lleva dentro el valor de la fila', () => {
+  const m = registry.manifestFor('ca_abc_active_licenses');
+  const v = rules.evaluateAbcRow(fx.abcRow({
+    'File Number': '00699998', 'DBA Name': '', 'Primary Name': 'ORTEGA, JOSE RAMON',
+    'Prem Addr 1': '12 ISLAND AVE APT 7B',
+  }), m);
+  assert.equal(v.ok, false);
+  for (const aguja of ['ORTEGA', 'JOSE RAMON', '12 ISLAND AVE', '1180 PRIVATE LN', '0053.01']) {
+    assert.ok(!v.reason.includes(aguja), `el motivo filtró "${aguja}"`);
+  }
+});
+
+test('ABC no conserva domicilio postal, censo ni geocódigo', async () => {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    const texto = fs.readFileSync(r.staging.file, 'utf8');
+    for (const aguja of fx.PII_PROHIBIDA) {
+      assert.ok(!texto.includes(aguja), `"${aguja}" entró en el staging`);
+    }
+    for (const prohibido of registry.neverRequested('ca_abc_active_licenses')) {
+      assert.ok(!texto.includes(prohibido), `el nombre de columna ${prohibido} sobrevivió`);
+    }
+    for (const c of r.staging.doc.candidates) {
+      assert.match(c.dedupKey, /^ca-abc:/);
+      assert.equal(c.evidence.typeStatus, 'ACTIVE');
+      assert.ok(c.address && c.city && /^\d{5}$/.test(c.zip));
+      assert.equal(c.evidence.mailAddress, undefined);
+      assert.equal(c.evidence.censusTract, undefined);
+      assert.equal(c.evidence.geoCode, undefined);
+    }
+  } finally { s.close(); }
+});
+
+test('una columna nueva con teléfono y correo se cae sin que nadie la prohíba', async () => {
+  const s = await fx.createFakeAbcServer({ mode: 'unknownColumns' });
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    assert.equal(r.metrics.accepted, 1);
+    const texto = fs.readFileSync(r.staging.file, 'utf8');
+    assert.ok(!texto.includes('(619) 555-0101'));
+    assert.ok(!texto.includes('privado@ejemplo.invalid'));
+    assert.ok(!texto.includes('Owner Phone'));
+    assert.equal(r.staging.doc.provenance.headerUnexpectedCount, 2);
+  } finally { s.close(); }
+});
+
+test('si el volcado deja de traer una columna de la allowlist, se para', async () => {
+  const s = await fx.createFakeAbcServer({ mode: 'missingColumn' });
+  try {
+    await assert.rejects(() => corre('ca_abc_active_licenses', s), (err) => {
+      assert.match(err.message, /esquema del volcado .* cambió/);
+      assert.match(err.message, /Prem County/);
+      return true;
+    });
+  } finally { s.close(); }
+});
+
+test('un ZIP que no es un ZIP, con otra entrada o ambiguo no se procesa', async () => {
+  for (const [mode, re] of [['notZip', /NOT_ZIP|no es un ZIP/], ['wrongExtension', /no termina en/],
+    ['twoEntries', /AMBIGUOUS_ZIP|corrupto|BAD_CENTRAL_DIR/], ['empty', /./]]) {
+    const s = await fx.createFakeAbcServer({ mode });
+    try {
+      await assert.rejects(() => corre('ca_abc_active_licenses', s), re, `mode=${mode} pasó`);
+    } finally { s.close(); }
+  }
+  // Y ni el ZIP ni el inflado se quedan en disco tras los fallos.
+  assert.deepEqual(
+    fs.readdirSync(process.env.SOURCE_CSV_TMP_DIR).filter((f) => /^cc-(csv|unzip)-/.test(f)), [],
+    'quedaron temporales con el domicilio de los titulares',
+  );
+});
+
+test('un volcado almacenado sin comprimir también se lee', async () => {
+  const s = await fx.createFakeAbcServer({ mode: 'stored' });
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    assert.equal(r.metrics.accepted, 4);
+  } finally { s.close(); }
+});
+
+test('una descarga cortada o de más del tope es un error', async () => {
+  for (const mode of ['truncated', 'oversize']) {
+    const s = await fx.createFakeAbcServer({ mode });
+    try {
+      await assert.rejects(() => corre('ca_abc_active_licenses', s), undefined, `mode=${mode} pasó`);
+    } finally { s.close(); }
+  }
+});
+
+test('un 304 no gasta la corrida del día ni sella nada', async () => {
+  const s = await fx.createFakeAbcServer({ mode: 'notModified' });
+  const estado = nuevoEstado();
+  try {
+    const r = await corre('ca_abc_active_licenses', s, { quotaOptions: estado, etag: s.etag });
+    assert.equal(r.notModified, true);
+    assert.equal(r.staging, null);
+    const segunda = await corre('ca_abc_active_licenses', s, { quotaOptions: estado, etag: s.etag });
+    assert.equal(segunda.blocked.reason, 'sin_cambios_304');
+  } finally { s.close(); }
+});
+
+test('el mismo local con dos licencias es una sola Company, y gana el expediente más bajo', async () => {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    const gaslamp = r.staging.doc.candidates.filter((c) => c.businessName === 'GASLAMP TAP HOUSE');
+    assert.equal(gaslamp.length, 1, 'el mismo local produjo dos Companies');
+    assert.equal(gaslamp[0].evidence.fileNumber, '00610001');
+    assert.equal(r.metrics.deduped, 1);
+  } finally { s.close(); }
+});
+
+test('el tope de 50 se respeta y la selección es determinista', async () => {
+  const filas = Array.from({ length: 70 }, (_, i) => fx.abcRow({
+    'File Number': `007${String(i).padStart(5, '0')}`,
+    'DBA Name': `LOCAL NUMERO ${i} TAVERN`,
+    'Primary Name': `LOCAL ${i} LLC`,
+    'Prem Addr 1': `${100 + i} HARBOR DR`,
+  }));
+  const cuerpo = fx.buildZip('ABC-DailyDataExport.csv', fx.abcCsv(filas));
+  const claves = [];
+  for (let n = 0; n < 2; n++) {
+    const s = await fx.createFakeAbcServer({ body: cuerpo });
+    try {
+      const r = await corre('ca_abc_active_licenses', s);
+      assert.equal(r.metrics.accepted, 50, `aceptó ${r.metrics.accepted}`);
+      assert.equal(r.metrics.over_cap, 20);
+      claves.push(r.staging.doc.candidates.map((c) => c.dedupKey).join('|'));
+    } finally { s.close(); }
+  }
+  assert.equal(claves[0], claves[1], 'la selección no es determinista');
+});
+
+test('el BOM del principio no convierte la primera línea en un error', async () => {
+  // Esto lo encontró la primera preview real: el volcado llega con BOM, y con el
+  // BOM delante el parser veía "un carácter y luego una comilla" y daba la línea
+  // 1 por malformada. El fixture lo reproduce con BOM a propósito.
+  assert.equal(fx.abcCsv().charCodeAt(0), 0xFEFF, 'el fixture perdió el BOM');
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    assert.equal(r.metrics.rejected_malformed, 0, 'la línea 1 se contó como malformada');
+    assert.equal(r.metrics.accepted, 4);
+    assert.equal(r.staging.doc.provenance.datasetStamp, fx.ABC_BANNER,
+      'el sello se leyó con el BOM pegado delante');
+  } finally { s.close(); }
+});
+
+test('la procedencia de ABC trae las dos huellas, el sello del archivo y la licencia', async () => {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    const pr = r.staging.doc.provenance;
+    assert.match(pr.authority, /Alcoholic Beverage Control/);
+    assert.equal(pr.downloadUrl, 'https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip');
+    assert.equal(pr.license.status, 'VERIFICADA');
+    assert.match(pr.license.quote, /public domain/);
+    // Las dos huellas: el ZIP tal como llegó y el CSV tal como quedó al inflarse.
+    assert.match(pr.zipSha256, /^[0-9a-f]{64}$/);
+    assert.match(pr.csvSha256, /^[0-9a-f]{64}$/);
+    assert.notEqual(pr.zipSha256, pr.csvSha256);
+    assert.equal(pr.zipEntry, 'ABC-DailyDataExport.csv');
+    // El sello que el propio archivo trae en su línea 1, conservado en vez de tirado.
+    assert.equal(pr.datasetStamp, fx.ABC_BANNER);
+    assert.ok(pr.verifiedAt);
+    assert.equal(pr.headerColumns, fx.ABC_HEADER.length);
+
+    for (const c of r.staging.doc.candidates) {
+      assert.ok(c.evidence.fileNumber, 'sin expediente no se puede volver a la fuente');
+      assert.ok(c.evidence.licenseTypeName, 'sin el tipo no se sabe qué clase de local es');
+      assert.ok(c.lastVerified);
+      assert.ok(c.evidence.nameRule, 'sin la regla no se sabe si el nombre vino del DBA o del titular');
+      assert.equal(c.sourceUrl, 'https://www.abc.ca.gov/licensing/licensing-reports/');
+    }
+  } finally { s.close(); }
+});
+
 // ══ Privacidad transversal ════════════════════════════════════
 test('ningún staging de los tres lleva un solo dato personal', async () => {
   for (const [scoutId, crear] of [
@@ -1392,7 +1785,8 @@ test('la prioridad entre fuentes es determinista y está razonada', async () => 
 });
 
 test('la prioridad documentada cubre las tres fuentes y explica por qué', () => {
-  assert.deepEqual(intake.SOURCE_PRIORITY, ['cde_schools', 'city_development_permits', 'hud_multifamily']);
+  assert.deepEqual(intake.SOURCE_PRIORITY,
+    ['cde_schools', 'ca_abc_active_licenses', 'city_development_permits', 'hud_multifamily']);
   for (const id of intake.SOURCE_PRIORITY) {
     assert.ok(intake.PRIORITY_RATIONALE[id], `${id} sin razón documentada`);
   }
@@ -1552,6 +1946,14 @@ test('el orquestador no escribe por defecto y el apply exige los cuatro cerrojos
   }
   assert.match(src, /faltan: \$\{faltan\.join/, 'no reporta todos los cerrojos que faltan');
 
+  // El tope por fuente tiene que estar DECLARADO. Estuvo usándose sin declarar, y
+  // entonces `porFuente[scoutId] > undefined` era siempre falso: el tope no
+  // existía y el apply habría creado todo lo que el plan trajera.
+  assert.match(src, /const maxCreates = Number\(flag\('max-creates'/,
+    'maxCreates se usa sin declararse: el tope por fuente no se aplica');
+  const usos = src.split('maxCreates').length - 1;
+  assert.ok(usos >= 3, `maxCreates aparece ${usos} veces: declaración y uso`);
+
   // El hash autorizado se compara con el del archivo: no vale "el último que haya".
   assert.match(src, /se aplica el staging que se revisó, no otro/);
   // Y una fuente no permitida no puede colar su staging.
@@ -1647,7 +2049,7 @@ test('el verificador distingue evidencia pendiente de evidencia rota', async () 
     cwd: process.cwd(), encoding: 'utf8', env,
   });
   // County, City, HUD y los permisos de desarrollo están verificados; CDE sigue pendiente.
-  assert.match(salida, /4 válida\(s\) · 1 pendiente\(s\) por diseño · 0 con problemas/);
+  assert.match(salida, /5 válida\(s\) · 1 pendiente\(s\) por diseño · 0 con problemas/);
   assert.match(salida, /PENDIENTE por diseño/);
   assert.match(salida, /mantiene su fuente apagada/);
 });

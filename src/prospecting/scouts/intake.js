@@ -35,11 +35,14 @@ import { normalizeForMatch } from '../sources/city-btc-rules.js';
  *      estado activo, dirección del centro y, cuando la fuente lo publica, su
  *      sitio oficial. Es la ficha más completa, y la única que trae un sitio web
  *      que no hay que adivinar.
- *   2. `city_development_permits` — permiso de obra comercial emitido, con fecha
- *      de emisión, clasificación de edificación y dirección de la obra. Pierde
- *      contra CDE porque no trae sitio web, pero gana a HUD porque dice **cuándo**
- *      pasó algo: para limpieza post-obra, la fecha es la mitad del dato.
- *   3. `hud_multifamily` — propiedad institucional con dirección y número de
+ *   2. `ca_abc_active_licenses` — licencia de ABC activa con premisa física, tipo
+ *      de establecimiento y dirección. Gana a los permisos porque describe un
+ *      negocio que **está operando hoy**, no una obra que pasó; pierde contra CDE
+ *      porque no trae sitio web.
+ *   3. `city_development_permits` — permiso de obra comercial emitido, con fecha
+ *      de emisión, clasificación de edificación y dirección de la obra. Dice
+ *      **cuándo** pasó algo, que para limpieza post-obra es la mitad del dato.
+ *   4. `hud_multifamily` — propiedad institucional con dirección y número de
  *      unidades. Verificable y situable, pero sin fecha de actividad.
  *
  * Y por encima de las tres, lo que ya está en el CRM: una Company existente
@@ -50,10 +53,13 @@ import { normalizeForMatch } from '../sources/city-btc-rules.js';
  * porque el WAF de su portal rechaza la descarga con un 403 y no se intenta
  * sortear. Las dos tienen su expediente en docs/retired/.
  */
-export const SOURCE_PRIORITY = Object.freeze(['cde_schools', 'city_development_permits', 'hud_multifamily']);
+export const SOURCE_PRIORITY = Object.freeze([
+  'cde_schools', 'ca_abc_active_licenses', 'city_development_permits', 'hud_multifamily',
+]);
 
 export const PRIORITY_RATIONALE = Object.freeze({
   cde_schools: 'identificador oficial, dirección del centro y sitio web publicado por la fuente: la más completa',
+  ca_abc_active_licenses: 'licencia activa con premisa física, tipo de establecimiento y dirección: el negocio existe y se puede situar hoy',
   city_development_permits: 'permiso emitido con fecha, clasificación de edificación comercial y dirección de la obra: fechable y situable',
   hud_multifamily: 'propiedad institucional con dirección y número de unidades: situable, pero sin fecha de actividad',
 });

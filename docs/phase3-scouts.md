@@ -6,6 +6,7 @@
 |---|---|---|
 | CaliClean Property & Manager Scout (HUD) | **ENABLED** | robots inexistente, API pública, esquema verificado en vivo desde Cloud |
 | CaliClean Commercial Development Permit Scout (City) | **ENABLED** | la única con licencia **explícita**: el portal declara ODC PDDL 1.0 para el conjunto de datos |
+| CaliClean ABC Active License Scout (ABC) | **ENABLED** | la única con **dominio público** declarado por el publicador, y la primera que pasa las nueve comprobaciones sin salvedades |
 | CaliClean Education & Childcare Facility Scout (CDE) | `PENDING_LICENSE_REVIEW` | auditada en vivo y bien en todo menos una cosa: la declaración de copyright del sitio no es legible |
 
 Dos candidatas se **retiraron**, con su expediente en `docs/retired/`:
@@ -26,6 +27,7 @@ County y City no se tocaron: siguen habilitadas, con su Routine y su comando.
 | CaliClean Property & Manager Scout | `egis.hud.gov` | `/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query` |
 | CaliClean Education & Childcare Facility Scout | `www.cde.ca.gov` | `/schooldirectory/report?rid=dl1&tp=txt` (volcado TSV) |
 | CaliClean Commercial Development Permit Scout | `seshat.datasd.org` | `/development_permits/approvals_issued_2026_datasd.csv` (ficha en `data.sandiego.gov`) |
+| CaliClean ABC Active License Scout | `www.abc.ca.gov` | `/wp-content/uploads/DailyExport-CSV.zip` (ficha en `/licensing/licensing-reports/`) |
 
 Los tres están permitidos y los tres se han comprobado desde este contenedor.
 CDE tiene cuatro artefactos con huella real y uno ausente, y ese uno le invalida
@@ -176,8 +178,9 @@ que quedaría**:
 | Orden | Scout | Por qué |
 |---|---|---|
 | 1 | `cde_schools` | identificador oficial (CDSCode), dirección del centro y sitio web publicado por la fuente: la más completa |
-| 2 | `city_development_permits` | permiso emitido con fecha, clasificación de edificación comercial y dirección de la obra: fechable y situable |
-| 3 | `hud_multifamily` | propiedad institucional con dirección y número de unidades: situable, pero sin fecha de actividad |
+| 2 | `ca_abc_active_licenses` | licencia activa con premisa física, tipo de establecimiento y dirección: el negocio **está operando hoy** |
+| 3 | `city_development_permits` | permiso emitido con fecha, clasificación de edificación comercial y dirección de la obra: fechable y situable |
+| 4 | `hud_multifamily` | propiedad institucional con dirección y número de unidades: situable, pero sin fecha de actividad |
 
 Por encima de las tres, lo que ya está en el CRM: una Company existente **nunca se
 modifica** desde aquí. El candidato se omite.
@@ -337,6 +340,76 @@ que el directorio oficial publica hoy", no "esto es correcto".
 
 ---
 
+### 4 · CaliClean ABC Active License Scout (California ABC)
+
+**La fuente más limpia de la fase, y conviene decir por qué.** Es la única cuya
+licencia es una concesión afirmativa del publicador: sus Conditions of Use dicen
+que *"the information presented on this web site, unless otherwise indicated, is
+considered in the public domain. It may be distributed or copied as permitted by
+law."* Sin restricción comercial, sin exigencia de atribución, sin prohibición de
+automatización. Se buscó lo contrario expresamente y no hay nada.
+
+Y su `robots.txt` **sí se pronuncia**: `Disallow: /wp-admin/`, nada más. Lo que
+prohíbe no es nuestra ruta. Eso es distinto de un 404 o un 403, que son hallazgos
+y no permiso.
+
+**Fuente.** El *Daily Data Export* en CSV, refrescado cada día hábil a las 7 a.m.
+PT. Una sola petición GET por corrida, con GET condicional. **200 directo, cero
+redirecciones** — la diferencia con CDPH, cuya descarga saltaba a
+`s3.amazonaws.com`.
+
+**Viene zipeado**, así que hay un paso más: 7.1 MB de ZIP que se inflan a 26.6 MB
+de CSV. El lector de ZIP (`sources/zip-client.js`) no añade dependencias y toma
+tres decisiones que importan:
+
+- lee el **directorio central**, no el encabezado local, porque el local puede
+  traer los tamaños a cero y un descriptor al final de los datos;
+- comprueba el tope **contra lo que sale al inflar**, no solo contra lo que el ZIP
+  declara: un ZIP de 7 MB puede anunciar poco y soltar 40 GB;
+- borra los **dos** temporales siempre, el ZIP y el inflado.
+
+**Seis condiciones.** Condado `SAN DIEGO` y estado de la premisa `CA` ·
+`Type Status == ACTIVE` exacto · uno de **18 tipos de licencia con premisa fija**
+relevante · dirección de premisa completa, sin PO Box ni PMB ni `APT` ·
+`File Number` presente · nombre de negocio defendible.
+
+**Los 18 tipos salen de la lista oficial de 85.** Dentro: restaurantes (41, 47),
+bares (42, 48, 61), tiendas (20, 21), clubes (50, 51, 52), brewpubs (75), locales
+de música (90), servicio restrictivo (70) y los estacionales de premisa fija.
+Fuera: productores, importadores, mayoristas y corredores; todo lo móvil —trenes,
+barcos, aviones—; lo temporal y de evento; los permisos de propósito especial; y
+los **Bed and Breakfast Inn (67, 80), que pueden ser una vivienda** y son
+ambiguos por definición.
+
+**La Company es el NEGOCIO, no el titular.** El record layout oficial llama
+`Primary Name` al titular de la licencia, y en este registro **hay personas
+físicas**. Así que se prefiere el `DBA Name` —el nombre comercial— cuando no tiene
+forma de nombre de persona, y el titular solo cuando es una entidad inequívoca. La
+evidencia de cada candidato dice de cuál de los dos vino.
+
+**Nunca** el bloque postal completo —`Mail Addr 1/2`, `Mail City`, `Mail State`,
+`Mail Zip`—, que es donde aparece el domicilio del titular, ni `Prem Census
+Tract #` ni `Geo Code`. El archivo **no trae** teléfono, correo ni coordenadas, y
+eso se comprobó contra el record layout de 26 campos en vez de fingir un filtro
+sobre campos que no existen.
+
+**Dos quirks reales que las pruebas fijan.** La línea 1 **no es la cabecera**: es
+un sello (`Updated Sunday 4th of October 2026 03:50:21 AM`), pese a que la página
+oficial dice lo contrario; se salta y además se **conserva como procedencia**,
+porque es la fecha que el dato declara de sí mismo. Y el archivo llega con **BOM**:
+la primera preview real falló por eso —el parser veía un carácter y luego una
+comilla en medio de un campo— y ahora se quita antes de parsear, con el fixture
+reproduciendo el BOM a propósito.
+
+**Clave:** `ca-abc:<File Number>` + dedupe por nombre y por nombre+dirección. El
+mismo local puede tener dos licencias —una de cerveza y otra general— y eso no son
+dos clientes: gana el expediente más bajo.
+
+**Dos huellas en la procedencia**, no una: el ZIP tal como llegó y el CSV tal como
+quedó al inflarse.
+
+---
+
 ## Cuotas, guards y lock
 
 Cada scout tiene lo suyo y no estorba a los demás ni a County/City:
@@ -386,6 +459,7 @@ Permitidos y verificados desde este contenedor:
 
     egis.hud.gov
     seshat.datasd.org · data.sandiego.gov
+    www.abc.ca.gov
 
     www.cde.ca.gov
 
