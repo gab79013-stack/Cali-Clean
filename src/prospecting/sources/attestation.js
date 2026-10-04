@@ -30,6 +30,29 @@ const attestationPath = () => process.env.SOURCE_ATTESTATION_FILE
   || path.join(ROOT, 'config', 'source-attestation.json');
 
 /**
+ * Attestations, una por fuente y cada una con su propio digest.
+ *
+ * Un solo archivo con todas las fuentes obligaría a recomputar el digest del
+ * documento cada vez que se añade una fuente, y entonces la huella de la
+ * evidencia del condado —que el operador recogió un día concreto desde su red—
+ * cambiaría por un motivo que no tiene nada que ver con ella. Separadas, cada
+ * evidencia se verifica, caduca y se renueva por su cuenta.
+ *
+ * `SOURCE_ATTESTATION_FILE` sigue funcionando y gana: las pruebas lo usan para
+ * apuntar a un archivo propio.
+ */
+export function attestationPaths() {
+  if (process.env.SOURCE_ATTESTATION_FILE) return [process.env.SOURCE_ATTESTATION_FILE];
+  if (process.env.SOURCE_ATTESTATION_FILES) {
+    return process.env.SOURCE_ATTESTATION_FILES.split(',').map((f) => f.trim()).filter(Boolean);
+  }
+  return [
+    path.join(ROOT, 'config', 'source-attestation.json'),
+    path.join(ROOT, 'config', 'source-attestation-city.json'),
+  ];
+}
+
+/**
  * Serialización canónica: claves ordenadas en todos los niveles y sin el campo
  * del propio digest. Dos personas que escriban el mismo contenido en distinto
  * orden obtienen el mismo hash.
@@ -149,15 +172,34 @@ export function verifyAttestation(attestation, { now = Date.now(), maxAgeDays = 
   return { valid: problems.length === 0, checks, problems, expectedDigest: expected };
 }
 
-/** Attestation vigente para una fuente, ya verificada. */
-export function attestationFor(sourceId, { now = Date.now(), maxAgeDays = 180, file = attestationPath() } = {}) {
-  const att = loadAttestation(file);
-  if (!att) return { ok: false, reason: 'sin_attestation' };
-  const result = verifyAttestation(att, { now, maxAgeDays });
-  if (!result.valid) return { ok: false, reason: 'attestation_invalida', problems: result.problems };
-  const entry = att.sources?.[sourceId];
-  if (!entry) return { ok: false, reason: 'fuente_no_atestiguada' };
-  return { ok: true, entry, attestation: att, checks: result.checks };
+/**
+ * Attestation vigente para una fuente, ya verificada.
+ *
+ * Recorre los archivos de evidencia y se queda con el PRIMERO que declare esa
+ * fuente. Que otro archivo esté caducado o malformado no bloquea a una fuente
+ * cuya evidencia está en regla: cada fuente responde por la suya. Pero si el
+ * archivo que SÍ la declara no valida, no se busca más: fail-closed.
+ */
+export function attestationFor(sourceId, { now = Date.now(), maxAgeDays = 180, file = null, files = null } = {}) {
+  const candidates = file ? [file] : (files || attestationPaths());
+  const problemsSeen = [];
+
+  for (const candidate of candidates) {
+    const att = loadAttestation(candidate);
+    if (!att) continue;
+    if (att.sources?.[sourceId] === undefined) continue;
+
+    const result = verifyAttestation(att, { now, maxAgeDays });
+    if (!result.valid) {
+      return {
+        ok: false, reason: 'attestation_invalida', problems: result.problems, file: candidate,
+      };
+    }
+    return { ok: true, entry: att.sources[sourceId], attestation: att, checks: result.checks, file: candidate };
+  }
+
+  if (problemsSeen.length) return { ok: false, reason: 'attestation_invalida', problems: problemsSeen };
+  return { ok: false, reason: 'fuente_no_atestiguada' };
 }
 
 export const attestationFilePath = attestationPath;

@@ -1,0 +1,99 @@
+{
+  "$comment": "Evidencia de la fuente de certificados de actividad de la Ciudad de San Diego, recogida por el operador desde una red autorizada. Este archivo NO lo genera el código: lo escribe una persona. El digest permite comprobar offline que no ha cambiado; no es una firma y no demuestra quién lo escribió.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T07:30:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
+  "collectedFrom": {
+    "method": "HEAD y descarga completa desde la red local autorizada del operador",
+    "note": "Claude Cloud NO realizó ninguna peticion a data.sandiego.gov ni a seshat.datasd.org: ninguno de los dos dominios esta permitido en su politica de red. Toda la evidencia de este archivo es importada."
+  },
+  "sources": {
+    "sd_business_tax_certificates": {
+      "sourceId": "sd_business_tax_certificates",
+      "publisher": "City Treasurer, City of San Diego",
+      "datasetPage": "https://data.sandiego.gov/datasets/business-tax-certificates/",
+      "downloadUrl": "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv",
+      "updateCadence": "diaria",
+      "datasetPageStatedUpdate": "2026-10-03",
+      "license": {
+        "licenseId": "ODC-PDDL-1.0",
+        "name": "Open Data Commons Public Domain Dedication and Licence 1.0",
+        "url": "https://opendatacommons.org/licenses/pddl/1-0/",
+        "termsUrl": "https://data.sandiego.gov/help/guides/terms/",
+        "faqUrl": "https://data.sandiego.gov/help/guides/faq/",
+        "redistribution": "permitida: la FAQ oficial declara que no hay limitacion de uso ni de redistribucion",
+        "termsCaveat": "Los Terms advierten que los datos pueden contener errores y que el usuario debe verificarlos antes de actuar. De ahi que una fila que no se pueda demostrar se omita en lugar de aceptarse."
+      },
+      "robots": {
+        "dataPortalStatus": 404,
+        "dataPortalUrl": "https://data.sandiego.gov/robots.txt",
+        "downloadHostStatus": 403,
+        "downloadHostUrl": "https://seshat.datasd.org/robots.txt",
+        "interpretation": "Ninguno de los dos robots.txt es legible (404 y 403). Un robots inexistente o ilegible NO se interpreta como permiso para recorrer HTML. La autorizacion que se usa es otra y es explicita: la pagina oficial del dataset presenta este CSV como su descarga. Por eso el alcance permitido es UNICAMENTE ese recurso CSV, y el crawling de HTML queda prohibido en el codigo.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv"
+        ]
+      },
+      "limits": {
+        "publishedLimit": null,
+        "maxValidCandidatesPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "requestsPerRun": 1,
+        "conditionalGet": [
+          "If-None-Match",
+          "If-Modified-Since"
+        ],
+        "maxBytes": 67108864,
+        "timeoutMs": 120000
+      },
+      "artifacts": {
+        "csvHead": {
+          "url": "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv",
+          "method": "HEAD",
+          "httpStatus": 200,
+          "observedAt": "2026-10-04T00:00:00.000Z",
+          "contentLength": 18861591,
+          "lastModified": "Sat, 03 Oct 2026 09:06:24 GMT",
+          "etagPresent": true,
+          "acceptRanges": "bytes",
+          "sha256": "5c3e7e6a94848582dbd827936e8ff0a7d1fca2f2fee793c0a47bc27e3781109b",
+          "sha256Scope": "SHA256 del archivo completo descargado el 2026-10-04. Es la huella de UN volcado diario, no una constante: el publicador reemplaza el archivo cada dia y el hash cambia. Cada snapshot registra el hash del archivo que esa corrida descargo y lo compara con este solo para informar, nunca para exigir igualdad."
+        }
+      },
+      "observedHeader": [
+        "account_key",
+        "account_status",
+        "date_account_creation",
+        "date_cert_expiration",
+        "date_cert_effective",
+        "business_owner_name",
+        "ownership_type",
+        "date_business_start",
+        "dba_name",
+        "naics_sector",
+        "naics_code",
+        "naics_description",
+        "address_no",
+        "address_pd",
+        "address_road",
+        "address_sfx",
+        "address_no_fraction",
+        "address_city",
+        "address_state",
+        "address_zip",
+        "address_suite",
+        "address_pmb_box",
+        "address_po_box",
+        "bid",
+        "council_district",
+        "lat",
+        "lng"
+      ],
+      "personalDataNotice": "El CSV contiene business_owner_name (persona fisica) y coordenadas. Se leen de paso para descartar filas y no se conservan en ningun sitio: ni prospecto, ni raw_json, ni snapshot, ni log, ni texto de error. El archivo descargado se borra al terminar la corrida.",
+      "decision": "Elegible: dominio publico (ODC-PDDL-1.0), descarga CSV presentada por la pagina oficial del dataset y actualizacion diaria confirmada. DESACTIVADA hasta que (a) las pruebas de esta fuente pasen, (b) una preview real con los dos dominios permitidos se revise, y (c) alguien ponga enabled=true a mano. El acceso csv-static ya esta implementado; la decision operativa no."
+    }
+  },
+  "digest": "sha256:3f5615e6374fc28e0b5ca9234f4a2d9f395573b41f7e436766258bbb4c560e08"
+}

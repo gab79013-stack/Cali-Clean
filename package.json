@@ -21,7 +21,9 @@
     "sources:attestation": "node scripts/verify-attestation.js",
     "sources:dry-run": "node scripts/dry-run-source.js",
     "sources:preview": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js preview",
-    "sources:sync": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js sync"
+    "sources:sync": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js sync",
+    "sources:preview:city": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js preview --source sd_business_tax_certificates",
+    "enrich:preview": "NODE_USE_ENV_PROXY=1 node scripts/enrich-preview.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

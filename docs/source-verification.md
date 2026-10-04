@@ -5,7 +5,8 @@ manualmente desde una red autorizada por el operador.
 **Evidencia machine-readable:** [`config/source-allowlist.json`](../config/source-allowlist.json)
 **Constancia con hash, comprobable sin red:** [`config/source-attestation.json`](../config/source-attestation.json)
 **Estado operativo: una fuente habilitada** — `sdcounty_food_facility_permits`.
-Las dos municipales siguen apagadas.
+Las dos municipales siguen apagadas; la de certificados ya tiene el acceso
+implementado y probado, y espera decisión operativa y egress.
 
 ---
 
@@ -50,7 +51,96 @@ comprobación que no se hizo es peor que no hacerla.
 
 ## A · City of San Diego — Business Tax Certificates
 
-**`sd_business_tax_certificates` · ELIGIBLE_BUT_DISABLED · acceso `csv-static` (no implementado)**
+**`sd_business_tax_certificates` · ELIGIBLE_BUT_DISABLED · acceso `csv-static` IMPLEMENTADO (2026-10-04)**
+
+> **Por qué esta fuente es más peligrosa que la del condado.** El condado publica
+> establecimientos. La ciudad publica **titulares**: `business_owner_name` es el
+> nombre de una persona física, y una parte grande de los certificados son
+> autónomos trabajando desde su casa. Un filtro laxo aquí no produce leads
+> mediocres: produce una lista de particulares con su domicilio.
+
+### Evidencia del 2026-10-04 (recogida por el operador, no por Cloud)
+
+| | |
+|---|---|
+| Publicador | City Treasurer, City of San Diego |
+| Página del dataset | https://data.sandiego.gov/datasets/business-tax-certificates/ (actualización declarada: 2026-10-03) |
+| CSV oficial | `https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv` |
+| HEAD | **200** · content-length **18 861 591** · last-modified **Sat, 03 Oct 2026 09:06:24 GMT** · ETag presente · Accept-Ranges bytes |
+| SHA256 del volcado | `5c3e7e6a…1109b` — huella de **un** volcado diario, no una constante |
+| Licencia | **ODC PDDL 1.0** (dominio público) · FAQ: sin limitación de uso ni redistribución |
+| Términos | Advierten que los datos **pueden contener errores y requieren verificación** → de ahí que una fila no demostrable se omita |
+| Encabezado | 27 columnas, verificadas y registradas en la attestation |
+
+Constancia: [`config/source-attestation-city.json`](../config/source-attestation-city.json),
+con su propio digest. Comprobable sin red con `node scripts/verify-attestation.js`.
+
+### El robots ilegible NO es permiso
+
+`data.sandiego.gov/robots.txt` → **404**. `seshat.datasd.org/robots.txt` → **403**.
+Ninguno de los dos se puede leer, y eso **no** se interpreta como vía libre para
+recorrer HTML. La autorización que se usa es otra y es explícita: **la página
+oficial del dataset presenta ese CSV como su descarga.** Así que el permiso es
+sobre **el recurso**, no sobre el dominio, y el código lo hace cumplir:
+`buildCsvUrl` compara la URL con la lista `robots.allowedResources` de la
+auditoría y se niega a formar cualquier otra, incluida la propia página HTML.
+
+### Las cuatro reglas que decide `city-btc-rules.js`
+
+1. **Forma jurídica inequívoca.** Pasan `CORP`, `LLC`, `SCORP`, `LP`, `NO`, `PRF`.
+   Quedan fuera `SOLE` (autónomo), `H-W` (matrimonio) y `TRUST` (patrimonio
+   familiar): son personas. Un código que no esté en la lista **se descarta**, no
+   se interpreta.
+2. **Sector NAICS comercial**, con el motivo escrito sector a sector (12
+   sectores). Y dentro de ellos, códigos excluidos por ser actividad domiciliaria
+   o sobre personas: guarderías, alquiler de vivienda, manicura, artistas
+   independientes, hogares con empleados domésticos.
+3. **Certificado activo y vigente**: `account_status=Active`, no caducado y ya
+   efectivo.
+4. **Dirección comercial completa en San Diego**: número, calle, ciudad y ZIP de
+   5 dígitos, sin PO Box, sin PMB, sin `Apt`/`Unit`/`Spc`, sin `residence`.
+
+Y el nombre comercial no puede ser el del titular. Esa comparación es el único
+uso permitido de `business_owner_name`: se lee **de paso**, dentro de la misma
+iteración, y no se conserva en ningún sitio — ni en el prospecto, ni en
+`raw_json`, ni en el snapshot, ni en un log, ni en el texto de un error. El CSV
+descargado **se borra siempre** al terminar la corrida, porque lo contiene.
+
+### Un GET por corrida, y el archivo no se queda
+
+`csv-client.js`: una sola petición, GET condicional con `If-None-Match` y
+`If-Modified-Since` (un **304** significa "no ha cambiado" y no gasta la ventana
+del día), descarga a un temporal con `fsync`, SHA256 del **archivo completo**,
+tope de 64 MB y de 120 s, y borrado en un `finally`. Se hashea entero y luego se
+para de parsear al llegar a 50 candidatos: cortar la descarga daría un hash de un
+trozo, que no sirve para comprobar nada.
+
+`csv-parse.js` es un parser RFC 4180 incremental: aguanta comas y comillas dentro
+de campos entrecomillados y saltos de línea dentro de un campo —los tres
+aparecen en datos municipales reales— y **falla en voz alta** ante un campo sin
+cerrar, texto tras la comilla de cierre o un número de columnas distinto al del
+encabezado. Rellenar una fila corta desplazaría los valores y la ciudad acabaría
+en el campo del estado.
+
+### Cómo avanza, sin cursor
+
+El CSV es un volcado completo y `account_key` no tiene un orden del que fiarse
+(si son números de longitud variable, comparar como texto da un orden falso). En
+su lugar se lee del CRM el **índice de lo ya ingerido** —claves y
+nombre+dirección normalizados— y se toman los 50 primeros candidatos que no
+estén. Determinista, idempotente, avanza solo, y de paso es la deduplicación
+cruzada: un negocio que ya entró por el condado o a mano **se omite**, no se
+modifica. Sin índice, la fuente no corre.
+
+### Lo que la mantiene apagada
+
+No es la licencia ni el código: es la **decisión operativa** y el **egress**. Los
+dos dominios que hacen falta para una preview real son:
+
+    data.sandiego.gov      (página oficial del dataset)
+    seshat.datasd.org      (el CSV)
+
+Ninguno está permitido hoy en la red de Cloud.
 
 | | |
 |---|---|
@@ -402,6 +492,60 @@ Lo que **sí** sigue comprobándose es la integridad del archivo, porque
 `readSnapshot` recomputa el hash sobre el contenido y lo compara con el guardado;
 una edición a mano se detecta igual. Si se quiere mantener el sentido original
 —autorización humana por snapshot— el `apply` no puede ir en la misma Routine.
+
+## Enriquecimiento de lo que ya está en el CRM
+
+    npm run enrich:preview        # preview read-only, no escribe nada
+
+`src/prospecting/enrich-planner.js` propone **solo lo que ya se sabe**. No visita
+webs, no adivina dominios a partir del nombre, no construye correos y no inventa
+teléfonos: un campo sin sustento se queda sin proponer, y el plan dice por qué.
+
+Puntuación, tabulada para que un score sea explicable sin leer código:
+
+| Puntos | Regla | Por qué |
+|---|---|---|
+| 25 | `canal_verificado` | hay un correo o teléfono comercial verificado |
+| 15 | `segmento_conocido` | el segmento del ICP está identificado |
+| 15 | `dentro_del_area` | el ZIP está en el área de servicio |
+| 10 | `procedencia_oficial` | viene de un registro público con URL comprobable |
+| 10 | `direccion_completa` | calle, ciudad y ZIP: se puede visitar |
+| 10 | `entidad_juridica` | es una entidad, no una persona física |
+
+Sin canal de contacto verificado una empresa **no puede estar cualificada**: no
+hay por dónde escribirle. El techo sin canal es 60/100.
+
+**Una limitación real, dicha donde se verá.** El CRM **no tiene campo** para el
+tipo de establecimiento ni para el NAICS, así que para asignar un segmento hay
+dos caminos: leerlo del dato oficial que trajimos (los snapshots locales, que es
+lo que hace) o adivinarlo del nombre comercial (que no se hace). "Lucys Bakery
+And Pizza" probablemente sea un restaurante, pero *probablemente* no es
+verificable, y una ficha con un segmento inventado es peor que una sin segmento:
+la primera se usa para decidir y la segunda se revisa.
+
+## Monitoreo por fuente
+
+`src/prospecting/sources/report.js` emite un informe por fuente con las métricas
+separadas, y **alerta solo ante un fallo o un cambio significativo**: escrituras
+o envíos distintos de cero, errores, un bloqueo que no sea de cuota, filas
+traídas sin ningún candidato, un porcentaje de descarte altísimo, o un CSV cuyo
+tamaño se aparta mucho del atestiguado. Una corrida bloqueada por cuota **no
+alerta**: es el sistema funcionando. Un informe que avisa de todo acaba sin que
+nadie lo lea.
+
+### ¿Se puede montar el panel dentro de Twenty?
+
+Comprobado por GET el 2026-10-04: **hoy no.**
+
+    GET /rest/dashboards → 400 PERMISSION_DENIED
+    ("Entity performing the request does not have permission")
+
+El endpoint existe, pero la credencial no puede ni leerlo. Y el objeto
+`Dashboard` solo expone `title`, `position` y `pageLayoutId`: los widgets viven
+en un *page layout* que la API REST no modela, así que ni con permisos de lectura
+se podría construir el contenido. Haría falta ampliar los permisos del token **y**
+una vía para el page layout. Mientras tanto el informe por fuente cubre la
+necesidad sin tocar el CRM.
 
 ### Cuando se renueve la evidencia
 

@@ -139,14 +139,28 @@ test('habilitada en el allowlist pero sin constancia tampoco sale', () => {
 });
 
 test('un acceso no implementado bloquea aunque esté habilitada', () => {
+  // La fuente de certificados ya tiene el acceso csv-static implementado, así
+  // que esta comprobación se hace sobre la que sigue sin tenerlo. La puerta
+  // mira `implemented` antes que `leadUseAllowed`, y por eso el motivo es este
+  // y no "solo_investigacion".
   const fake = structuredClone(ALLOWLIST);
-  fake.sources.sd_business_tax_certificates.enabled = true;
-  const c = checkSourceAllowed('sd_business_tax_certificates', SOURCES.sd_business_tax_certificates, {
+  fake.sources.sd_development_approvals.enabled = true;
+  const c = checkSourceAllowed('sd_development_approvals', SOURCES.sd_development_approvals, {
     allowlist: fake, attestations: {},
   });
   assert.equal(c.allowed, false);
   assert.equal(c.reason, 'acceso_no_implementado');
   loadAllowlist({ reload: true });
+});
+
+test('el acceso csv-static ya está implementado para la fuente de la ciudad', () => {
+  const entry = allowlistEntry('sd_business_tax_certificates');
+  assert.equal(entry.implemented, true);
+  assert.equal(entry.enabled, false, 'implementado no es habilitado');
+  assert.equal(entry.accessType, 'csv-static');
+  // Y la URL permitida es UN recurso, no un dominio.
+  assert.deepEqual(entry.robots.allowedResources, [SOURCES.sd_business_tax_certificates.downloadUrl]);
+  assert.equal(entry.robots.htmlCrawlingAllowed, false);
 });
 
 test('research-only no puede producir leads ni estando habilitada y verificada', () => {
@@ -285,19 +299,25 @@ test('el titular del permiso de la ciudad no se mapea', () => {
   assert.equal(m.contactName, '', 'un registro público no aporta contacto');
 });
 
-test('el nombre del titular del certificado municipal tampoco', () => {
-  const fila = {
-    account_key: 'B-900', dba_name: 'Harbor View Dental',
-    business_owner_name: 'Ana Lucía Fernández',
-    address_no: '1200', address_road: 'Harbor', address_sfx: 'Blvd',
-    address_city: 'San Diego', address_zip: '92101',
-    date_account_creation: '2026-09-01', naics_code: '621210',
-    naics_description: 'Offices of dentists',
-  };
-  const m = mapRow(SOURCES.sd_business_tax_certificates, fila, 'sd_business_tax_certificates');
-  assert.ok(!JSON.stringify(m).includes('Ana Lucía'), 'el nombre del titular se coló');
-  assert.equal(m.businessName, 'Harbor View Dental');
-  assert.equal(m.address, '1200 Harbor Blvd', 'la dirección se recompone de sus columnas');
+test('el titular del certificado municipal no es un campo mapeable', () => {
+  // Esta fuente no pasa por `mapRow`: su mapeo vive en el ejecutor csv-static,
+  // donde el titular se lee de paso y muere en la misma iteración. Lo que aquí
+  // se comprueba es que no haya ninguna ruta por la que pudiera salir: ni
+  // declarado como campo de la fuente, ni permitido por la auditoría.
+  const definicion = JSON.stringify(SOURCES.sd_business_tax_certificates);
+  assert.ok(!definicion.includes('business_owner_name'),
+    'el titular aparece en la definición de la fuente');
+  assert.ok(!definicion.includes('address_suite') && !definicion.includes('lat'),
+    'un campo prohibido aparece en la definición');
+
+  const entry = allowlistEntry('sd_business_tax_certificates');
+  assert.ok(!entry.fields.allowed.includes('business_owner_name'));
+  assert.ok(entry.fields.forbidden.includes('business_owner_name'));
+  for (const f of ['lat', 'lng', 'address_pmb_box', 'address_po_box', 'address_suite', 'address_no_fraction']) {
+    assert.ok(entry.fields.forbidden.includes(f), `${f} debería estar prohibido`);
+  }
+  // Y queda escrito que su único uso es efímero, para que nadie lo reinterprete.
+  assert.match(entry.fields.ephemeralOnly.business_owner_name, /Nunca se mapea/);
 });
 
 test('los campos prohibidos nunca se registran en un log', () => {
@@ -360,12 +380,21 @@ test('la política de caudal registra lo que exige la auditoría', () => {
   assert.equal(county.throttleSignal, 'HTTP 429');
   assert.equal(county.tokenRequired, false);
 
-  for (const k of ['sd_business_tax_certificates', 'sd_development_approvals']) {
-    const p = allowlistEntry(k).rateLimit.internalPolicy;
-    assert.equal(p.maxDownloadsPerDay, 1);
-    assert.deepEqual(p.conditionalGet, ['If-None-Match', 'If-Modified-Since']);
-    assert.equal(p.htmlCrawling, false);
-  }
+  // La ciudad ya tiene política implementada, con los nombres precisos de lo
+  // que el código hace cumplir.
+  const city = allowlistEntry('sd_business_tax_certificates').rateLimit.internalPolicy;
+  assert.equal(city.maxValidCandidatesPerRun, 50);
+  assert.equal(city.maxSuccessfulRunsPer24h, 1);
+  assert.equal(city.requestsPerRun, 1);
+  assert.deepEqual(city.conditionalGet, ['If-None-Match', 'If-Modified-Since']);
+  assert.equal(city.htmlCrawling, false);
+  assert.match(city.durableQuotaAuthority, /city-btc:/);
+
+  // La de research-only sigue como estaba: no se ha tocado.
+  const research = allowlistEntry('sd_development_approvals').rateLimit.internalPolicy;
+  assert.equal(research.maxDownloadsPerDay, 1);
+  assert.deepEqual(research.conditionalGet, ['If-None-Match', 'If-Modified-Since']);
+  assert.equal(research.htmlCrawling, false);
 });
 
 // ── Requisitos pendientes: constan, y no activan nada ────────
@@ -383,9 +412,19 @@ test('el 429 y la cuota constan como resueltos; el GET condicional sigue pendien
   const pruebas = county.resolvedBlockers.map((r) => r.testedBy);
   assert.ok(pruebas.includes('test/soda-quota.test.js'));
 
+  // La ciudad resolvió el GET condicional, y ahora lo que la mantiene apagada es
+  // otra cosa: la decisión operativa y el egress. Los dos constan.
   const city = allowlistEntry('sd_business_tax_certificates');
-  assert.ok(city.blockers.some((b) => /ETag|If-None-Match|condicional/i.test(b)), 'falta el bloqueo del GET condicional');
-  assert.equal(city.enabled, false, 'la fuente de la ciudad no puede encenderse con un bloqueo abierto');
+  const cityResueltos = city.resolvedBlockers.map((r) => r.blocker).join(' | ');
+  assert.match(cityResueltos, /ETag|If-None-Match|csv-static/i, 'el GET condicional no consta como resuelto');
+  assert.ok(city.blockers.some((b) => /egress|dominio/i.test(b)), 'el egress pendiente tiene que constar');
+  assert.ok(city.blockers.some((b) => /decisión operativa|preview/i.test(b)));
+  assert.equal(city.enabled, false, 'sigue apagada hasta que alguien la encienda a mano');
+
+  // La de research-only sigue con su bloqueo de GET condicional abierto.
+  const research = allowlistEntry('sd_development_approvals');
+  assert.ok(research.blockers.some((b) => /ETag|If-None-Match|condicional|implementado/i.test(b)));
+  assert.equal(research.enabled, false);
 });
 
 test('el código no finge soportar el GET condicional', async () => {
@@ -422,16 +461,27 @@ test('sourceStatus separa elegible, habilitada e implementada', () => {
   }
   const csv = rows.filter((r) => r.accessType === 'csv-static');
   assert.equal(csv.length, 2);
-  for (const r of csv) assert.equal(r.implemented, false);
+  const city = csv.find((r) => r.key === 'sd_business_tax_certificates');
+  assert.equal(city.implemented, true, 'csv-static ya está implementado');
+  assert.equal(city.enabled, false, 'y sigue apagada: implementar no es habilitar');
+  const research = csv.find((r) => r.key === 'sd_development_approvals');
+  assert.equal(research.implemented, false);
 });
 
 // ── Catálogo y área ──────────────────────────────────────────
 test('el catálogo es de San Diego y declara su área de servicio', () => {
+  // Dos áreas, y la diferencia es real: los permisos del condado cubren todo el
+  // condado, y los certificados de actividad son del término municipal. Decir
+  // "San Diego County" de un negocio del centro de la ciudad sería menos
+  // preciso, no más.
+  const AREAS = ['San Diego County, CA', 'San Diego'];
   for (const [k, s] of Object.entries(SOURCES)) {
     assert.ok(/sandiego|datasd/i.test(s.domain), `${k} no apunta a un portal de San Diego`);
-    assert.equal(s.serviceArea, SERVICE_AREA);
+    assert.ok(AREAS.includes(s.serviceArea), `${k} declara un área inesperada: ${s.serviceArea}`);
     assert.ok(!/^(la|sf)_/.test(k), `quedó una fuente de LA/SF: ${k}`);
   }
+  assert.equal(SOURCES.sdcounty_food_facility_permits.serviceArea, SERVICE_AREA);
+  assert.equal(SOURCES.sd_business_tax_certificates.serviceArea, 'San Diego');
 });
 
 test('las fuentes por defecto existen en el catálogo', () => {

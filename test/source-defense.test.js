@@ -277,9 +277,12 @@ test('el 429 se refleja en las métricas de la corrida', async () => {
 // ── Métricas ─────────────────────────────────────────────────
 test('las métricas traen todos los campos y ninguno sobra', () => {
   const esperados = [
-    'attempted', 'fetched', 'mapped', 'skipped_sensitive', 'skipped_residential',
-    'skipped_inactive', 'skipped_unverifiable', 'skipped_invalid', 'deduped',
-    'retries', 'http429', 'quota_blocked', 'duration_ms', 'crm_writes', 'outbound',
+    'attempted', 'fetched', 'fetched_bytes', 'mapped',
+    'skipped_personal', 'skipped_residential', 'skipped_inactive',
+    'skipped_unverifiable', 'skipped_duplicate_existing', 'skipped_invalid',
+    'skipped_sensitive', 'deduped', 'retries', 'http429', 'quota_blocked',
+    'duration_ms', 'planned_create', 'planned_update', 'planned_noop', 'errors',
+    'crm_writes', 'outbound',
   ].sort();
   assert.deepEqual(Object.keys(emptyMetrics()).sort(), esperados);
 });

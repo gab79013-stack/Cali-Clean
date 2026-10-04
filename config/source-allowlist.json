@@ -1,6 +1,6 @@
 {
   "$comment": "Evidencia de la auditoría de fuentes. La escribe una persona tras verificar desde una red autorizada; el código la lee pero nunca la genera. 'eligible' NO significa 'enabled': una fuente elegible está autorizada legalmente, pero no puede salir a la red hasta que alguien ponga enabled=true Y exista una constancia operativa vigente (config/source-attestation.json importada con hash, o data/source-compliance.json local).",
-  "version": 2,
+  "version": 3,
   "auditedAt": "2026-10-03",
   "timezone": "America/Los_Angeles",
   "auditMethod": "verificación manual desde red autorizada (HEAD/GET y lectura de páginas de licencia)",
@@ -16,7 +16,7 @@
       "eligible": true,
       "enabled": false,
       "accessType": "csv-static",
-      "implemented": false,
+      "implemented": true,
       "baseDomain": "seshat.datasd.org",
       "datasetPage": "https://data.sandiego.gov/datasets/business-tax-certificates/",
       "downloadUrl": "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv",
@@ -55,7 +55,15 @@
           "council_district",
           "lat",
           "lng"
-        ]
+        ],
+        "headVerifiedAt": "2026-10-04T00:00:00.000Z",
+        "contentLength": 18861591,
+        "lastModified": "Sat, 03 Oct 2026 09:06:24 GMT",
+        "acceptRanges": "bytes",
+        "sha256OfOneDump": "5c3e7e6a94848582dbd827936e8ff0a7d1fca2f2fee793c0a47bc27e3781109b",
+        "sha256Note": "Huella de UN volcado diario, no una constante: el publicador reemplaza el archivo cada día.",
+        "datasetPageStatedUpdate": "2026-10-03",
+        "publisher": "City Treasurer, City of San Diego"
       },
       "license": {
         "name": "ODC PDDL 1.0",
@@ -69,19 +77,27 @@
         "portalRobotsStatus": 404,
         "downloadRobotsUrl": "https://seshat.datasd.org/robots.txt",
         "downloadRobotsStatus": 403,
-        "interpretation": "Ninguno de los dos robots.txt es legible, pero el portal documenta la automatización y enlaza los archivos para descarga directa. El tutorial oficial demuestra pandas.read_csv contra seshat.",
-        "automationDocumentedAt": "https://data.sandiego.gov/help/tutorials/getitdone-closed-2025/"
+        "interpretation": "Ninguno de los dos robots.txt es legible (404 y 403), y eso NO se interpreta como permiso para recorrer HTML. La autorización que se usa es otra y es explícita: la página oficial del dataset presenta este CSV como su descarga. Por eso el único recurso permitido es ese CSV, y el código se niega a pedir cualquier otra cosa de estos dominios.",
+        "automationDocumentedAt": "https://data.sandiego.gov/help/tutorials/getitdone-closed-2025/",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv"
+        ]
       },
       "rateLimit": {
         "publishedLimit": null,
         "internalPolicy": {
-          "maxDownloadsPerDay": 1,
+          "maxValidCandidatesPerRun": 50,
+          "maxSuccessfulRunsPer24h": 1,
+          "requestsPerRun": 1,
           "conditionalGet": [
             "If-None-Match",
             "If-Modified-Since"
           ],
-          "localCacheRequired": true,
-          "htmlCrawling": false
+          "maxBytes": 67108864,
+          "timeoutMs": 120000,
+          "htmlCrawling": false,
+          "durableQuotaAuthority": "Companies activas con dedupKey que empieza por city-btc:"
         }
       },
       "fields": {
@@ -89,8 +105,10 @@
           "account_key",
           "account_status",
           "date_account_creation",
+          "date_cert_expiration",
           "date_cert_effective",
           "date_business_start",
+          "ownership_type",
           "dba_name",
           "naics_sector",
           "naics_code",
@@ -102,20 +120,88 @@
           "address_city",
           "address_state",
           "address_zip",
-          "address_suite",
-          "bid",
           "council_district"
         ],
         "forbidden": [
-          "business_owner_name"
+          "business_owner_name",
+          "lat",
+          "lng",
+          "address_pmb_box",
+          "address_po_box",
+          "address_suite",
+          "address_no_fraction",
+          "bid"
         ],
-        "forbiddenReason": "Nombre de persona física. No se mapea, no se almacena y no se registra."
+        "forbiddenReason": "business_owner_name es una persona física: se puede leer de paso para descartar una fila cuyo nombre comercial sea el del titular, y no se conserva en ningún sitio. lat/lng geolocalizan el domicilio. address_pmb_box, address_po_box, address_suite y address_no_fraction son indicios de vivienda o buzón privado. bid no aporta y es ruido.",
+        "ephemeralOnly": {
+          "business_owner_name": "Único uso permitido: comparar con dba_name para descartar la fila si coinciden. Nunca se mapea, ni se guarda en raw_json, ni entra en el snapshot, ni se imprime en un log o en un error."
+        }
       },
       "blockers": [
-        "No existe ingestión CSV con ETag/If-None-Match en el código: accessType csv-static no está implementado.",
-        "Falta caché local y control de 1 descarga/día."
+        "Decisión operativa pendiente: enabled sigue en false hasta que una preview real se revise.",
+        "Egress pendiente: data.sandiego.gov y seshat.datasd.org no están permitidos en la red de Cloud."
       ],
-      "decision": "Elegible por licencia y por documentación oficial de automatización. Desactivada hasta implementar y probar la ingestión CSV condicional."
+      "decision": "Elegible: dominio público ODC-PDDL-1.0, descarga CSV presentada por la página oficial del dataset y actualización diaria confirmada. El acceso csv-static ya está implementado y probado. Sigue DESACTIVADA: la decisión operativa necesita una preview real, y para eso hacen falta dos dominios que la red de Cloud todavía no permite. Encenderla es editar enabled=true a mano.",
+      "dedupNamespace": "city-btc",
+      "entityPolicy": {
+        "allowed": [
+          "CORP",
+          "LLC",
+          "SCORP",
+          "LP",
+          "NO",
+          "PRF"
+        ],
+        "rejectedAsPersonal": [
+          "SOLE",
+          "H-W",
+          "HW",
+          "TRUST",
+          "IND",
+          "INDIVIDUAL"
+        ],
+        "unknownBehaviour": "fail-closed: un código de forma jurídica que no esté en la lista se descarta."
+      },
+      "naicsPolicy": {
+        "allowedSectors": {
+          "23": "Construcción — limpieza de obra",
+          "42": "Comercio mayorista — almacenes y oficinas",
+          "44": "Comercio minorista — locales con público",
+          "45": "Comercio minorista — locales con público",
+          "53": "Inmobiliario — administradores de fincas y oficinas",
+          "54": "Servicios profesionales — oficinas",
+          "55": "Gestión de empresas — sedes",
+          "56": "Servicios administrativos y de apoyo a edificios",
+          "62": "Sanidad — consultorios y clínicas",
+          "71": "Ocio y recreación — instalaciones con público",
+          "72": "Alojamiento y restauración",
+          "81": "Otros servicios en local comercial"
+        },
+        "excludedCodes": [
+          "814110",
+          "624410",
+          "812990",
+          "711510",
+          "531110",
+          "531210",
+          "812112",
+          "812113"
+        ],
+        "excludedReason": "Actividades domiciliarias o sobre personas: un contrato de limpieza de local no aplica."
+      },
+      "resolvedBlockers": [
+        {
+          "blocker": "No existe ingestión CSV con ETag/If-None-Match en el código: accessType csv-static no está implementado.",
+          "resolvedBy": "src/prospecting/sources/csv-client.js y csv-parse.js — un GET por corrida, GET condicional, SHA256 del archivo completo, temporal crash-safe que se borra siempre, topes de bytes y de tiempo.",
+          "testedBy": "test/city-btc.test.js"
+        },
+        {
+          "blocker": "Falta caché local y control de 1 descarga/día.",
+          "resolvedBy": "Cuota propia por fuente: guard durable derivado de las Companies con prefijo city-btc:, más cuota local y lock. El GET condicional evita descargar un archivo que no ha cambiado.",
+          "testedBy": "test/city-btc.test.js",
+          "residualRisk": "No hay caché del cuerpo del CSV entre corridas, y es a propósito: contiene nombres de personas y se borra al terminar. Lo que se recuerda es el ETag, no el contenido."
+        }
+      ]
     },
     "sd_development_approvals": {
       "label": "City of San Diego · Approvals for development projects (2026)",
@@ -331,7 +417,7 @@
   },
   "lastChange": {
     "at": "2026-10-04",
-    "what": "sdcounty_food_facility_permits pasa a enabled=true. Las demás fuentes siguen en false.",
-    "why": "Sus tres bloqueos quedaron resueltos y probados: control de caudal (429/Retry-After), cuota de 1 corrida/24 h y mapeo contrastado con la muestra atestiguada."
+    "what": "sd_business_tax_certificates pasa a implemented=true y sigue enabled=false. County sin cambios.",
+    "why": "Lector csv-static, reglas de defensa y cuota propia implementados y probados. Falta la preview real, que necesita egress a dos dominios."
   }
 }

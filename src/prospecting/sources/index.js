@@ -8,6 +8,8 @@ import { withQuota, MAX_ROWS_PER_RUN } from './quota.js';
 import { filterRow, assertNoForbidden } from './row-filter.js';
 import { resolveCursor } from './cursor.js';
 import { checkDurableQuota } from './durable-quota.js';
+import { fetchCsvToTemp, streamCsvObjects } from './csv-client.js';
+import { evaluateCityRow, normalizeForMatch, CITY_FORBIDDEN_FIELDS } from './city-btc-rules.js';
 
 /**
  * Catálogo de fuentes del área de San Diego.
@@ -154,25 +156,49 @@ export const SOURCES = {
   /**
    * Ciudad de San Diego · certificados de actividad activos.
    *
-   * CSV estático con ETag. El acceso csv-static NO está implementado: la
-   * definición existe para que la evidencia y el mapeo estén listos, no para
-   * fingir que la fuente funciona.
+   * ── Por qué esta fuente es más peligrosa que la del condado ───────────
+   * El condado publica establecimientos. La ciudad publica **titulares**:
+   * `business_owner_name` es el nombre de una persona física, y una parte grande
+   * de los certificados son autónomos trabajando desde su casa. Un filtro laxo
+   * aquí no produce leads mediocres: produce una lista de particulares con su
+   * domicilio. Las reglas viven en city-btc-rules.js y son cuatro: entidad
+   * jurídica inequívoca, sector NAICS comercial, certificado vigente y
+   * dirección comercial completa en San Diego.
+   *
+   * ── Alcance de red, y es estrecho a propósito ─────────────────────────
+   * Los dos robots.txt son ilegibles (404 en el portal, 403 en el host de
+   * descarga). Eso NO se interpreta como permiso para recorrer HTML. La
+   * autorización que se usa es otra y es explícita: la página oficial del
+   * dataset presenta este CSV como su descarga. Así que el único recurso que
+   * este código pide es ese CSV, y `buildCsvUrl` se niega a formar cualquier
+   * otra URL de estos dominios.
+   *
+   * ── Avance entre corridas ─────────────────────────────────────────────
+   * No hay cursor. El CSV es un volcado completo diario y `account_key` no
+   * tiene un orden del que se pueda fiar nadie (si son números de longitud
+   * variable, comparar como texto da un orden falso). En su lugar se lee del
+   * CRM el índice de lo ya ingerido y se toman los 50 primeros candidatos que
+   * NO estén. Determinista, idempotente, avanza solo, y de paso es la
+   * deduplicación cruzada contra las empresas que ya existen.
    */
   sd_business_tax_certificates: {
     label: 'Certificados de actividad · Ciudad de San Diego',
-    serviceArea: SERVICE_AREA,
-    signalType: 'new_business',
+    serviceArea: 'San Diego',
+    signalType: 'active_certificate',
     accessType: 'csv-static',
     domain: 'seshat.datasd.org',
     dataset: null,
     downloadUrl: 'https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv',
+    datasetPage: 'https://data.sandiego.gov/datasets/business-tax-certificates/',
     dateField: 'date_account_creation',
-    requires: ['businessName'],
+    dedupNamespace: 'city-btc',
+    // El CRM es el índice de lo ya ingerido: sin él no se sabe qué es nuevo.
+    requiresCrmIndex: true,
+    maxValidCandidates: 50,
+    requires: ['businessName', 'address'],
     fields: {
       sourceId: ['account_key'],
       businessName: ['dba_name'],
-      // La dirección viene troceada en seis columnas; se recompone al mapear.
-      addressParts: ['address_no', 'address_pd', 'address_road', 'address_sfx', 'address_suite'],
       city: ['address_city'],
       state: ['address_state'],
       zip: ['address_zip'],
@@ -181,6 +207,8 @@ export const SOURCES = {
       naics: ['naics_code'],
       naicsDescription: ['naics_description'],
       status: ['account_status'],
+      certEffective: ['date_cert_effective'],
+      certExpiration: ['date_cert_expiration'],
     },
   },
 
@@ -352,6 +380,35 @@ export function buildUrl(source, params, baseOverride) {
   return url.toString();
 }
 
+/**
+ * URL del CSV, y solo esa.
+ *
+ * No construye nada: devuelve la URL exacta que la evidencia declara permitida y
+ * comprueba que coincide. Si alguien cambia el `downloadUrl` de la definición por
+ * otra ruta del mismo dominio, esto falla, porque el permiso no es sobre el
+ * dominio: es sobre el recurso que la página oficial enlaza.
+ */
+export function buildCsvUrl(source, key) {
+  if (source.accessType !== 'csv-static') {
+    throw new Error(`La fuente "${source.label}" no es csv-static.`);
+  }
+  const entry = allowlistEntry(key);
+  const permitidas = entry?.robots?.allowedResources || [];
+  if (!permitidas.length) {
+    throw new Error(`La fuente "${source.label}" no declara qué recursos tiene permitidos: no se pide nada.`);
+  }
+  if (!permitidas.includes(source.downloadUrl)) {
+    throw new Error(
+      `La URL "${source.downloadUrl}" no está en los recursos permitidos de la auditoría. `
+      + 'El permiso es sobre el recurso que la página oficial enlaza, no sobre el dominio.',
+    );
+  }
+  if (entry?.robots?.htmlCrawlingAllowed === true) {
+    throw new Error('La evidencia dice que se permite recorrer HTML y este código no lo hace: revísala.');
+  }
+  return source.downloadUrl;
+}
+
 /** Estado de cada fuente: evidencia de la auditoría más constancia operativa. */
 export function sourceStatus() {
   return Object.entries(SOURCES).map(([key, source]) => {
@@ -377,23 +434,189 @@ export function sourceStatus() {
 /** Métricas de una corrida. Solo recuentos: ni una fila, ni un dato personal. */
 export const emptyMetrics = () => ({
   attempted: 0,
+  // `fetched` cuenta FILAS. Los bytes van aparte porque en una fuente CSV son
+  // la magnitud que explica cuánto costó la corrida.
   fetched: 0,
+  fetched_bytes: 0,
   mapped: 0,
-  skipped_sensitive: 0,
+  // Descartes, cada uno por su motivo. Separados a propósito: al leer un
+  // informe importa saber si se descartaron particulares o direcciones malas.
+  skipped_personal: 0,
   skipped_residential: 0,
-  // Permiso expirado o bandera de actividad en falso.
   skipped_inactive: 0,
-  // No se pudo verificar que la fila sea un negocio real.
   skipped_unverifiable: 0,
+  // Ya existe en el CRM, por clave o por nombre+dirección.
+  skipped_duplicate_existing: 0,
   skipped_invalid: 0,
+  skipped_sensitive: 0,
+  // Duplicado dentro de la propia corrida.
   deduped: 0,
   retries: 0,
   http429: 0,
   quota_blocked: 0,
   duration_ms: 0,
+  // Lo que un plan contra el CRM propondría. Cero hasta que alguien planifique.
+  planned_create: 0,
+  planned_update: 0,
+  planned_noop: 0,
+  errors: 0,
   crm_writes: 0,
   outbound: 0,
 });
+
+/**
+ * Clave de comparación cruzada: nombre + calle, normalizados.
+ *
+ * Sirve para no crear otra vez una empresa que ya está en el CRM con otra
+ * procedencia. Dos registros del mismo negocio —uno del condado y otro de la
+ * ciudad— no comparten identificador, pero sí nombre y portal.
+ */
+export function crossKey(name, street) {
+  const n = normalizeForMatch(name);
+  const a = normalizeForMatch(street);
+  if (!n) return null;
+  return `${n}|${a}`;
+}
+
+/**
+ * Una corrida de la fuente csv-static de la ciudad.
+ *
+ * El orden de las comprobaciones no es casual: primero lo que descarta la fila
+ * entera mirando columnas que luego no se conservan (titular, forma jurídica,
+ * NAICS, dirección), y solo después se recorta la fila. Si se recortara antes,
+ * `business_owner_name` ya no estaría ahí para comparar con el nombre comercial,
+ * que es justamente la comprobación que evita meter a un particular en la lista.
+ *
+ * El titular se lee de paso y se descarta en el mismo bloque donde se lee. No
+ * viaja a ninguna variable que sobreviva a la iteración.
+ */
+async function runCsvStatic(key, source, metrics, {
+  fetchImpl, etag, lastModified, maxCandidates, crmIndex, userAgent, now,
+}) {
+  const url = buildCsvUrl(source, key);
+  const allowed = new Set(allowedFields(key).map((f) => f.toLowerCase()));
+  const forbidden = new Set([
+    ...forbiddenFields(key).map((f) => f.toLowerCase()),
+    ...CITY_FORBIDDEN_FIELDS.map((f) => f.toLowerCase()),
+  ]);
+
+  // Se cuenta el intento ANTES de pedir: si la petición falla, la corrida
+  // igualmente intentó, y un informe que diga "0 intentos, 1 error" no se
+  // entiende.
+  metrics.attempted = 1;
+  const download = await fetchCsvToTemp(url, { fetchImpl, etag, lastModified, userAgent });
+  try {
+    if (download.notModified) {
+      // 304: el publicador dice que el archivo es el mismo que la última vez.
+      // Eso no es un fallo, es una corrida que no hacía falta.
+      return {
+        rows: 0, consumed: false, out: [], notModified: true,
+        csv: { bytes: 0, sha256: null, headers: download.headers },
+      };
+    }
+    metrics.fetched_bytes = download.bytes;
+
+    const out = [];
+    const seen = new Set();
+    for await (const parsed of streamCsvObjects(download.file)) {
+      metrics.fetched++;
+      if (!parsed.ok) {
+        // Una fila con un número de columnas distinto al del encabezado no se
+        // rellena ni se recorta: se cuenta y se deja pasar de largo.
+        metrics.skipped_invalid++;
+        continue;
+      }
+      const raw = parsed.row;
+
+      // ── Capa 1: reglas sobre la fila cruda ──
+      // `business_owner_name` solo existe dentro de este bloque.
+      const verdict = evaluateCityRow(raw, raw.business_owner_name, { now });
+      if (!verdict.ok) {
+        if (verdict.kind === 'personal') metrics.skipped_personal++;
+        else if (verdict.kind === 'residential') metrics.skipped_residential++;
+        else if (verdict.kind === 'inactive') metrics.skipped_inactive++;
+        else metrics.skipped_unverifiable++;
+        continue;
+      }
+
+      // ── Capa 2: recorte a la allowlist cerrada ──
+      const safe = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const lower = k.toLowerCase();
+        if (forbidden.has(lower)) continue;
+        if (!allowed.has(lower)) continue;
+        safe[k] = v;
+      }
+
+      const accountKey = clean(safe.account_key);
+      if (!accountKey) { metrics.skipped_unverifiable++; continue; }
+      const dedupKey = `${source.dedupNamespace}:${accountKey}`;
+
+      // ── Duplicado dentro de la corrida ──
+      if (seen.has(dedupKey)) { metrics.deduped++; continue; }
+
+      // ── Ya existe en el CRM: por clave o por nombre+dirección ──
+      const name = titleCase(clean(safe.dba_name));
+      const cross = crossKey(name, verdict.address);
+      if (crmIndex) {
+        if (crmIndex.dedupKeys.has(dedupKey) || (cross && crmIndex.crossKeys.has(cross))) {
+          metrics.skipped_duplicate_existing++;
+          continue;
+        }
+      }
+      seen.add(dedupKey);
+
+      const mapped = {
+        sourceId: accountKey,
+        dedupKey,
+        businessName: name,
+        contactName: '',
+        address: verdict.address,
+        city: titleCase(verdict.city),
+        zip: verdict.zip,
+        phone: '',
+        serviceArea: source.serviceArea,
+        sourceUrl: source.datasetPage,
+        description: clean(safe.naics_description),
+        naics: clean(safe.naics_code),
+        segment: verdict.segment,
+        entityType: verdict.entity,
+        naicsSector: verdict.naicsSector,
+        naicsSectorLabel: verdict.naicsSectorLabel,
+        signal: {
+          type: 'active_certificate',
+          certEffective: clean(safe.date_cert_effective).slice(0, 10) || null,
+          certExpiration: clean(safe.date_cert_expiration).slice(0, 10) || null,
+          accountCreated: clean(safe.date_account_creation).slice(0, 10) || null,
+          naicsDescription: clean(safe.naics_description),
+        },
+      };
+
+      // Último filtrado antes de que algo quede escrito, igual que en SODA.
+      const rawSafe = scrubRow(key, safe);
+      assertNoForbidden(key, rawSafe, 'raw de la fila');
+      assertNoForbidden(key, mapped, 'prospecto mapeado');
+
+      metrics.mapped++;
+      out.push({ ...mapped, source: key, sourceLabel: source.label, raw: rawSafe });
+
+      // Tope de candidatos válidos: se para de parsear, no de descargar. El
+      // hash ya es del archivo entero.
+      if (out.length >= maxCandidates) break;
+    }
+
+    return {
+      rows: out.length,
+      consumed: true,
+      out,
+      csv: { bytes: download.bytes, sha256: download.sha256, headers: download.headers },
+    };
+  } finally {
+    // Pase lo que pase: el CSV contiene nombres de personas y no se queda en
+    // disco. Esto no es limpieza de cortesía, es parte de la política.
+    download.dispose();
+  }
+}
 
 /**
  * Consulta una fuente bajo todos los controles.
@@ -423,6 +646,12 @@ export async function fetchFromSource(key, {
   // se comprueba, que es lo que quieren las pruebas de otras capas; el runner
   // siempre la pasa.
   durableQuotaOptions = null,
+  // Solo csv-static: índice de lo que el CRM ya tiene, GET condicional y
+  // User-Agent. Sin índice, una fuente que lo exige no corre.
+  crmIndex = null,
+  etag = null,
+  lastModified = null,
+  userAgent = null,
 } = {}) {
   const started = Date.now();
   const metrics = emptyMetrics();
@@ -460,10 +689,17 @@ export async function fetchFromSource(key, {
       origin: 'explicito',
       reason: null,
     };
-  } else if (cursorOptions) {
+  } else if (cursorOptions && source.cursorField) {
     cursorInfo = await resolveCursor(key, {
       namespace: source.dedupNamespace, ...cursorOptions,
     });
+  } else if (cursorOptions) {
+    // Sin `cursorField` la fuente no avanza con un cursor: avanza comparándose
+    // con lo que el CRM ya tiene. Ver la cabecera de la fuente de la ciudad.
+    cursorInfo = {
+      mode: 'indice_crm', cursor: null, origin: 'crm', reason: null,
+      detail: 'el avance se decide con el índice del CRM, no con un cursor',
+    };
   } else {
     // Sin nada que diga lo contrario se asume bootstrap: es lo que hacen las
     // pruebas y el dry-run, y no escribe en ningún sitio.
@@ -478,7 +714,32 @@ export async function fetchFromSource(key, {
     };
   }
 
+  // Una fuente que necesita saber qué hay ya en el CRM no puede correr a
+  // ciegas: sin índice, cada corrida traería los mismos 50 de siempre.
+  if (source.requiresCrmIndex && !crmIndex) {
+    metrics.duration_ms = Date.now() - started;
+    return {
+      rows: [], metrics, cursor: null, durableQuota: durable,
+      blocked: {
+        reason: 'sin_indice_crm',
+        detail: 'esta fuente avanza comparándose con lo que el CRM ya tiene, y no se pudo leer.',
+      },
+    };
+  }
+
   const outcome = await withQuota(key, async ({ maxRows }) => {
+    if (source.accessType === 'csv-static') {
+      return runCsvStatic(key, source, metrics, {
+        fetchImpl,
+        etag,
+        lastModified,
+        userAgent,
+        crmIndex,
+        now: clock ? clock() : Date.now(),
+        maxCandidates: Math.min(limit ?? source.maxValidCandidates ?? maxRows, source.maxValidCandidates ?? maxRows),
+      });
+    }
+
     const effectiveLimit = Math.min(limit ?? maxRows, maxRows);
     const params = source.query({
       sinceDays: sinceDays ?? 90, limit: effectiveLimit, cursor: cursorInfo.cursor,
@@ -555,11 +816,20 @@ export async function fetchFromSource(key, {
       blocked: { reason: outcome.reason, detail: outcome.detail },
     };
   }
+  if (outcome.result?.notModified) {
+    // 304: el publicador dice que el archivo no ha cambiado. No se gasta cuota
+    // (consumed=false) porque no hay nada nuevo que mirar.
+    return {
+      rows: [], metrics, cursor: cursorInfo, durableQuota: durable, csv: outcome.result.csv,
+      blocked: { reason: 'sin_cambios_304', detail: 'el CSV no ha cambiado desde la última corrida.' },
+    };
+  }
   return {
     rows: outcome.result.out,
     metrics,
     cursor: { ...cursorInfo, cursorOut: outcome.result.cursor ?? null },
     durableQuota: durable,
+    csv: outcome.result.csv ?? null,
     blocked: null,
   };
 }

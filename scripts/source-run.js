@@ -31,8 +31,10 @@ import {
 } from '../src/prospecting/sources/snapshot.js';
 import {
   createClient, planCompanyUpsert, upsertCompany,
-  lowestDedupKeyWithPrefix, latestVerifiedWithPrefix,
+  lowestDedupKeyWithPrefix, latestVerifiedWithPrefix, loadCrmIndex,
 } from '../src/services/crm/twenty.js';
+import { normalizeForMatch } from '../src/prospecting/sources/city-btc-rules.js';
+import { formatSourceReport, detectAlerts } from '../src/prospecting/sources/report.js';
 
 const [command, ...rest] = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -66,13 +68,16 @@ function countingClient() {
 /** La attestation es la primera puerta: sin ella no se consulta nada. */
 function requireAttestation() {
   const att = attestationFor(sourceKey);
+  // La attestation de cada fuente vive en su propio archivo, con su propio
+  // digest: que la de otra fuente caduque no puede bloquear a esta.
+
   if (!att.ok) {
     const detalle = att.problems?.length ? att.problems.join('; ') : att.reason;
     die(`la attestation no vale para ${sourceKey}: ${detalle}`);
   }
-  const full = verifyAttestation(loadAttestation());
   console.log(`Attestation: válida · evidencia del ${att.attestation.evidenceCollectedAt}`);
-  console.log(`             digest ${full.expectedDigest}`);
+  console.log(`             archivo ${att.file.split('/').pop()}`);
+  console.log(`             digest ${att.attestation.digest}`);
   console.log(`             comprobado sin red: estructura, digest y antigüedad.`);
   console.log(`             NO comprobado: hashes upstream (evidencia importada) y firma (no hay clave).`);
   return att;
@@ -85,8 +90,10 @@ function requireGate() {
   console.log(`             ${estado.state} · habilitada ${estado.enabled} · permitida ${estado.allowed}`);
   if (!estado.allowed) die(`la puerta la bloquea: ${estado.code || estado.reason}`);
 
+  // Se informa de qué más está permitido, pero no se bloquea por ello: el
+  // catálogo es multi-fuente y cada una responde por su propia puerta.
   const otras = sourceStatus().filter((s) => s.key !== sourceKey && s.allowed);
-  if (otras.length) die(`hay otras fuentes permitidas y no debería: ${otras.map((o) => o.key).join(', ')}`);
+  console.log(`Otras permitidas: ${otras.length ? otras.map((o) => o.key).join(', ') : 'ninguna'}`);
   return estado;
 }
 
@@ -168,7 +175,7 @@ function printPlan(plans) {
 // ── preview ──────────────────────────────────────────────────
 async function preview() {
   console.log('── PREVIEW · una consulta, sin escribir en ningún sitio ──\n');
-  requireAttestation();
+  const attInfo = requireAttestation();
   requireGate();
 
   console.log(`Sesión:      ${sessionId() ? `${sessionId().slice(0, 8)}…` : 'SIN IDENTIFICAR (el snapshot no se podrá reutilizar)'}`);
@@ -184,8 +191,30 @@ async function preview() {
     verifiedLookup = (prefix) => latestVerifiedWithPrefix(client, prefix);
   }
 
+  // Índice de lo que el CRM ya tiene. Lo necesitan las fuentes que avanzan
+  // comparándose con él, y sirve de deduplicación cruzada para todas.
+  let crmIndex = null;
+  if (crmConfigured) {
+    const { client } = countingClient();
+    try {
+      crmIndex = await loadCrmIndex(client, { normalize: normalizeForMatch });
+      title('Índice del CRM');
+      console.log(`  empresas indexadas: ${crmIndex.total} en ${crmIndex.pages} página(s)`);
+      console.log(`  claves: ${crmIndex.dedupKeys.size} · nombre+dirección: ${crmIndex.crossKeys.size}`);
+      if (!crmIndex.complete) {
+        die('el índice del CRM quedó incompleto: con un índice a medias se crearían duplicados.');
+      }
+    } catch (err) {
+      // Una fuente que lo exige se bloqueará abajo; una que no, sigue sin él.
+      console.log(`  (no se pudo leer el índice del CRM: ${err.message})`);
+      crmIndex = null;
+    }
+  }
+
   const result = await fetchFromSource(sourceKey, {
     limit: rowLimit,
+    crmIndex,
+    userAgent: config.prospecting.userAgent,
     // La cuota que sobrevive al contenedor. Si el CRM no está configurado no se
     // puede comprobar, y entonces la única defensa es la local: se dice en voz
     // alta en lugar de dar por bueno el silencio.
@@ -206,17 +235,31 @@ async function preview() {
     console.log(`  ${result.durableQuota.detail}`);
   }
 
-  title('Modo de la corrida');
-  console.log(`  modo:    ${result.cursor?.mode}`);
-  console.log(`  origen:  ${result.cursor?.origin}`);
-  console.log(`  cursor:  ${result.cursor?.cursor ?? '(ninguno: primera corrida)'}`);
-  if (result.cursor?.detail) console.log(`  detalle: ${result.cursor.detail}`);
+  // Cuando la cuota durable bloquea, el cursor no se llega a resolver: no hay
+  // modo del que informar, y escribir "undefined" sería ruido.
+  if (result.cursor) {
+    title('Modo de la corrida');
+    console.log(`  modo:    ${result.cursor.mode}`);
+    console.log(`  origen:  ${result.cursor.origin}`);
+    console.log(`  cursor:  ${result.cursor.cursor ?? '(ninguno: primera corrida)'}`);
+    if (result.cursor.detail) console.log(`  detalle: ${result.cursor.detail}`);
+  }
 
   if (result.blocked) {
     console.log(`\n  BLOQUEADA: ${result.blocked.reason} — ${result.blocked.detail}`);
     console.log(`  quota_blocked=${result.metrics.quota_blocked} · fetched=${result.metrics.fetched}`
       + ` · crm_writes=0 · outbound=0 · peticiones al Condado: 0`);
     die('la corrida queda bloqueada. Es el sistema funcionando, no un error.', 2);
+  }
+
+  if (result.csv) {
+    title('Archivo descargado');
+    console.log(`  bytes:        ${result.csv.bytes}`);
+    console.log(`  sha256:       ${result.csv.sha256}`);
+    console.log(`  last-modified: ${result.csv.headers?.lastModified ?? '(sin cabecera)'}`);
+    console.log(`  etag:         ${result.csv.headers?.etag ?? '(sin cabecera)'}`);
+    console.log('  Es la huella de UN volcado diario, no una constante: el publicador');
+    console.log('  reemplaza el archivo cada día y el hash cambia con él.');
   }
 
   title('Métricas');
@@ -249,7 +292,29 @@ async function preview() {
 
   title('Plan contra el CRM (solo lectura, solo Companies)');
   const { plans, counts, writes } = await planCompanies(result.rows, new Date().toISOString());
-  printPlan(plans);
+  const tally = printPlan(plans);
+  result.metrics.planned_create = tally.create;
+  result.metrics.planned_update = tally.update;
+  result.metrics.planned_noop = tally.noop;
+  result.metrics.errors = tally.error;
+
+  const alerts = detectAlerts({
+    sourceId: sourceKey,
+    metrics: result.metrics,
+    csv: result.csv,
+    blocked: result.blocked,
+    attestedBytes: attInfo?.entry?.artifacts?.csvHead?.contentLength ?? null,
+  });
+  title('Informe de la fuente');
+  console.log(formatSourceReport({
+    sourceId: sourceKey,
+    label: SOURCES[sourceKey].label,
+    metrics: result.metrics,
+    csv: result.csv,
+    blocked: result.blocked,
+    plan: tally,
+    alerts,
+  }));
 
   title('Lo que esta ejecución NO hizo');
   console.log(`  crm_writes:       ${writes}`);

@@ -222,6 +222,53 @@ export async function latestVerifiedWithPrefix(client, prefix) {
   };
 }
 
+/**
+ * Índice de lo que el CRM ya tiene: claves de deduplicación y nombre+dirección.
+ *
+ * Es lo que permite a una fuente sin cursor saber qué es nuevo, y lo que evita
+ * crear por segunda vez un negocio que ya entró por otra procedencia. Dos
+ * registros del mismo restaurante —uno del condado, otro de la ciudad— no
+ * comparten identificador, pero sí nombre y calle.
+ *
+ * Pagina hasta agotar, con un tope de páginas para que un CRM con cien mil
+ * empresas no deje la corrida leyendo para siempre. Si se agota el tope se dice,
+ * porque un índice incompleto crearía duplicados sin que nadie se enterara.
+ */
+export async function loadCrmIndex(client, { pageSize = 60, maxPages = 50, normalize } = {}) {
+  const dedupKeys = new Set();
+  const crossKeys = new Set();
+  const names = [];
+  let cursor = null;
+  let pages = 0;
+  let complete = true;
+
+  for (;;) {
+    if (pages >= maxPages) { complete = false; break; }
+    const query = { limit: pageSize, depth: 0, order_by: 'id[AscNullsLast]' };
+    if (cursor) query.starting_after = cursor;
+    const res = await client.get(`/${OBJECTS.companies}`, query);
+    const rows = res?.data?.[OBJECTS.companies] || [];
+    pages++;
+
+    for (const row of rows) {
+      const key = trim(row[COMPANY_FIELDS.dedupKey]);
+      if (key) dedupKeys.add(key);
+      const name = trim(row[COMPANY_FIELDS.name]);
+      const street = trim(row[COMPANY_FIELDS.address]?.addressStreet1);
+      if (name && typeof normalize === 'function') {
+        crossKeys.add(`${normalize(name)}|${normalize(street)}`);
+      }
+      names.push(name);
+    }
+
+    const next = res?.pageInfo?.endCursor;
+    if (!rows.length || !res?.pageInfo?.hasNextPage || !next) break;
+    cursor = next;
+  }
+
+  return { dedupKeys, crossKeys, total: names.length, pages, complete };
+}
+
 // ── Mapeo ────────────────────────────────────────────────────
 const trim = (v, max = 400) => String(v ?? '').trim().slice(0, max);
 
@@ -510,5 +557,6 @@ export async function planProspect(client, prospect) {
 
 export default {
   createClient, planProspect, upsertCompany, planCompanyUpsert,
-  findCompanyByDedupKey, lowestDedupKeyWithPrefix, latestVerifiedWithPrefix, redact,
+  findCompanyByDedupKey, lowestDedupKeyWithPrefix, latestVerifiedWithPrefix,
+  loadCrmIndex, redact,
 };

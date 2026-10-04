@@ -129,7 +129,7 @@ hash, comprobable sin red, en
 | Clave | Qué trae | Estado |
 |---|---|---|
 | `sdcounty_food_facility_permits` | Permisos de alimentación del Condado (SODA, dominio público) | **Habilitada** · 50 filas por corrida · 1 corrida cada 24 h |
-| `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | Elegible · **apagada**, acceso sin implementar |
+| `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | Elegible · acceso **implementado y probado** · **apagada**: falta decisión operativa y egress a dos dominios |
 | `sd_development_approvals` | Aprobaciones de desarrollo de la Ciudad (CSV, ODC PDDL) | **Solo investigación**, prohibido su uso como lead |
 
 **Una sola fuente habilitada.** `eligible` significa que la licencia lo
@@ -141,9 +141,18 @@ De esa fuente se descartan **enteras** las filas de cocinas domésticas
 (*Microenterprise Home Kitchen*, *cottage food*): el permiso se concede sobre la
 vivienda del titular, así que su dirección es un domicilio particular.
 
+La fuente de la Ciudad es más delicada: publica **titulares**, no solo
+establecimientos. Solo pasan entidades jurídicas inequívocas (ni autónomos, ni
+matrimonios, ni fideicomisos), sectores NAICS comerciales, certificados vigentes
+y direcciones comerciales completas. El nombre del titular se lee **de paso**
+para descartar la fila si el nombre comercial es el suyo, y no se conserva en
+ningún sitio; el CSV descargado se borra al terminar.
+
     node scripts/verify-attestation.js    # comprueba la constancia, sin red
     node scripts/dry-run-source.js        # métricas de una corrida, sin red ni CRM
     npm run sources:preview               # una consulta real → snapshot con hash
+    npm run sources:preview:city          # lo mismo para la fuente de la Ciudad
+    npm run enrich:preview                # qué se puede afirmar de lo que ya hay
     npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot
 
 El ciclo es de una sola consulta: `preview` pregunta al portal una vez y deja un

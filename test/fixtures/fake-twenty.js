@@ -88,11 +88,28 @@ export function createFakeTwenty({ seed = [], conflictOnce = false } = {}) {
         if (dir === 'Desc') rows.reverse();
       }
 
-      const limit = Number(url.searchParams.get('limit') || 60);
+      // Paginación por cursor, como la instancia real: `starting_after` lleva el
+      // id de la última fila servida. Sin esto, un fixture que devuelve siempre
+      // la primera página hace pasar una prueba de paginación que en producción
+      // se quedaría con 60 de 130 empresas y crearía duplicados con el resto.
+      const limit = Math.min(Number(url.searchParams.get('limit') || 60), 60);
+      const after = url.searchParams.get('starting_after');
+      let from = 0;
+      if (after) {
+        const idx = rows.findIndex((c) => String(c.id) === after);
+        from = idx === -1 ? rows.length : idx + 1;
+      }
+      const page = rows.slice(from, from + limit);
+      const hasNextPage = from + page.length < rows.length;
       return json(res, 200, {
-        data: { companies: rows.slice(0, limit) },
+        data: { companies: page },
         totalCount: rows.length,
-        pageInfo: { startCursor: '', endCursor: '', hasNextPage: false, hasPreviousPage: false },
+        pageInfo: {
+          startCursor: page.length ? String(page[0].id) : '',
+          endCursor: page.length ? String(page[page.length - 1].id) : '',
+          hasNextPage,
+          hasPreviousPage: from > 0,
+        },
       });
     }
 
