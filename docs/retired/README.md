@@ -82,3 +82,96 @@ o otra vía oficial, esta fuente no cuenta entre las utilizables.
 Se eliminaron de `rules.js` `evaluateCslbRow` y `hasClassification`. La sustituye
 `city_development_permits` (**CaliClean Commercial Development Permit Scout**),
 que no comparte host, ni código de acceso, ni dato con ella.
+
+---
+
+# `cdph_healthcare_facilities` · auditada y BLOQUEADA, no implementada
+
+**Fuente:** "Licensed and Certified Healthcare Facility Listing", CDPH, en el portal
+de datos abiertos de CalHHS.
+Ficha: `https://data.chhs.ca.gov/dataset/healthcare-facility-locations`
+CSV oficial: `…/dataset/3b5b80e8-…/resource/f0ae5731-…/download/health_facility_locations.csv`
+
+**Auditada el 2026-10-04. No se descargó el archivo, no se implementó scout y no
+se escribió nada.** Dos bloqueos independientes, cualquiera de los dos bastaba.
+
+## Bloqueo 1 · la descarga redirige a un host no permitido
+
+`HEAD` sobre el CSV oficial devuelve **302** con
+
+    location: https://s3.amazonaws.com/og-production-open-data-chelseama-…/
+              resources/f0ae5731-…/health_facility_locations.csv?X-Amz-…
+
+El host exacto es **`s3.amazonaws.com`** (URL prefirmada, `X-Amz-Expires=86400`).
+No está permitido en la política de red y **no se añade**. El `.zip` hermano del
+mismo conjunto redirige al mismo sitio, así que no hay vía alternativa dentro del
+host auditado.
+
+Esto no es un detalle de configuración: el cliente de esta arquitectura **ya
+rechaza** ese caso por diseño (`REDIRECT_REJECTED`, "ese recurso no es el
+auditado"), porque un recurso servido desde otro host no es el que se hasheó ni
+el que la constancia describe. Era la misma trampa que mató a HCAI.
+
+## Bloqueo 2 · la licencia no es Creative Commons Attribution
+
+El encargo daba por hecha una CC-BY. **El portal no la declara en ningún sitio.**
+Lo que dice, textual:
+
+- caja de licencia de la ficha: **"License: No License Provided"**;
+- metadata de la ficha, campo `License`: **"Terms of Use"**;
+- `Limitations`: *"Use of this data is subject to the CHHS Terms of Use and any
+  copyright and proprietary notices incorporated in or accompanying the
+  individual files."*
+- Términos del portal (`/pages/terms`, modificados 2023-01-27): conceden *"a
+  non-exclusive, non-transferable, **revocable** license to use and distribute
+  the Content"* con **atribución y cita obligatorias**. Es una licencia escrita,
+  pero **revocable y sin nombre CC**: no es CC-BY.
+- Y en la propia ficha se renderiza un bloque de términos que dice: *"Anyone
+  desiring to use or reproduce the data without modification for a
+  **noncommercial** purpose may do so without obtaining approval. **All
+  commercial uses must be approved and may be subject to a license.**"*
+
+Ese último punto es el que decide. Prospectar para vender limpieza comercial es un
+uso comercial, y el publicador dice que requiere aprobación. **No se acepta ese
+modal ni se asume la aprobación.** El remedio es pedírsela al CDPH por escrito.
+
+Un detalle que conviene no leer mal: los Términos prohíben *"the promotion of
+commercial ventures"*, pero esa cláusula está bajo **"Public Participation"** y
+gobierna el módulo de comentarios y subida de contenido, **no** la reutilización
+del dato descargado. No es esa la que bloquea.
+
+## Lo que sí quedó verificado
+
+| Qué | Resultado |
+|---|---|
+| egress a `data.chhs.ca.gov` | confirmado, 200 |
+| `robots.txt` | **200**, 3071 B, `sha256:a7f31d58…b279`, byte por byte igual al leído el 2026-10-04 a las 15:26 |
+| robots · ruta usada | `/dataset/<id>/resource/<id>/download/<f>.csv` **permitida por omisión** en el bloque `User-agent: *` (79 reglas). Nunca se tocó `/api/`, `/api/3/action`, `/datastore` ni `/datastore/dump`, que **sí** están prohibidas |
+| autoridad | **CDPH**, programa *Center for Health Care Quality*; datos del sistema ELMS de licenciamiento. `Source Link` a `cdph.ca.gov/.../CalHealthFind/` |
+| actualización | **mensual** (`Frequency: Monthly`). `Last Updated: September 16, 2026, 22:27 UTC` |
+| URL exacta del CSV | confirmada desde la ficha oficial, copiada y no deducida |
+| esquema | **no verificado**: habría exigido descargar, y la descarga está bloqueada |
+
+## Huellas de la evidencia
+
+| Artefacto | Bytes | sha256 |
+|---|---|---|
+| `robots.txt` | 3 071 | `a7f31d58b1ed022652917abe6e77208bb44ea1bbe5017517c0c14ece6633b279` |
+| búsqueda del portal | 53 790 | `1dc0737cc3ddc6e48831d582e1dd86edb43b104880e59c47491e666eab9ae052` |
+| ficha del conjunto de datos | 58 814 | `27621c784923ce2150c116ecd20a52bfe5fdd0ea0cb254465bb32dc0415ffc8a` |
+| Terms of Use del portal | 65 776 | `b939eba71e90a322e2965db54db1bc95e2490eab9d69eb2995ca73d8080d5981` |
+| cabeceras del `HEAD` al CSV | 1 202 | `da44fdb776a3922d22a0828cbb4a4fea1d3c840e3713f4e341220867288d8ac8` |
+
+**raw: no existe.** No se descargó, así que no hay hash de datos y no se levanta
+una constancia que afirme un esquema que nadie ha visto. La cuota de 24 h de esta
+fuente sigue sin consumir.
+
+## Para desbloquearla
+
+1. Aprobación escrita del CDPH para uso comercial, o confirmación de que ese
+   bloque de términos no aplica a este conjunto de datos; **y**
+2. una vía de descarga que no redirija fuera del host auditado, o la decisión
+   explícita de permitir `s3.amazonaws.com` — que es un host genérico de terceros,
+   no el del publicador, y permitirlo abre mucho más que este archivo.
+
+Mientras falte cualquiera de las dos, esta fuente no se implementa.
