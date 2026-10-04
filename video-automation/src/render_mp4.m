@@ -58,24 +58,57 @@ static CGImageRef LoadImage(NSString *path, NSError **error) {
     return image;
 }
 
-// Returns a +1 CVPixelBufferRef or NULL.
-static CVPixelBufferRef MakeBuffer(CVPixelBufferPoolRef pool, size_t width, size_t height,
+// Explicit BGRA attributes shared by every buffer and by the writer adaptor:
+// CGBitmapContext/CGImage compatible and IOSurface-backed for the H.264 encoder.
+static NSDictionary *BufferAttributes(int width, int height) {
+    return @{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+        (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+        (__bridge NSString *)kCVPixelBufferCGImageCompatibilityKey: @YES,
+        (__bridge NSString *)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+}
+
+// Draws one frame into a freshly created buffer. Buffers are created directly
+// with CVPixelBufferCreate (never taken from the writer adaptor), so no
+// adaptor-owned CoreFoundation object is dereferenced. Returns +1 or NULL.
+static CVPixelBufferRef MakeBuffer(NSDictionary *attributes, size_t width, size_t height,
                                    CGImageRef a, CGImageRef b, CGFloat blend, NSError **error) {
     CVPixelBufferRef buffer = NULL;
-    CVReturn status = CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &buffer);
+    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                                          (__bridge CFDictionaryRef)attributes, &buffer);
     if (status != kCVReturnSuccess || buffer == NULL) {
-        Fail(error, RenderError([NSString stringWithFormat:@"Cannot allocate pixel buffer (CVReturn %d)", status]));
+        if (buffer != NULL) {
+            CVPixelBufferRelease(buffer);
+        }
+        Fail(error, RenderError([NSString stringWithFormat:@"CVPixelBufferCreate failed (CVReturn %d)", status]));
         return NULL;
     }
-    CVPixelBufferLockBaseAddress(buffer, 0);
-    void *base = CVPixelBufferGetBaseAddress(buffer);
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = NULL;
-    if (base != NULL) {
-        context = CGBitmapContextCreate(base, width, height, 8, CVPixelBufferGetBytesPerRow(buffer), space,
-                                        (uint32_t)kCGBitmapByteOrder32Little | (uint32_t)kCGImageAlphaPremultipliedFirst);
+    if (CVPixelBufferGetWidth(buffer) != width || CVPixelBufferGetHeight(buffer) != height ||
+        CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA) {
+        CVPixelBufferRelease(buffer);
+        Fail(error, RenderError(@"CVPixelBufferCreate returned an unexpected geometry or pixel format"));
+        return NULL;
     }
-    CGColorSpaceRelease(space);
+    status = CVPixelBufferLockBaseAddress(buffer, 0);
+    if (status != kCVReturnSuccess) {
+        CVPixelBufferRelease(buffer);
+        Fail(error, RenderError([NSString stringWithFormat:@"CVPixelBufferLockBaseAddress failed (CVReturn %d)", status]));
+        return NULL;
+    }
+    void *base = CVPixelBufferGetBaseAddress(buffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(buffer);
+    CGContextRef context = NULL;
+    if (base != NULL && bytesPerRow >= width * 4) {
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+        if (space != NULL) {
+            context = CGBitmapContextCreate(base, width, height, 8, bytesPerRow, space,
+                                            (uint32_t)kCGBitmapByteOrder32Little | (uint32_t)kCGImageAlphaPremultipliedFirst);
+            CGColorSpaceRelease(space);
+        }
+    }
     if (context == NULL) {
         CVPixelBufferUnlockBaseAddress(buffer, 0);
         CVPixelBufferRelease(buffer);
@@ -93,8 +126,14 @@ static CVPixelBufferRef MakeBuffer(CVPixelBufferPoolRef pool, size_t width, size
         CGContextDrawImage(context, rect, b);
         CGContextRestoreGState(context);
     }
+    CGContextFlush(context);
     CGContextRelease(context);
-    CVPixelBufferUnlockBaseAddress(buffer, 0);
+    status = CVPixelBufferUnlockBaseAddress(buffer, 0);
+    if (status != kCVReturnSuccess) {
+        CVPixelBufferRelease(buffer);
+        Fail(error, RenderError([NSString stringWithFormat:@"CVPixelBufferUnlockBaseAddress failed (CVReturn %d)", status]));
+        return NULL;
+    }
     return buffer;
 }
 
@@ -143,12 +182,7 @@ static BOOL Render(NSArray<NSString *> *framePaths, NSString *outputPath, int wi
     };
     AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:settings];
     input.expectsMediaDataInRealTime = NO;
-    NSDictionary *attributes = @{
-        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-        (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
-        (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
-        (__bridge NSString *)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
-    };
+    NSDictionary *attributes = BufferAttributes(width, height);
     AVAssetWriterInputPixelBufferAdaptor *adaptor =
         [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input
                                                                          sourcePixelBufferAttributes:attributes];
@@ -160,10 +194,6 @@ static BOOL Render(NSArray<NSString *> *framePaths, NSString *outputPath, int wi
         return Fail(error, writer.error ?: RenderError(@"Writer did not start"));
     }
     [writer startSessionAtSourceTime:kCMTimeZero];
-    CVPixelBufferPoolRef pool = adaptor.pixelBufferPool;
-    if (pool == NULL) {
-        return Fail(error, writer.error ?: RenderError(@"Pixel buffer pool unavailable"));
-    }
 
     int totalFrames = (int)llround(duration * (double)fps);
     NSInteger frameCount = (NSInteger)frames.count;
@@ -190,7 +220,7 @@ static BOOL Render(NSArray<NSString *> *framePaths, NSString *outputPath, int wi
             next = (__bridge CGImageRef)frames[(NSUInteger)(frameIndex + 1)];
             alpha = (CGFloat)(transitionFrames - MAX(0, remaining)) / (CGFloat)transitionFrames;
         }
-        CVPixelBufferRef buffer = MakeBuffer(pool, (size_t)width, (size_t)height,
+        CVPixelBufferRef buffer = MakeBuffer(attributes, (size_t)width, (size_t)height,
                                              (__bridge CGImageRef)frames[(NSUInteger)frameIndex], next, alpha, error);
         if (buffer == NULL) {
             return NO;

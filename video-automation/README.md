@@ -58,6 +58,8 @@ xcrun --sdk macosx clang -x objective-c -fobjc-arc -fno-modules -isysroot <SDK> 
 
 `-fno-modules` makes clang include headers textually, so the conflicting module maps are never read. No system file is modified; everything is written under `.build/` and `var/`.
 
+The Objective-C renderer creates every BGRA frame with `CVPixelBufferCreate`. Attributes are explicit: CGImage/CGBitmapContext compatible and IOSurface-backed. It checks every `CVReturn`, lock and unlock, and uses the writer adaptor only to append frames. The adaptor's own buffer pool is not used. Under this build it crashed with `EXC_BREAKPOINT` in `CFGetTypeID` ← `CVPixelBufferPoolCreatePixelBuffer`.
+
 How the fallback behaves:
 
 - **Coherent backend:** if either Swift binary fails for a toolchain/SDK reason, both renderer and inspector use Objective-C. They are never mixed.
@@ -73,6 +75,10 @@ The full command, exit code, stdout and stderr of every build, render and inspec
 - **Kill switch:** `CALI_CLEAN_VIDEO_KILL=1` or a file `var/state/KILL` blocks every render and the hourly script.
 - **Lock:** `var/state/pipeline.lock` (an exclusive `flock`) refuses concurrent runs.
 - **Quota:** `var/state/render-ledger.jsonl` counts renders by wall-clock day, not by requested slot. Limits are 1 completed render and 2 attempts per day. A corrupt ledger blocks rendering.
+- **Quota override (closed by default):** once the normal daily quota is spent, `render-pilot --supervised --quota-override-reason "<why>"` allows **one** extra attempt that day.
+  - The reason must be non-empty (at most 500 characters).
+  - Refused with any other command, without `--supervised`, while normal quota remains, or when the day's override was already used.
+  - The ledger records a `quota_override` event with the reason and the usage it overrode. A failed override attempt still consumes it.
 - **Retention:** drafts are kept 14 days, manifests 90 days and logs 30 days. Pruning skips symlinks and never leaves `var/`. `healthcheck` reports what is due without deleting anything.
 - **Output validation:** 1080x1920 H.264, 12–20 s and within 0.2 s of target, no audio, first and last frames decodable. The final scene must show the official `cali-clean.net` CTA and the AI-visual disclosure.
 - **Cost:** only `local_avfoundation` with zero provider cost may be active. Any enabled paid provider blocks the run.

@@ -73,6 +73,8 @@ KILL_ENV = "CALI_CLEAN_VIDEO_KILL"
 KILL_FILE = "KILL"
 LOCK_FILE = "pipeline.lock"
 LEDGER_FILE = "render-ledger.jsonl"
+MAX_QUOTA_OVERRIDES_PER_DAY = 1
+MAX_OVERRIDE_REASON_CHARS = 500
 TRUTHY = {"1", "true", "yes", "on"}
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -445,16 +447,64 @@ def quota_usage(runtime: Dict[str, Any], now: datetime) -> Dict[str, int]:
     return {"attempts": attempts, "completed": completed}
 
 
-def enforce_render_quota(runtime: Dict[str, Any], now: datetime) -> Dict[str, int]:
+def overrides_used_today(runtime: Dict[str, Any], now: datetime) -> int:
+    zone = ZoneInfo(runtime["timezone"])
+    today = now.astimezone(zone).date()
+    return sum(
+        1 for entry in read_ledger(runtime)
+        if entry.get("event") == "quota_override"
+        and datetime.fromisoformat(entry["at"]).astimezone(zone).date() == today
+    )
+
+
+def validate_override_reason(reason: Optional[str]) -> Optional[str]:
+    if reason is None:
+        return None
+    cleaned = " ".join(reason.split())
+    if not cleaned:
+        raise PolicyError("--quota-override-reason must be a non-empty explanation")
+    if len(cleaned) > MAX_OVERRIDE_REASON_CHARS:
+        raise PolicyError(f"--quota-override-reason must be at most {MAX_OVERRIDE_REASON_CHARS} characters")
+    return cleaned
+
+
+def quota_status(runtime: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     usage = quota_usage(runtime, now)
     limits = runtime["limits"]
     max_renders = int(limits["max_real_renders_per_day"])
     max_attempts = int(limits.get("max_render_attempts_per_day", max_renders))
+    used = overrides_used_today(runtime, now)
+    exhausted = None
     if usage["completed"] >= max_renders:
-        raise PolicyError(f"Daily pilot-render quota reached ({usage['completed']}/{max_renders})")
-    if usage["attempts"] >= max_attempts:
-        raise PolicyError(f"Daily render-attempt quota reached ({usage['attempts']}/{max_attempts})")
-    return usage
+        exhausted = f"Daily pilot-render quota reached ({usage['completed']}/{max_renders})"
+    elif usage["attempts"] >= max_attempts:
+        exhausted = f"Daily render-attempt quota reached ({usage['attempts']}/{max_attempts})"
+    return {
+        **usage,
+        "max_renders": max_renders,
+        "max_attempts": max_attempts,
+        "overrides_used": used,
+        "max_overrides": MAX_QUOTA_OVERRIDES_PER_DAY,
+        "exhausted": exhausted,
+        "override_available": exhausted is not None and used < MAX_QUOTA_OVERRIDES_PER_DAY,
+    }
+
+
+def enforce_render_quota(runtime: Dict[str, Any], now: datetime, override_reason: Optional[str] = None) -> Dict[str, Any]:
+    """Normal quota first. A supervised override grants one extra attempt per day, only once the normal quota is spent."""
+    status = quota_status(runtime, now)
+    if status["exhausted"] is None:
+        if override_reason is not None:
+            raise PolicyError("Quota override refused: the normal daily quota is not exhausted; run without --quota-override-reason")
+        return {**status, "override": False}
+    if override_reason is None:
+        raise PolicyError(status["exhausted"])
+    if not status["override_available"]:
+        raise PolicyError(
+            f"{status['exhausted']}; the daily quota override was already used "
+            f"({status['overrides_used']}/{MAX_QUOTA_OVERRIDES_PER_DAY})"
+        )
+    return {**status, "override": True}
 
 
 def prune(runtime: Dict[str, Any], now: datetime, dry_run: bool = False) -> Dict[str, int]:
@@ -994,9 +1044,13 @@ def healthcheck(runtime: Dict[str, Any], brand: Dict[str, Any], toolchain_resolv
             raise PolicyError("held by another run")
         return "free"
 
-    def quota() -> Dict[str, int]:
-        usage = enforce_render_quota(runtime, now_local(runtime))
-        return {**usage, "max_renders": int(runtime["limits"]["max_real_renders_per_day"])}
+    def quota() -> Dict[str, Any]:
+        status = quota_status(runtime, now_local(runtime))
+        if status["exhausted"] and not status["override_available"]:
+            raise PolicyError(f"{status['exhausted']}; daily override already used")
+        if status["exhausted"]:
+            status["note"] = "normal quota exhausted; one supervised override remains (render-pilot --supervised --quota-override-reason ...)"
+        return status
 
     def disk() -> str:
         free = shutil.disk_usage(ROOT).free
@@ -1030,7 +1084,10 @@ def healthcheck(runtime: Dict[str, Any], brand: Dict[str, Any], toolchain_resolv
 # --- Entry point ------------------------------------------------------------------------
 
 
-def run(command: str, slot_value: str | None, supervised: bool = False) -> Dict[str, Any]:
+def run(command: str, slot_value: str | None, supervised: bool = False, override_reason: Optional[str] = None) -> Dict[str, Any]:
+    override_reason = validate_override_reason(override_reason)
+    if override_reason is not None and not (command == "render-pilot" and supervised):
+        raise PolicyError("--quota-override-reason is only accepted with render-pilot --supervised")
     brand = load_json(BRAND_PATH)
     topics = load_json(TOPICS_PATH)
     runtime = load_json(RUNTIME_PATH)
@@ -1074,8 +1131,15 @@ def run(command: str, slot_value: str | None, supervised: bool = False) -> Dict[
         if rendering:
             toolchain = resolve_toolchain()
             check_card_dependencies()
-            enforce_render_quota(runtime, now_local(runtime))
-            append_ledger(runtime, {"event": "started", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat()})
+            quota = enforce_render_quota(runtime, now_local(runtime), override_reason)
+            if quota["override"]:
+                append_ledger(runtime, {
+                    "event": "quota_override", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(),
+                    "reason": override_reason, "command": command, "supervised": True,
+                    "usage": {"attempts": quota["attempts"], "completed": quota["completed"]},
+                })
+            append_ledger(runtime, {"event": "started", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(),
+                                    "quota_override": quota["override"]})
             try:
                 manifest["render"] = render_video(manifest, brand, runtime, paths, toolchain)
             except Exception as exc:
@@ -1102,9 +1166,10 @@ def main() -> int:
     parser.add_argument("command", choices=("dry-run", "render-pilot", "hourly", "healthcheck"))
     parser.add_argument("--slot", help="ISO timestamp; rounded down to the hour")
     parser.add_argument("--supervised", action="store_true", help="required for render-pilot")
+    parser.add_argument("--quota-override-reason", help="render-pilot --supervised only: one extra attempt per day after the normal quota is spent")
     args = parser.parse_args()
     try:
-        result = run(args.command, args.slot, supervised=args.supervised)
+        result = run(args.command, args.slot, supervised=args.supervised, override_reason=args.quota_override_reason)
     except (PolicyError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

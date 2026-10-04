@@ -333,7 +333,8 @@ class QuotaTests(OfflineCase):
         yesterday = self.now() - timedelta(days=1, hours=1)
         self.record("started", yesterday)
         self.record("completed", yesterday)
-        self.assertEqual(pipeline.enforce_render_quota(self.runtime, self.now()), {"attempts": 0, "completed": 0})
+        status = pipeline.enforce_render_quota(self.runtime, self.now())
+        self.assertEqual((status["attempts"], status["completed"], status["override"]), (0, 0, False))
 
     def test_quota_uses_wall_clock_not_slot(self):
         manifest = {"slot": "2020-01-01T09:00:00-08:00", "render": {"rendered_at": self.now().isoformat()}}
