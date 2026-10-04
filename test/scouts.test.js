@@ -139,19 +139,59 @@ test('el estado versionado de cada scout es el que la verificación real encontr
   assert.equal(cslb.robots.disallowsOurPath, false);
   assert.match(cslb.robots.interpretation, /NO se interpreta como permiso/);
 
-  // CDE: nada verificado, porque su host no está permitido. Ni licencia, ni
-  // términos, ni robots, ni esquema. Las cuatro son condición para encenderla.
+  // CDE: auditada en vivo. Cuatro de cinco comprobaciones pasaron; la licencia
+  // no, porque la declaración de copyright del sitio no es legible desde aquí.
+  // Que falte una sola de las cinco deja la fuente apagada.
   const cde = leer('cde_schools');
   assert.equal(cde.enabled, false);
   assert.equal(cde.eligible, false);
-  assert.equal(cde.state, 'UNVERIFIED_DISABLED');
-  assert.equal(cde.robots.status, 'NO_LEIDO');
-  assert.equal(cde.robots.disallowsOurPath, null, 'un robots sin leer no es ni sí ni no');
-  for (const k of ['licenseVerified', 'termsVerified', 'robotsVerified', 'schemaVerified', 'hostAllowed']) {
-    assert.equal(cde.verification[k], false, `${k} se dio por hecho`);
+  assert.equal(cde.state, 'PENDING_LICENSE_REVIEW');
+  for (const k of ['hostAllowed', 'robotsVerified', 'schemaVerified',
+    'officialFileUrlVerified', 'termsVerified']) {
+    assert.equal(cde.verification[k], true, `${k} debería estar verificada en vivo`);
   }
-  assert.equal(cde.robots.allowedResources.length, 0,
-    'sin robots leído no hay ningún recurso permitido');
+  assert.equal(cde.verification.licenseVerified, false,
+    'no se afirma licencia sin haber leído la declaración de copyright');
+
+  // El robots SÍ se leyó, y permite la ruta por omisión.
+  assert.equal(cde.robots.status, 'LEIDO');
+  assert.equal(cde.robots.httpStatus, 200);
+  assert.equal(cde.robots.disallowsOurPath, false);
+  assert.match(cde.robots.sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(cde.robots.allowedResources,
+    ['https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt']);
+
+  // El esquema se contrastó campo a campo contra el oficial, y las correcciones
+  // quedan escritas: la allowlist a ciegas nombraba columnas que no existen.
+  assert.equal(cde.schemaVerification.documentedFieldCount, 46);
+  assert.equal(cde.schemaVerification.allowlistFieldsAllExist, true);
+  assert.equal(cde.fields.allowedVerifiedAgainstSchema, true);
+  for (const inventada of ['Ext', 'Email', 'AdmEmail1', 'AdmFName1']) {
+    assert.ok(!cde.fields.allowed.includes(inventada));
+    assert.ok(!cde.fields.neverRequested.includes(inventada),
+      `prohibir "${inventada}", que no existe en el esquema, no protege nada`);
+  }
+  // Y la lista de nunca-pedidos es el complemento exacto sobre el esquema real.
+  assert.deepEqual(
+    [...cde.fields.allowed, ...cde.fields.neverRequested].sort(),
+    [...cde.schemaVerification.documentedFields].sort(),
+  );
+  for (const personal of ['AdmFName', 'AdmLName', 'Phone', 'Phone Ext', 'FaxNumber',
+    'Latitude', 'Longitude', 'MailStreet', 'MailZip']) {
+    assert.ok(cde.fields.neverRequested.includes(personal), `${personal} tiene que estar prohibida`);
+  }
+
+  // La licencia: lo que se leyó y lo que no, por separado.
+  assert.equal(cde.license.status, 'PARCIALMENTE_VERIFICADA');
+  assert.equal(cde.license.readDocuments.length, 2);
+  for (const d of cde.license.readDocuments) {
+    assert.equal(d.httpStatus, 200);
+    assert.match(d.sha256, /^[0-9a-f]{64}$/);
+  }
+  assert.equal(cde.license.unreadDocuments.length, 1);
+  assert.equal(cde.license.unreadDocuments[0].evasionAttempted, false,
+    'no se sortea un reto de bot-manager');
+  assert.ok(cde.blockers.some((b) => /Copyright/i.test(b)));
   assert.equal(cde.replaces, 'hcai_facilities');
   assert.equal(cde.egressHost, 'www.cde.ca.gov');
   assert.notEqual(cde.egressHost, 'data.chhs.ca.gov', 'no se reutiliza el host retirado');
@@ -224,7 +264,10 @@ test('un robots que no se ha leído tampoco abre la puerta', async () => {
   const m = JSON.parse(fs.readFileSync(new URL('../config/scouts/cde_schools.json', import.meta.url), 'utf8'));
   m.enabled = true;
   m.eligible = true;
-  m.state = 'ENABLED';   // el robots se queda como está: sin leer
+  // Ya no queda ninguna fuente en el repo con el robots sin leer —CDE lo leyó—,
+  // así que se reconstruye ese estado: es el que hubo hasta hoy, y el cerrojo
+  // tiene que seguir mordiendo.
+  m.robots = { status: 'NO_LEIDO', disallowsOurPath: null, interpretation: 'no se ha leído' };
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(m, null, 2));
   for (const otro of ['cslb_contractors', 'hud_multifamily']) {
     fs.copyFileSync(new URL(`../config/scouts/${otro}.json`, import.meta.url), path.join(dir, `${otro}.json`));
@@ -576,11 +619,29 @@ test('el volcado se descarga una sola vez, del recurso exacto y nada más', asyn
   } finally { s.close(); }
 });
 
-test('el manifiesto versionado no permite ningún recurso, y eso para la descarga', async () => {
-  // `allowedResources` está vacío a propósito mientras el robots no se haya
-  // leído. Sin el override de la prueba, el scout no sale a por nada.
-  const s = await fx.createFakeCdeServer();
+test('solo se descarga el recurso exacto que la auditoría permite', async () => {
+  // `allowedResources` tiene UNA entrada: la URL que la página de descarga del
+  // propio CDE publica. Cambiar el manifiesto para apuntar a otra cosa —otro
+  // informe, otro formato, otra ruta del mismo host— no vale.
+  const m = registry.manifestFor('cde_schools');
+  assert.deepEqual(m.robots.allowedResources,
+    ['https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt']);
+  assert.equal(m.downloadVerification.hrefObserved, m.downloadUrl,
+    'la URL no se dedujo: se copió del enlace oficial');
+
+  const dir = path.join(tmpDir, 'scouts-otro-recurso');
+  fs.mkdirSync(dir, { recursive: true });
+  const otro = JSON.parse(JSON.stringify(m));
+  otro.downloadUrl = 'https://www.cde.ca.gov/schooldirectory/report?rid=dl2&tp=txt';
+  fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(otro, null, 2));
+  for (const id of ['cslb_contractors', 'hud_multifamily']) {
+    fs.copyFileSync(path.join(manifestDir, `${id}.json`), path.join(dir, `${id}.json`));
+  }
+
+  const original = process.env.SCOUT_MANIFEST_DIR;
+  process.env.SCOUT_MANIFEST_DIR = dir;
   try {
+    registry.loadManifests({ reload: true, dir });
     await assert.rejects(
       () => runScout('cde_schools', {
         cities: CIUDADES, zips: ZIPS, quotaOptions: nuevoEstado(), sleep: async () => {},
@@ -588,7 +649,23 @@ test('el manifiesto versionado no permite ningún recurso, y eso para la descarg
       }),
       /no está en los recursos permitidos/,
     );
-    assert.deepEqual(s.requests, []);
+  } finally {
+    process.env.SCOUT_MANIFEST_DIR = original;
+    registry.loadManifests({ reload: true, dir: manifestDir });
+  }
+});
+
+test('si el volcado deja de traer una columna de la allowlist, se para', async () => {
+  // Es la promesa que el manifiesto hace por escrito: contrastar la cabecera y
+  // fallar cerrado. Sin esto, perder `Zip` significaría dejar de exigir dirección
+  // completa sin que nadie se enterase.
+  const s = await fx.createFakeCdeServer({ mode: 'missingColumn' });
+  try {
+    await assert.rejects(() => corre('cde_schools', s), (err) => {
+      assert.match(err.message, /esquema del volcado .* cambió/);
+      assert.match(err.message, /Zip/);
+      return true;
+    });
   } finally { s.close(); }
 });
 
@@ -789,8 +866,17 @@ test('la procedencia del volcado trae su huella, y no afirma una licencia que no
     assert.match(pr.fileSha256, /^[0-9a-f]{64}$/);
     assert.ok(pr.fileBytes > 0);
     assert.equal(pr.delimiter, 'tab');
-    assert.equal(pr.license.status, 'NO_VERIFICADA');
-    assert.match(pr.license.note, /No se asume dominio publico/);
+    assert.equal(pr.license.status, 'PARCIALMENTE_VERIFICADA');
+    // La procedencia lleva lo que se leyó Y lo que no: una ficha que solo
+    // enseñara los documentos favorables no sería procedencia, sería publicidad.
+    assert.equal(pr.license.readDocuments.length, 2);
+    assert.equal(pr.license.unreadDocuments.length, 1);
+    assert.match(pr.license.conclusion, /no se ha podido leer|no restringen/);
+    // Y la cabecera que se procesó queda contada, sin copiar un solo nombre de
+    // columna: un volcado con la cabecera corrida metería texto arbitrario aquí.
+    assert.equal(pr.headerColumns, fx.CDE_HEADER.length);
+    assert.equal(pr.headerUnexpectedCount, 0);
+    assert.equal(pr.headerUnexpected, undefined);
   } finally { s.close(); }
 });
 

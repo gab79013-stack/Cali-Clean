@@ -193,6 +193,7 @@ export async function fetchCsvToTemp(url, {
 export async function* streamCsvObjects(file, {
   chunkBytes = CSV_DEFAULTS.readChunkBytes,
   delimiter = ',',
+  onHeader = null,
 } = {}) {
   const parser = new CsvParser({ delimiter });
   const fd = fs.openSync(file, 'r');
@@ -208,6 +209,10 @@ export async function* streamCsvObjects(file, {
         lineNo++;
         if (!header) {
           header = cells.map((c) => c.trim());
+          // La cabecera se entrega antes de la primera fila, para que quien
+          // llama pueda contrastarla con el esquema que atestiguó y parar si no
+          // coincide. Si `onHeader` lanza, el `finally` cierra el descriptor.
+          if (onHeader) onHeader(header);
           continue;
         }
         // Una línea en blanco al final no es una fila.

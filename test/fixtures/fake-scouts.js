@@ -21,11 +21,12 @@ export const PII_PROHIBIDA = [
   'BondAmount', 'WorkersCompInsurance', 'PolicyNumber', 'MailingAddress',
   'PROJECT_MANAGER_NAME_TEXT', 'MGMT_CONTACT_FULL_NAME', 'LATITUDE', 'LONGITUDE',
   'ADMINISTRATOR',
-  // Del volcado del directorio de escuelas: administradores, contacto y coordenadas.
-  'Fernandez', 'afernandez@ejemplo.invalid', 'wchen@ejemplo.invalid', 'office@ejemplo.invalid',
-  '(619) 555-0142', '(619) 555-0188', '(619) 555-0101', 'principal.personal@ejemplo.invalid',
-  'AdmFName1', 'AdmLName1', 'AdmEmail1', 'AdmEmail2', 'Latitude', 'Longitude',
-  'MailStreet', 'FaxNumber', '4100 Normal St',
+  // Del volcado del directorio de escuelas: el administrador de cada centro, su
+  // contacto y las coordenadas. Los nombres de columna son los del esquema real.
+  'Fernandez', 'principal.personal@ejemplo.invalid',
+  '(619) 555-0142', '(619) 555-0188', '(619) 555-0101',
+  'AdmFName', 'AdmLName', 'Phone Ext', 'Latitude', 'Longitude',
+  'MailStreet', 'MailStrAbr', 'MailZip', 'FaxNumber', '4100 Normal St',
 ];
 
 // ── 1. CSLB · WebForms + CSV ─────────────────────────────────
@@ -308,16 +309,23 @@ export function createFakeArcgisServer({ mode = 'ok', rows = HUD_ROWS, pageSize 
 }
 
 // ── 3. CDE · directorio de escuelas (TSV) ────────────────────
+// Cabecera REAL del volcado, copiada del esquema oficial que el CDE publica en
+// /ds/si/ds/fspubschls.asp (revisado el 2024-09-19): 46 columnas, en ese orden.
+// La primera versión de este fixture se escribió a ciegas y se equivocaba en tres
+// cosas que importaban — inventaba `Ext` (se llama `Phone Ext`, con espacio), una
+// columna `Email` que no existe, y `AdmFName1/2/3` + `AdmEmail1/2/3` donde el
+// archivo trae `AdmFName` y `AdmLName` en singular y ningún correo.
 export const CDE_HEADER = [
   'CDSCode', 'NCESDist', 'NCESSchool', 'StatusType', 'County', 'District', 'School',
   'Street', 'StreetAbr', 'City', 'Zip', 'State',
-  'MailStreet', 'MailCity', 'MailZip',
-  'Phone', 'Ext', 'FaxNumber', 'Email', 'Website',
-  'OpenDate', 'ClosedDate', 'Charter', 'FundingType', 'DOC', 'DOCType', 'SOC', 'SOCType',
-  'EdOpsCode', 'EILCode', 'EILName', 'GSoffered', 'GSserved', 'Virtual', 'Magnet',
+  'MailStreet', 'MailStrAbr', 'MailCity', 'MailZip', 'MailState',
+  'Phone', 'Phone Ext', 'FaxNumber', 'Website',
+  'OpenDate', 'ClosedDate', 'Charter', 'CharterNum', 'FundingType',
+  'DOC', 'DOCType', 'SOC', 'SOCType',
+  'EdOpsCode', 'EdOpsName', 'EILCode', 'EILName', 'GSoffered', 'GSserved',
+  'Virtual', 'Magnet', 'YearRound', 'FederalDFCDistrictID',
   'Latitude', 'Longitude',
-  'AdmFName1', 'AdmLName1', 'AdmEmail1', 'AdmFName2', 'AdmLName2', 'AdmEmail2',
-  'LastUpDate',
+  'AdmFName', 'AdmLName', 'LastUpDate', 'Multilingual',
 ];
 
 export function cdeRow(partial) {
@@ -326,17 +334,18 @@ export function cdeRow(partial) {
     County: 'San Diego', District: 'San Diego Unified', School: '',
     Street: '1200 Harbor Blvd', StreetAbr: '1200 Harbor Blvd', City: 'San Diego',
     Zip: '92101-1234', State: 'CA',
-    MailStreet: '4100 Normal St', MailCity: 'San Diego', MailZip: '92103',
-    Phone: '(619) 555-0142', Ext: '203', FaxNumber: '(619) 555-0188',
-    Email: 'office@ejemplo.invalid', Website: 'www.ejemplo-escuela.invalid',
-    OpenDate: '1998-08-15', ClosedDate: '', Charter: 'N', FundingType: 'Directly funded',
+    MailStreet: '4100 Normal St', MailStrAbr: '4100 Normal St',
+    MailCity: 'San Diego', MailZip: '92103', MailState: 'CA',
+    Phone: '(619) 555-0142', 'Phone Ext': '203', FaxNumber: '(619) 555-0188',
+    Website: 'www.ejemplo-escuela.invalid',
+    OpenDate: '1998-08-15', ClosedDate: '', Charter: 'N', CharterNum: '',
+    FundingType: 'Directly funded',
     DOC: '54', DOCType: 'Unified School District', SOC: '60', SOCType: 'Elementary Schools (Public)',
-    EdOpsCode: 'TRAD', EILCode: 'ELEM', EILName: 'Elementary',
-    GSoffered: 'K-5', GSserved: 'K-5', Virtual: 'N', Magnet: 'N',
+    EdOpsCode: 'TRAD', EdOpsName: 'Traditional', EILCode: 'ELEM', EILName: 'Elementary',
+    GSoffered: 'K-5', GSserved: 'K-5', Virtual: 'N', Magnet: 'N', YearRound: 'N',
+    FederalDFCDistrictID: '0634410',
     Latitude: '32.715711', Longitude: '-117.161100',
-    AdmFName1: 'Ana', AdmLName1: 'Fernandez', AdmEmail1: 'afernandez@ejemplo.invalid',
-    AdmFName2: 'Wei', AdmLName2: 'Chen', AdmEmail2: 'wchen@ejemplo.invalid',
-    LastUpDate: '2026-09-30',
+    AdmFName: 'Ana', AdmLName: 'Fernandez', LastUpDate: '2026-09-30', Multilingual: 'N',
   };
   return { ...base, ...partial };
 }
@@ -386,7 +395,8 @@ export const CDE_TSV_SHA256 = crypto.createHash('sha256').update(CDE_TSV, 'utf8'
 
 /**
  * Servidor del volcado del directorio.
- * mode: ok | notModified | truncated | oversize | malformed | unknownColumns | empty
+ * mode: ok | notModified | truncated | oversize | malformed | unknownColumns |
+ *       missingColumn | empty
  */
 export function createFakeCdeServer({ mode = 'ok', body = null, etag = '"cde-1"', lastModified = 'Wed, 30 Sep 2026 10:00:00 GMT' } = {}) {
   const requests = [];
@@ -425,6 +435,12 @@ export function createFakeCdeServer({ mode = 'ok', body = null, etag = '"cde-1"'
       payload = cdeTsv([conExtras], {
         header: [...CDE_HEADER, 'PrincipalMobile', 'PrincipalPersonalEmail'],
       });
+    }
+    if (mode === 'missingColumn') {
+      // El publicador deja de publicar una columna de la allowlist. Y no una
+      // cualquiera: sin `Zip` no se puede exigir dirección completa, así que la
+      // allowlist atestiguada dejaría de significar lo que dice la constancia.
+      payload = cdeTsv(CDE_ROWS, { header: CDE_HEADER.filter((h) => h !== 'Zip') });
     }
     if (mode === 'empty') payload = '';
 

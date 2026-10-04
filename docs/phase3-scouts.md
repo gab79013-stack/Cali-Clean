@@ -6,7 +6,7 @@
 |---|---|---|
 | CaliClean Property & Manager Scout (HUD) | **ENABLED** | robots inexistente, API pública, esquema verificado en vivo desde Cloud |
 | CaliClean State License Scout (CSLB) | `BLOCKED_BY_PUBLISHER` | la secuencia de descarga existe y se verificó control por control, pero el WAF del portal la rechaza con 403 |
-| CaliClean Education & Childcare Facility Scout (CDE) | `UNVERIFIED_DISABLED` | su host no está permitido: no se han podido leer licencia, términos, robots ni esquema |
+| CaliClean Education & Childcare Facility Scout (CDE) | `PENDING_LICENSE_REVIEW` | auditada en vivo y bien en todo menos una cosa: la declaración de copyright del sitio no es legible |
 
 `CaliClean Commercial Facility Scout` (HCAI/CDPH) fue **retirada** y sustituida
 por la de centros educativos. El expediente está en `docs/retired/`.
@@ -23,12 +23,42 @@ County y City no se tocaron: siguen habilitadas, con su Routine y su comando.
 | CaliClean Property & Manager Scout | `egis.hud.gov` | `/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query` |
 | CaliClean Education & Childcare Facility Scout | `www.cde.ca.gov` | `/schooldirectory/report?rid=dl1&tp=txt` (volcado TSV) |
 
-Los dos primeros están permitidos y verificados desde este contenedor. El
-tercero **no**: `www.cde.ca.gov` da `CONNECT tunnel failed, response 403`. Hasta
-que lo esté, su evidencia declara `evidencePending: true` y
-`liveVerifiedFromCloud: false`, y **eso invalida la attestation a propósito**:
-una fuente cuya evidencia nadie ha podido comprobar no cruza la puerta. Un
-`sha256` de ceros se trata como evidencia AUSENTE, no como una huella débil.
+Los tres están permitidos y los tres se han comprobado desde este contenedor.
+CDE tiene cuatro artefactos con huella real y uno ausente, y ese uno le invalida
+la attestation **a propósito**: un `sha256` de ceros se trata como evidencia
+AUSENTE, no como una huella débil, así que la fuente no cruza la puerta.
+
+### Auditoría de CDE: qué se leyó y qué no
+
+Cinco comprobaciones, cuatro en verde:
+
+| Qué | Resultado |
+|---|---|
+| `robots.txt` | **200**, 1696 B, `sha256:7f85d836…f825`. Ninguna directiva de `User-agent: *` alcanza `/schooldirectory/report`; sin `Crawl-delay` |
+| archivo oficial | la página de descarga del CDE enlaza exactamente `…/schooldirectory/report?rid=dl1&tp=txt`. La URL **se copió, no se dedujo** |
+| esquema | `fspubschls.asp`, revisado el 2024-09-19: **46 columnas**. Las 20 de la allowlist existen las 20 |
+| términos | `Conditions of Use` leídas: privacidad y responsabilidad, **sin** prohibición de reutilización, cláusula no comercial ni restricción de automatización |
+| **licencia** | **no legible.** `GET /re/cr/` → 302 a `validate.perfdrive.com` (bot manager de Radware) |
+
+**La allowlist declarada a ciegas estaba mal, y el esquema real lo demostró.**
+Nombraba `Ext` (se llama `Phone Ext`, con espacio), una columna `Email` que no
+existe, y `AdmFName1/2/3` + `AdmEmail1/2/3` donde el archivo trae `AdmFName` y
+`AdmLName` en singular y ningún correo. Prohibir columnas inventadas no protege
+nada: la lista de nunca-pedidos es ahora el complemento **exacto** de la
+allowlist sobre las 46 columnas reales, y dentro están los datos de persona que
+el archivo sí trae.
+
+**Por qué sigue apagada.** Los términos que gobiernan este archivo se leyeron y
+no restringen la reutilización; el `Data Disclaimer` del propio CDE incluso
+nombra "contactar a la agencia" como el uso previsto. Lo que no se pudo leer es
+la declaración de copyright del sitio, que es justo donde viviría el "salvo
+indicación contraria" de la información estatal de California — y cada página
+lleva un `© California Department of Education` en el pie, que es una afirmación
+de copyright sin concesión adjunta. **No se intentó sortear el reto**: ni se
+ejecutó su JavaScript ni se cambió la huella del cliente.
+
+La preview real no necesita esa página, porque no escribe nada. Cargar Companies
+sí.
 
 ### Dos cerrojos que ningún flag abre
 
@@ -38,9 +68,16 @@ en dos direcciones:
 - un robots que **prohíbe** la ruta bloquea aunque alguien ponga `enabled: true`
   (`robots_prohibe`). Esto está aquí porque pasó: el de `data.chhs.ca.gov`
   resultó legible y prohibía justo `/api/`, y por eso HCAI se retiró;
-- un robots que **nadie ha leído** bloquea igual (`robots_sin_leer`). Es el caso
-  de CDE hoy. "Desconocer no es permiso" estaba escrito en su manifiesto, y una
-  frase en un JSON no detiene nada; ahora es un cerrojo.
+- un robots que **nadie ha leído** bloquea igual (`robots_sin_leer`). Fue el
+  caso de CDE hasta que se leyó. "Desconocer no es permiso" estaba escrito en su
+  manifiesto, y una frase en un JSON no detiene nada; ahora es un cerrojo.
+
+Y uno más, en el propio scout: al descargar se contrasta la **cabecera real**
+contra el esquema atestiguado. Si falta una columna de la allowlist, la corrida
+se para — perder `Zip` significaría dejar de exigir dirección completa sin que
+nadie se enterase. Una columna de más no para nada, porque la allowlist es
+cerrada y se cae sola; se cuenta en la procedencia, y solo la cuenta: el nombre
+de una columna sale del archivo igual que su contenido.
 
 ---
 
@@ -193,8 +230,8 @@ fuente de cuidado infantil del CDSS, los Family Child Care Homes operan desde la
 vivienda del titular: quedan fuera por definición, igual que cualquier tipo que no
 se pueda afirmar institucional. Este scout solo acepta **centros**.
 
-**Nunca** `Phone`, `Ext`, `FaxNumber`, `Email`, `AdmFName*`, `AdmLName*`,
-`AdmEmail*`, `Latitude`, `Longitude` ni los campos `Mail*`. La allowlist es
+**Nunca** `AdmFName`, `AdmLName`, `Phone`, `Phone Ext`, `FaxNumber`,
+`Latitude`, `Longitude` ni el bloque `Mail*` completo. La allowlist es
 cerrada, así que una columna nueva con datos de una persona se cae **sin esperar a
 que alguien la prohíba**.
 
@@ -203,9 +240,13 @@ la fuente. No se adivina, no se construye y no se visita.
 
 **Clave:** `cde:<CDSCode>` + dedupe por nombre+dirección normalizados.
 
-**Licencia: NO verificada.** No se asume dominio público. La información estatal
-de California lo es "salvo indicación contraria", y la indicación contraria es
-justo lo que hay que ir a leer — y para leerla hace falta el host.
+**Licencia: parcialmente verificada.** Ver la tabla de auditoría arriba. No se
+asume dominio público mientras la declaración de copyright no sea legible.
+
+**Y lo que la fuente publica no es un hecho verificado.** El propio CDE avisa de
+que los centros autodeclaran estos datos voluntariamente y pueden estar
+desactualizados o tener errores. Lo que se afirma del candidato es "esto es lo
+que el directorio oficial publica hoy", no "esto es correcto".
 
 ---
 
@@ -259,9 +300,7 @@ Permitidos y verificados desde este contenedor:
     web.cslb.ca.gov
     egis.hud.gov
 
-Pendiente, y es el único que falta para poder auditar CDE de verdad:
-
     www.cde.ca.gov
 
-Mientras no esté, CDE se queda `UNVERIFIED_DISABLED`. No se ha editado la
-política de red: ese cambio es del usuario.
+`data.chhs.ca.gov` se retiró de la política al retirarse HCAI, y está comprobado
+que ya no responde.

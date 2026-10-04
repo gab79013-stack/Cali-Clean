@@ -1,13 +1,14 @@
 {
-  "$comment": "Evidencia del scout de centros educativos. Esta VACIA a proposito: el host no esta permitido en la politica de red, asi que no hay nada que esta sesion haya podido observar. El marcador de artefacto ausente mantiene la fuente cerrada.",
+  "$comment": "Evidencia del scout de centros educativos, recogida EN VIVO desde este contenedor el 2026-10-04 contra www.cde.ca.gov. Cuatro artefactos con huella real: robots.txt, la pagina de descarga oficial, el esquema del archivo y las Conditions of Use. El quinto —el Copyright Statement— no es legible: esta tras un reto de bot-manager. Ese artefacto ausente mantiene la fuente cerrada, que es lo correcto.",
   "version": 1,
   "kind": "hash-based-attestation",
-  "generatedAt": "2026-10-04T15:40:00.000Z",
-  "evidenceCollectedAt": "2026-10-04T15:40:00.000Z",
+  "generatedAt": "2026-10-04T17:40:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T17:35:00.000Z",
   "collectedFrom": {
-    "method": "ninguno: el host no esta permitido en la politica de red de este entorno",
-    "liveVerifiedFromCloud": false,
-    "note": "Se intento UNA comprobacion y el proxy respondio 403 (CONNECT tunnel failed). No se ha leido el robots, ni los terminos, ni la licencia, ni el esquema. Nada de lo que el manifiesto describe esta verificado."
+    "method": "GET directos desde el contenedor de Claude Cloud, a traves del proxy del entorno",
+    "liveVerifiedFromCloud": true,
+    "requestsMade": 6,
+    "note": "Seis peticiones en total, todas a www.cde.ca.gov y ninguna al archivo de datos: robots.txt, la pagina de descarga, el esquema, la pagina de informacion web, la Web Policy y las Conditions of Use; mas dos intentos al Copyright Statement que devolvieron 302 al reto de Radware. El volcado de 7 MB NO se ha descargado: eso lo hace el scout, una sola vez, cuando la fuente se encienda."
   },
   "sources": {
     "cde_schools": {
@@ -18,40 +19,190 @@
       "downloadUrl": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
       "egressHost": "www.cde.ca.gov",
       "license": {
-        "status": "NO_VERIFICADA",
-        "expectedTermsUrl": "https://www.cde.ca.gov/re/di/ws/",
-        "note": "Sin leer. No se asume dominio publico."
+        "status": "PARCIALMENTE_VERIFICADA",
+        "readDocuments": [
+          {
+            "name": "Conditions of Use",
+            "url": "https://www.cde.ca.gov/re/di/ws/conditionsofuse.asp",
+            "httpStatus": 200,
+            "bytes": 58555,
+            "sha256": "fefb6f21a041da517902a6a6f648f316e4135cf4516c4abe0244c4a665a44cdb",
+            "policyDated": "2003-10-09",
+            "lastReviewed": "2022-03-21",
+            "finding": "Es una politica de privacidad y de responsabilidad, no una licencia de datos. NO contiene prohibicion de reutilizacion ni de redistribucion, ni clausula de uso no comercial, ni restriccion de automatizacion. Su seccion Public Disclosure remite al marco de registros publicos de California; su Limitation of Liability niega toda garantia de exactitud; incluye una clausula de indemnizacion por el uso del servicio."
+          },
+          {
+            "name": "Data Disclaimer de los archivos de escuelas publicas",
+            "url": "https://www.cde.ca.gov/ds/si/ds/pubschls.asp",
+            "httpStatus": 200,
+            "bytes": 46825,
+            "sha256": "998af3e8e0ee98462db9c35926e82319bcaabe7d5d5c36e87f50abd614b9f9de",
+            "lastReviewed": "2026-04-02",
+            "quote": "\"...information, or the absence of information, in the Directory should not be relied upon for any purpose and should be used only to contact the LEA.\"",
+            "finding": "Terminos especificos de ESTE conjunto de datos. Los publica el propio CDE y dicen dos cosas que importan: (1) la informacion la autodeclaran voluntariamente las agencias educativas y puede estar desactualizada o tener errores, asi que NO se puede tratar como hecho verificado; (2) el uso que la fuente nombra es justamente contactar a la agencia. No prohibe reutilizar."
+          }
+        ],
+        "unreadDocuments": [
+          {
+            "name": "Copyright Statement",
+            "url": "https://www.cde.ca.gov/re/cr/",
+            "httpStatus": 302,
+            "redirectsTo": "https://validate.perfdrive.com/ (Radware bot manager)",
+            "attemptsMade": 2,
+            "evasionAttempted": false,
+            "whyItMatters": "Es el documento donde viviria el \"salvo indicacion contraria\" de la informacion estatal de California. Sin leerlo no se afirma dominio publico. Cada pagina del sitio lleva un \"(c) California Department of Education\" en el pie, que es una afirmacion de copyright sin concesion adjunta, y este es el documento que la cualificaria."
+          }
+        ],
+        "conclusion": "Los terminos que gobiernan ESTE archivo se han leido y no restringen la reutilizacion. Lo que no se ha podido leer es la declaracion de copyright del sitio. Por eso la fuente se deja apagada: la preview real se puede hacer sin escribir nada, pero cargar Companies a partir de ella es una decision que necesita ese documento delante."
       },
       "robots": {
-        "status": "NO_LEIDO",
+        "status": "LEIDO",
         "url": "https://www.cde.ca.gov/robots.txt",
-        "disallowsOurPath": null,
+        "observedAt": "2026-10-04T17:30:00.000Z",
+        "httpStatus": 200,
+        "bytes": 1696,
+        "sha256": "7f85d8369a0bfc363dafaf9a305820afbc4ffad60bc001a092caf28ef445f825",
+        "userAgentSection": "*",
+        "disallowsOurPath": false,
+        "disallowsOurPathBasis": "Ninguna directiva del bloque \"User-agent: *\" alcanza /schooldirectory/report. Las que hay cubren /ls/fa/sf/documents/, /be/ag/ag/**, /ls/pf/c1*..c9*, /re/pn/fb/**, /ds/sh/sn/documents/*.xls, /re/di/sd/*, y los patrones *azindex/, *sitemap/ y *print=yes. Nuestra URL no contiene print=yes.",
+        "relevantDirectives": [
+          "Disallow: /re/di/sd/*",
+          "Disallow: /*azindex/",
+          "Disallow: /*sitemap/",
+          "Disallow: /*print=yes"
+        ],
+        "crawlDelay": null,
+        "interpretation": "El robots permite esta ruta de forma explicita por omision, y ademas la pagina de documentacion del propio CDE publica este archivo como su via de descarga masiva. Son dos cosas distintas y las dos hacen falta: el robots gobierna el metodo de acceso, los terminos gobiernan la reutilizacion del dato.",
         "htmlCrawlingAllowed": false,
-        "interpretation": "No leido no es permitido.",
-        "allowedResources": []
+        "allowedResources": [
+          "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt"
+        ]
       },
       "limits": {
-        "maxAcceptedPerRun": 50,
+        "maxValidCandidatesPerRun": 50,
         "maxSuccessfulRunsPer24h": 1,
-        "requestsPerRun": 1
-      },
-      "schema": {
-        "verifiedAgainstLiveSource": false,
-        "fieldAllowlistDeclared": true,
-        "note": "La cabecera del volcado no se ha contrastado."
-      },
-      "artifacts": {
-        "directoryDownload": {
-          "url": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
-          "httpStatus": 0,
-          "httpStatusIsEvidence": true,
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "evidencePending": true,
-          "note": "No se pudo pedir: el proxy del entorno rechaza el host con 403. httpStatus 0 significa que no hubo respuesta, y el sha256 de ceros es el marcador de evidencia AUSENTE, no una huella."
+        "requestsPerRun": 1,
+        "maxBytes": 134217728,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000,
+          "jitter": "full",
+          "respectRetryAfter": true
         }
       },
-      "decision": "DESHABILITADA. Falta egress, licencia, terminos, robots y esquema."
+      "schema": {
+        "source": "https://www.cde.ca.gov/ds/si/ds/fspubschls.asp",
+        "httpStatus": 200,
+        "bytes": 59526,
+        "sha256": "29aee6fff1249792ba68d3f8bbb93a47a6ac8339cb96a24abbcc43659382c527",
+        "structureRevised": "2024-09-19",
+        "documentedFieldCount": 46,
+        "documentedFields": [
+          "CDSCode",
+          "NCESDist",
+          "NCESSchool",
+          "StatusType",
+          "County",
+          "District",
+          "School",
+          "Street",
+          "StreetAbr",
+          "City",
+          "Zip",
+          "State",
+          "MailStreet",
+          "MailStrAbr",
+          "MailCity",
+          "MailZip",
+          "MailState",
+          "Phone",
+          "Phone Ext",
+          "FaxNumber",
+          "Website",
+          "OpenDate",
+          "ClosedDate",
+          "Charter",
+          "CharterNum",
+          "FundingType",
+          "DOC",
+          "DOCType",
+          "SOC",
+          "SOCType",
+          "EdOpsCode",
+          "EdOpsName",
+          "EILCode",
+          "EILName",
+          "GSoffered",
+          "GSserved",
+          "Virtual",
+          "Magnet",
+          "YearRound",
+          "FederalDFCDistrictID",
+          "Latitude",
+          "Longitude",
+          "AdmFName",
+          "AdmLName",
+          "LastUpDate",
+          "Multilingual"
+        ],
+        "allowlistFieldsAllExist": true,
+        "correctionsMade": "La allowlist declarada a ciegas nombraba columnas que NO existen en el esquema real: \"Ext\" (se llama \"Phone Ext\", con espacio), \"Email\" (no hay columna de correo en este archivo), y AdmFName1/2/3, AdmLName1/2/3 y AdmEmail1/2/3 (el archivo trae AdmFName y AdmLName, en singular, y ningun correo de administrador). Tambien faltaban por nombrar MailStrAbr, MailState, CharterNum, EdOpsName, YearRound, FederalDFCDistrictID y Multilingual. Prohibir columnas inventadas no protege nada: la lista de nunca-pedidos es ahora el complemento exacto de la allowlist sobre el esquema real.",
+        "headerAssertion": "Al descargar se contrasta la cabecera real contra esta lista. Si falta una columna de la allowlist, la corrida se para: la allowlist dejaria de significar lo mismo. Una columna nueva no para nada porque la allowlist es cerrada y se cae sola."
+      },
+      "artifacts": {
+        "robotsTxt": {
+          "url": "https://www.cde.ca.gov/robots.txt",
+          "httpStatus": 200,
+          "bytes": 1696,
+          "sha256": "7f85d8369a0bfc363dafaf9a305820afbc4ffad60bc001a092caf28ef445f825",
+          "sha256Scope": "Cuerpo completo del robots.txt tal como se descargo el 2026-10-04T17:30Z.",
+          "finding": "Ninguna directiva del bloque \"User-agent: *\" alcanza /schooldirectory/report. Sin Crawl-delay."
+        },
+        "downloadPage": {
+          "url": "https://www.cde.ca.gov/ds/si/ds/pubschls.asp",
+          "httpStatus": 200,
+          "bytes": 46825,
+          "sha256": "998af3e8e0ee98462db9c35926e82319bcaabe7d5d5c36e87f50abd614b9f9de",
+          "sha256Scope": "Cuerpo HTML completo de la pagina oficial de descarga. Lleva el Data Disclaimer del directorio.",
+          "finding": "El enlace \"Public Schools and Districts (TXT; 7MB)\" apunta exactamente a https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt, que es la URL del manifiesto."
+        },
+        "fileStructure": {
+          "url": "https://www.cde.ca.gov/ds/si/ds/fspubschls.asp",
+          "httpStatus": 200,
+          "bytes": 59526,
+          "sha256": "29aee6fff1249792ba68d3f8bbb93a47a6ac8339cb96a24abbcc43659382c527",
+          "sha256Scope": "Cuerpo HTML completo del esquema oficial, revisado el 2024-09-19. 46 columnas documentadas.",
+          "finding": "Las 20 columnas de la allowlist existen las 20. Corrigio tres errores de la declaracion a ciegas: \"Phone Ext\" lleva espacio, no hay columna Email, y los administradores son AdmFName/AdmLName en singular sin correo."
+        },
+        "conditionsOfUse": {
+          "url": "https://www.cde.ca.gov/re/di/ws/conditionsofuse.asp",
+          "httpStatus": 200,
+          "bytes": 58555,
+          "sha256": "fefb6f21a041da517902a6a6f648f316e4135cf4516c4abe0244c4a665a44cdb",
+          "sha256Scope": "Cuerpo HTML completo, tras seguir el 302 interno del sitio.",
+          "finding": "Politica de privacidad y responsabilidad, no licencia de datos. Sin prohibicion de reutilizacion, sin clausula no comercial, sin restriccion de automatizacion."
+        },
+        "copyrightStatement": {
+          "url": "https://www.cde.ca.gov/re/cr/",
+          "httpStatus": 302,
+          "httpStatusIsEvidence": true,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sha256Scope": "NO HAY documento que hashear: la peticion no devuelve la pagina, devuelve un 302 al reto de Radware en validate.perfdrive.com. El verificador trata un sha256 de ceros como evidencia AUSENTE y falla cerrado, que es exactamente lo que toca aqui.",
+          "note": "Dos intentos, sin evasion: no se ejecuta el reto de JavaScript ni se cambia la huella del cliente. Es el unico artefacto que falta, y es el que decide si la informacion es reutilizable sin condiciones.",
+          "evidencePending": true
+        }
+      },
+      "decision": "DESHABILITADA. La auditoria en vivo salio bien en todo lo que se pudo comprobar —robots legible que permite la ruta, esquema oficial contrastado campo a campo con tres correcciones reales, URL del archivo confirmada contra la documentacion del CDE, y Conditions of Use leidas sin restriccion de reutilizacion— y queda un unico blocker: la declaracion de copyright del sitio no es legible desde aqui. Mientras lo sea, la fuente no se enciende para escribir. La preview real SI se puede hacer, porque no escribe nada.",
+      "downloadVerification": {
+        "officialDocumentationPage": "https://www.cde.ca.gov/ds/si/ds/pubschls.asp",
+        "linkTextObserved": "Public Schools and Districts (TXT; 7MB)",
+        "hrefObserved": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
+        "matchesManifest": true,
+        "note": "La URL del manifiesto se confirmo contra el enlace que publica la pagina oficial de descarga, no se dedujo. El mismo listado ofrece rid=dl2 (solo distritos) y tp=xlsx; este scout usa rid=dl1 y tp=txt y nada mas.",
+        "updateCadence": "La pagina declara que los archivos son \"dynamically driven and reflect real-time data\": no hay version ni fecha de corte publicada. La frescura por fila la da LastUpDate, y la del archivo, el GET condicional."
+      }
     }
   },
-  "digest": "sha256:9edb2a79250cab0cce038539b3a2247248a93255ac2048997528c08f16b45435"
+  "digest": "sha256:cb421addcef82c8a48449e9d36deec693b3eba57e18212278d1212db5e0ed869"
 }

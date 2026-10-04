@@ -207,8 +207,9 @@ async function runHud(scoutId, m, metrics, opts) {
 // ── 3. CaliClean Education & Childcare Facility Scout · CDE ──
 async function runCde(scoutId, m, metrics, opts) {
   // El volcado del directorio es un archivo estático delimitado por tabuladores.
-  // Se descarga una vez, se hashea entero y se borra: trae nombre, apellido y
-  // CORREO de hasta tres administradores por centro, y eso no se queda en disco.
+  // Se descarga una vez, se hashea entero y se borra: trae el nombre y el
+  // apellido del administrador de cada centro, su teléfono, su fax y las
+  // coordenadas, y nada de eso se queda en disco.
   const url = opts.downloadUrlOverride || m.downloadUrl;
   const permitidas = m.robots?.allowedResources || [];
   if (!opts.downloadUrlOverride && !permitidas.includes(url)) {
@@ -233,9 +234,29 @@ async function runCde(scoutId, m, metrics, opts) {
     }
     metrics.bytes += descarga.bytes;
 
+    // La cabecera real contra el esquema atestiguado. Que falte una columna de
+    // la allowlist NO es un detalle: la allowlist dejaría de significar lo que
+    // dice la constancia, así que la corrida se para. Una columna de más no para
+    // nada —la allowlist es cerrada y se cae sola—, pero se cuenta.
+    const esperados = allowedFields(scoutId);
+    let cabecera = null;
+    const comprobarCabecera = (cols) => {
+      cabecera = cols;
+      const faltan = esperados.filter((c) => !cols.includes(c));
+      if (faltan.length) {
+        throw new Error(
+          `El esquema del volcado de ${scoutId} cambió: faltan ${faltan.join(', ')}. `
+          + 'La allowlist atestiguada ya no describe este archivo, así que no se procesa.',
+        );
+      }
+    };
+
     const aceptados = [];
     const vistos = new Set();
-    for await (const parsed of streamCsvObjects(descarga.file, { delimiter: m.limits.delimiter || '\t' })) {
+    for await (const parsed of streamCsvObjects(descarga.file, {
+      delimiter: m.limits.delimiter || '\t',
+      onHeader: comprobarCabecera,
+    })) {
       metrics.fetched++;
       if (!parsed.ok) { metrics.rejected_malformed++; continue; }
 
@@ -288,6 +309,13 @@ async function runCde(scoutId, m, metrics, opts) {
         fileSha256: descarga.sha256,
         fileBytes: descarga.bytes,
         delimiter: 'tab',
+        // Cuántas columnas traía y cuántas no estaban en el esquema atestiguado.
+        // Solo la CUENTA: el nombre de una columna sale del archivo igual que su
+        // contenido, y un volcado con la cabecera corrida metería texto
+        // arbitrario en la procedencia. La cuenta basta para ver que algo cambió.
+        headerColumns: cabecera ? cabecera.length : null,
+        headerUnexpectedCount: cabecera ? cabecera.filter((c) => !esperados.includes(c)
+          && !(m.fields?.neverRequested || []).includes(c)).length : null,
       },
     };
   } finally {

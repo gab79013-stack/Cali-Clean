@@ -58,7 +58,14 @@ for (const entrada of resultados) {
   if (entrada.result.valid) continue;
   if (soloPendiente(entrada.result)) {
     pendientes++;
-    console.log('→ PENDIENTE por diseño: falta auditar esta fuente desde una red con acceso a su host.');
+    // Qué falta exactamente, no "falta auditar": una fuente puede tener cuatro
+    // artefactos con huella real y caerse por el quinto, y decir lo contrario
+    // convertiría este comando en un adorno.
+    const ausentes = Object.entries(entrada.att.sources || {})
+      .flatMap(([, src]) => Object.entries(src.artifacts || {}))
+      .filter(([, art]) => art?.evidencePending === true || /^0{64}$/.test(String(art?.sha256 || '')))
+      .map(([nombre]) => nombre);
+    console.log(`→ PENDIENTE por diseño: sin evidencia de ${ausentes.join(', ') || 'algún artefacto'}.`);
     console.log('  La attestation no vale, y por eso su fuente no puede cruzar la puerta. Correcto.');
   } else {
     fallos++;
@@ -104,15 +111,24 @@ const dominios = [...new Set(
 )];
 console.log('NO comprobado, y por qué:');
 console.log(`  · Los SHA256 de ${artefactos.join(', ') || '—'} son evidencia IMPORTADA.`);
-console.log('    Recomputarlos exigiría descargar los artefactos, y esta sesión no tiene');
-console.log(`    egress a ${dominios.join(', ') || 'esos dominios'}. Se registran, no se validan.`);
+// Y se dice la verdad sobre POR QUÉ no se recomputan. Mientras no hubo egress el
+// motivo era ese; ahora que para algún host sí lo hay, el motivo es otro: este
+// comando no sale a la red a propósito, para poder correr en cualquier sitio.
+if (att.collectedFrom?.liveVerifiedFromCloud === true) {
+  console.log('    Recomputarlos exigiría volver a descargarlos, y este comando no sale a la');
+  console.log(`    red a propósito (${dominios.join(', ') || 'esos dominios'}). Se registran, no se validan.`);
+} else {
+  console.log('    Recomputarlos exigiría descargar los artefactos, y esta sesión no tiene');
+  console.log(`    egress a ${dominios.join(', ') || 'esos dominios'}. Se registran, no se validan.`);
+}
 console.log('  · No hay firma criptográfica: sin clave autorizada en el repositorio, una');
 console.log('    firma sería una afirmación que nadie puede comprobar. El digest dice que');
 console.log('    el documento no ha cambiado; no dice quién lo escribió.');
 console.log('');
 
 console.log(`Peticiones de red realizadas por este verificador: ${result.checks.networkFetchPerformed ? 'SÍ' : '0'}`);
-console.log(`Peticiones de red realizadas por Claude Cloud para obtener esta evidencia: 0`);
+console.log('Peticiones de red realizadas por Claude Cloud para obtener esta evidencia: '
+  + `${att.collectedFrom?.requestsMade ?? 0}`);
 console.log('');
 
 if (result.problems.length) {
@@ -125,12 +141,14 @@ console.log(`Fuentes atestiguadas (${fuentes.length}): ${fuentes.join(', ') || '
 for (const [k, s] of Object.entries(att.sources || {})) {
   const arts = Object.keys(s.artifacts || {});
   console.log(`  ${k}`);
-  console.log(`    licencia: ${s.license?.licenseId}`);
+  console.log(`    licencia: ${s.license?.licenseId ?? s.license?.status ?? '—'}`);
 
   // El robots se describe distinto según lo que se pudo leer: fingir una forma
   // común para los dos portales ocultaría justo lo que importa.
   if (s.robots?.httpStatus !== undefined) {
-    console.log(`    robots: HTTP ${s.robots.httpStatus}, crawl-delay ${s.robots.crawlDelaySeconds}s`);
+    const cd = s.robots.crawlDelaySeconds ?? s.robots.crawlDelay;
+    console.log(`    robots: HTTP ${s.robots.httpStatus}, `
+      + (cd === null || cd === undefined ? 'sin crawl-delay' : `crawl-delay ${cd}s`));
   } else {
     console.log(`    robots: portal HTTP ${s.robots?.dataPortalStatus} · descarga HTTP ${s.robots?.downloadHostStatus}`
       + ` → crawling de HTML ${s.robots?.htmlCrawlingAllowed ? 'PERMITIDO (revísalo)' : 'prohibido'}`);
