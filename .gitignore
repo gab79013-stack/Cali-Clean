@@ -24,3 +24,10 @@ data/source-runtime-state.json.lock
 # Snapshots de fuentes: datos de negocio recogidos de registros públicos, con
 # hash y atados a la sesión que los creó. Son resultados, no código.
 data/snapshots/
+
+# Staging de los scouts de la fase 3: candidatos saneados, con hash, runId y
+# caducidad. Resultados, no codigo.
+data/staging/
+
+# Lock de la orquestacion de la fase 3.
+data/phase3.lock

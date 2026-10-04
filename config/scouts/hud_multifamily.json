@@ -1,0 +1,84 @@
+{
+  "$comment": "Manifiesto de un scout de la fase 3. Separado del allowlist de San Diego a proposito: cada scout responde por su propia evidencia, su propia cuota y su propia decision operativa. 'eligible' NO es 'enabled': elegible es permiso legal, habilitada es una decision humana que ademas exige egress.",
+  "version": 1,
+  "scoutId": "hud_multifamily",
+  "displayName": "CaliClean Property & Manager Scout",
+  "label": "Propiedades multifamiliares FHA/assisted · HUD",
+  "state": "ELIGIBLE_BUT_DISABLED",
+  "eligible": true,
+  "enabled": false,
+  "implemented": true,
+  "accessType": "arcgis-query",
+  "egressHost": "egis.hud.gov",
+  "dedupNamespace": "hud-mf",
+  "serviceArea": "San Diego County, CA",
+  "queryUrl": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query",
+  "metadataUrl": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0",
+  "license": {
+    "name": "HUD Open Data — OPEN Government Data Act",
+    "termsUrl": "https://www.hud.gov/open",
+    "note": "HUD describe su cartera como propiedades multifamiliares FHA/assisted, principalmente de 5 o mas unidades.",
+    "redistribution": "permitida"
+  },
+  "robots": {
+    "observed": "404 / sin politica",
+    "interpretation": "Un robots inexistente NO es permiso. Lo que autoriza es que el endpoint sea una API REST publica de HUD Open Data. Solo se pide ese endpoint de consulta.",
+    "htmlCrawlingAllowed": false
+  },
+  "limits": {
+    "maxAcceptedPerRun": 50,
+    "maxSuccessfulRunsPer24h": 1,
+    "pageSize": 200,
+    "maxPages": 25,
+    "timeoutMs": 60000,
+    "returnGeometry": false,
+    "retry": {
+      "maxAttempts": 4,
+      "baseMs": 1000,
+      "capMs": 30000,
+      "jitter": "full",
+      "respectRetryAfter": true
+    }
+  },
+  "filters": {
+    "minUnits": 5,
+    "state": "CA",
+    "countyScope": "ciudades y ZIP del condado de San Diego, validados explicitamente",
+    "excludeCategories": [
+      "single family",
+      "vacant land",
+      "land"
+    ],
+    "requireInstitutionalProperty": true,
+    "entityNote": "La Company representa la PROPIEDAD institucional (PROPERTY_NAME_TEXT), no a una persona. MGMT_AGENT_ORG_NAME solo sobrevive si es una entidad empresarial inequivoca Y existe un campo seguro donde ponerla; si no, se omite sin inventar esquema."
+  },
+  "fields": {
+    "allowed": [
+      "PROPERTY_ID",
+      "PROPERTY_NAME_TEXT",
+      "TOTAL_UNIT_COUNT",
+      "PROPERTY_CATEGORY_NAME",
+      "STD_ADDR",
+      "STD_CITY",
+      "STD_ST",
+      "STD_ZIP5",
+      "MGMT_AGENT_ORG_NAME"
+    ],
+    "neverRequested": [
+      "PROJECT_MANAGER_NAME_TEXT",
+      "MGMT_CONTACT_FULL_NAME",
+      "PHONE",
+      "EMAIL",
+      "OWNER",
+      "LATITUDE",
+      "LONGITUDE",
+      "geometry"
+    ],
+    "forbiddenReason": "Los campos de contacto y de persona no se piden al servidor: no se filtran despues, es que no se solicitan. returnGeometry=false por el mismo motivo."
+  },
+  "blockers": [
+    "Egress pendiente: egis.hud.gov no esta permitido en la red de Cloud.",
+    "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real."
+  ],
+  "decision": "Elegible: activo de HUD Open Data bajo la OPEN Government Data Act, API publica y campos institucionales. DESACTIVADA."
+}

@@ -1,0 +1,379 @@
+/**
+ * Ejecutar un scout: de la fuente oficial a un staging sellado, y nada más.
+ *
+ * El orden de los controles es el único correcto, y ninguno se puede saltar
+ * desde el llamante:
+ *
+ *   guard duro del outbound → puerta del scout → cuota durable (CRM, inyectada)
+ *   → cuota local y lock → petición acotada → filtrado por allowlist cerrada
+ *   → reglas de aceptación → deduplicación interna → staging sellado
+ *
+ * Lo que este módulo NO hace, y es deliberado: no importa el adaptador de Twenty.
+ * Un scout no sabe que existe un CRM. El índice del CRM, si hace falta para
+ * deduplicar, llega como un parámetro ya cargado por la capa central.
+ */
+
+import { config } from '../../config.js';
+import { withQuota } from '../sources/quota.js';
+import { checkDurableQuota } from '../sources/durable-quota.js';
+import {
+  assertScoutAllowed, assertOutboundDisabled, manifestFor,
+  emptyScoutMetrics, countRejection, allowedFields,
+} from './registry.js';
+import { writeStaging, newRunId } from './staging.js';
+import { evaluateCslbRow, evaluateHudRow, evaluateHcaiRow, crossKey, nameKey } from './rules.js';
+import { downloadMasterCsv } from './webforms-client.js';
+import { queryArcgis } from './arcgis-client.js';
+import { queryDatastore } from './ckan-client.js';
+import { streamCsvObjects } from '../sources/csv-client.js';
+
+/** Recorta una fila a la allowlist cerrada del scout. */
+export function trimToAllowed(scoutId, row) {
+  const permitidos = new Set(allowedFields(scoutId).map((f) => f.toLowerCase()));
+  const out = {};
+  const descartados = [];
+  for (const [k, v] of Object.entries(row || {})) {
+    if (permitidos.has(k.toLowerCase())) out[k] = v;
+    else descartados.push(k);
+  }
+  return { row: out, descartados };
+}
+
+/**
+ * Comprueba que un objeto no lleva ni una clave fuera de la allowlist.
+ *
+ * Es la aserción que corre justo antes de que algo entre en el staging. Que la
+ * fila ya esté recortada no quita que esta sea la frontera donde hay que
+ * comprobarlo, y quien añada mañana otro productor de candidatos no tiene por
+ * qué saberlo.
+ */
+export function assertOnlyAllowed(scoutId, obj, where = 'objeto') {
+  const permitidos = new Set(allowedFields(scoutId).map((f) => f.toLowerCase()));
+  for (const k of Object.keys(obj || {})) {
+    if (!permitidos.has(k.toLowerCase())) {
+      throw new Error(`Clave no permitida "${k}" en ${where} de ${scoutId}`);
+    }
+  }
+  return true;
+}
+
+// ── 1. CaliClean State License Scout · CSLB ──────────────────
+async function runCslb(scoutId, m, metrics, opts) {
+  const descarga = await downloadMasterCsv({
+    portalUrl: opts.portalUrlOverride || m.portalPage,
+    control: m.download.control,
+    datasetChoice: m.download.datasetChoice,
+    expectedAttachment: m.download.expectedAttachment,
+    fetchImpl: opts.fetchImpl,
+    sleep: opts.sleep,
+    clock: opts.clock,
+    random: opts.random,
+    userAgent: opts.userAgent,
+    maxBytes: m.limits.maxBytes,
+    timeoutMs: m.limits.timeoutMs,
+  });
+  metrics.requests += descarga.metrics.requests;
+  metrics.retries += descarga.metrics.retries;
+  metrics.http429 += descarga.metrics.http429;
+  metrics.bytes += descarga.bytes;
+
+  try {
+    const aceptados = [];
+    const vistos = new Set();
+    for await (const parsed of streamCsvObjects(descarga.file)) {
+      metrics.fetched++;
+      if (!parsed.ok) { metrics.rejected_malformed++; continue; }
+
+      // Las reglas se evalúan sobre la fila CRUDA, porque algunas miran columnas
+      // que el recorte no conserva (County, SecondaryStatus).
+      const v = evaluateCslbRow(parsed.row, m);
+      if (!v.ok) { countRejection(metrics, v.kind); continue; }
+
+      const dedupKey = `${m.dedupNamespace}:${v.licenseNo}`;
+      if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
+      vistos.add(dedupKey);
+
+      // El recorte, y la comprobación de que no quedó nada de más.
+      const { row: safe } = trimToAllowed(scoutId, parsed.row);
+      assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+      aceptados.push({
+        dedupKey,
+        sourceId: v.licenseNo,
+        businessName: v.businessName,
+        // Esta fuente NO conserva dirección a propósito.
+        address: null,
+        city: null,
+        zip: null,
+        serviceArea: m.serviceArea,
+        sourceUrl: m.portalPage,
+        evidence: {
+          licenseNo: v.licenseNo,
+          businessType: v.businessType,
+          primaryStatus: v.primaryStatus,
+          secondaryStatus: v.secondaryStatus,
+          classifications: v.classifications,
+          lastUpdate: v.lastUpdate,
+        },
+        matchKeys: { name: nameKey(v.businessName), cross: null },
+      });
+      metrics.accepted++;
+      if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
+    }
+    return {
+      aceptados,
+      provenance: {
+        portalPage: m.portalPage,
+        license: m.license,
+        csvSha256: descarga.sha256,
+        csvBytes: descarga.bytes,
+        downloadSteps: m.download.steps,
+      },
+    };
+  } finally {
+    // El volcado trae direcciones, teléfonos y personas. No se queda en disco.
+    descarga.dispose();
+  }
+}
+
+// ── 2. CaliClean Property & Manager Scout · HUD ──────────────
+async function runHud(scoutId, m, metrics, opts) {
+  const fields = allowedFields(scoutId);
+  const where = `STD_ST = '${String(m.filters.state).replace(/'/g, "''")}'`
+    + ` AND TOTAL_UNIT_COUNT >= ${Number(m.filters.minUnits)}`;
+
+  const { rows, metrics: q } = await queryArcgis(opts.queryUrlOverride || m.queryUrl, {
+    where,
+    outFields: fields,
+    orderBy: 'PROPERTY_ID ASC',
+    pageSize: m.limits.pageSize,
+    maxPages: m.limits.maxPages,
+    timeoutMs: m.limits.timeoutMs,
+    fetchImpl: opts.fetchImpl,
+    sleep: opts.sleep,
+    clock: opts.clock,
+    random: opts.random,
+    userAgent: opts.userAgent,
+  });
+  metrics.requests += q.requests;
+  metrics.bytes += q.bytes;
+  metrics.retries += q.retries;
+  metrics.http429 += q.http429;
+
+  const aceptados = [];
+  const vistos = new Set();
+  for (const row of rows) {
+    metrics.fetched++;
+    const v = evaluateHudRow(row, m, { cities: opts.cities, zips: opts.zips });
+    if (!v.ok) { countRejection(metrics, v.kind); continue; }
+
+    const dedupKey = `${m.dedupNamespace}:${v.propertyId}`;
+    if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
+    vistos.add(dedupKey);
+
+    const { row: safe } = trimToAllowed(scoutId, row);
+    assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+    aceptados.push({
+      dedupKey,
+      sourceId: v.propertyId,
+      businessName: v.businessName,
+      address: v.address,
+      city: v.city,
+      zip: v.zip,
+      serviceArea: m.serviceArea,
+      sourceUrl: m.metadataUrl,
+      evidence: {
+        propertyId: v.propertyId,
+        units: v.units,
+        category: v.category,
+        // El gestor viaja en el staging por si una decisión futura lo necesita, y
+        // marcado como NO escribible: no hay campo seguro en el CRM y añadirlo
+        // sería cambiar el esquema del cliente.
+        managementAgent: v.managementAgent,
+        managementAgentWritable: false,
+      },
+      matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
+    });
+    metrics.accepted++;
+    if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
+  }
+  return {
+    aceptados,
+    provenance: { queryUrl: m.queryUrl, metadataUrl: m.metadataUrl, license: m.license, where },
+  };
+}
+
+// ── 3. CaliClean Commercial Facility Scout · HCAI ────────────
+async function runHcai(scoutId, m, metrics, opts) {
+  const fields = allowedFields(scoutId);
+  const { rows, metrics: q, fields: devueltos } = await queryDatastore({
+    sqlEndpoint: opts.sqlEndpointOverride || m.catalog.sqlEndpoint,
+    resourceId: m.catalog.resourceId,
+    expectedResourceId: m.catalog.resourceId,
+    fields,
+    filters: { COUNTY_NAME: m.filters.county, FACILITY_STATUS_DESC: m.filters.facilityStatus },
+    orderBy: m.limits.stableOrder,
+    pageSize: m.limits.pageSize,
+    maxPages: m.limits.maxPages,
+    timeoutMs: m.limits.timeoutMs,
+    fetchImpl: opts.fetchImpl,
+    sleep: opts.sleep,
+    clock: opts.clock,
+    random: opts.random,
+    userAgent: opts.userAgent,
+  });
+  metrics.requests += q.requests;
+  metrics.bytes += q.bytes;
+  metrics.retries += q.retries;
+  metrics.http429 += q.http429;
+
+  // Si el DataStore devuelve un esquema que no contiene lo que pedimos, el
+  // recurso ha cambiado por debajo y la allowlist dejó de significar lo mismo.
+  if (Array.isArray(devueltos) && devueltos.length) {
+    const faltan = fields.filter((f) => !devueltos.includes(f));
+    if (faltan.length) {
+      throw new Error(
+        `el DataStore no devolvió los campos ${faltan.join(', ')}: el esquema cambió y no se continúa`,
+      );
+    }
+  }
+
+  const aceptados = [];
+  const vistos = new Set();
+  for (const row of rows) {
+    metrics.fetched++;
+    const v = evaluateHcaiRow(row, m);
+    if (!v.ok) { countRejection(metrics, v.kind); continue; }
+
+    const dedupKey = `${m.dedupNamespace}:${v.oshpdId}`;
+    if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
+    vistos.add(dedupKey);
+
+    const { row: safe } = trimToAllowed(scoutId, row);
+    assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+    aceptados.push({
+      dedupKey,
+      sourceId: v.oshpdId,
+      businessName: v.businessName,
+      address: v.address,
+      city: v.city,
+      zip: v.zip,
+      serviceArea: m.serviceArea,
+      sourceUrl: `https://data.chhs.ca.gov/dataset/${m.catalog.packageId}`,
+      evidence: {
+        oshpdId: v.oshpdId,
+        licenseNum: v.licenseNum,
+        facilityLevel: v.facilityLevel,
+        licenseType: v.licenseType,
+        licenseCategory: v.licenseCategory,
+      },
+      matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
+    });
+    metrics.accepted++;
+    if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
+  }
+  return {
+    aceptados,
+    provenance: {
+      packageId: m.catalog.packageId,
+      resourceId: m.catalog.resourceId,
+      sqlEndpoint: m.catalog.sqlEndpoint,
+      license: m.license,
+      attribution: m.license?.attributionRequired === true,
+    },
+  };
+}
+
+const EJECUTORES = {
+  cslb_contractors: runCslb,
+  hud_multifamily: runHud,
+  hcai_facilities: runHcai,
+};
+
+/**
+ * Corre un scout completo. Devuelve `{ staging, metrics, blocked }`.
+ *
+ * Si algo lo bloquea, `blocked` dice qué y no se ha tocado la red.
+ */
+export async function runScout(scoutId, {
+  fetchImpl,
+  sleep,
+  clock,
+  random,
+  userAgent = config.prospecting?.userAgent || null,
+  quotaOptions = {},
+  durableQuotaOptions = null,
+  cities = [],
+  zips = [],
+  runId = newRunId(),
+  ttlMs,
+  now = () => Date.now(),
+  // Solo para pruebas: apuntar un cliente a un servidor simulado.
+  portalUrlOverride = null,
+  queryUrlOverride = null,
+  sqlEndpointOverride = null,
+} = {}) {
+  const started = Date.now();
+  const metrics = emptyScoutMetrics();
+
+  // Guard duro, antes de cualquier otra cosa.
+  assertOutboundDisabled(config);
+
+  const m = manifestFor(scoutId);
+  if (!m) return { staging: null, metrics, blocked: { reason: 'scout_desconocido' } };
+  assertScoutAllowed(scoutId);
+
+  // Cuota durable entre contenedores, derivada del CRM e inyectada: el scout no
+  // habla con el CRM, solo recibe la respuesta.
+  if (durableQuotaOptions) {
+    const durable = await checkDurableQuota({ namespace: m.dedupNamespace, ...durableQuotaOptions });
+    if (!durable.allowed) {
+      metrics.quota_blocked = 1;
+      metrics.duration_ms = Date.now() - started;
+      return {
+        staging: null, metrics, durableQuota: durable,
+        blocked: { reason: durable.reason, detail: durable.detail, authority: durable.authority },
+      };
+    }
+  }
+
+  const ejecutor = EJECUTORES[scoutId];
+  const outcome = await withQuota(scoutId, async () => {
+    const r = await ejecutor(scoutId, m, metrics, {
+      fetchImpl, sleep, clock, random, userAgent, cities, zips,
+      portalUrlOverride, queryUrlOverride, sqlEndpointOverride,
+    });
+    return { rows: r.aceptados.length, consumed: true, ...r };
+  }, { maxRows: m.limits.maxAcceptedPerRun, ...quotaOptions });
+
+  metrics.duration_ms = Date.now() - started;
+
+  if (outcome.blocked) {
+    metrics.quota_blocked = 1;
+    return { staging: null, metrics, blocked: { reason: outcome.reason, detail: outcome.detail } };
+  }
+
+  const staging = writeStaging({
+    scoutId,
+    displayName: m.displayName,
+    candidates: outcome.result.aceptados,
+    metrics,
+    provenance: {
+      scoutId,
+      displayName: m.displayName,
+      egressHost: m.egressHost,
+      serviceArea: m.serviceArea,
+      collectedAt: new Date(now()).toISOString(),
+      ...outcome.result.provenance,
+    },
+    runId,
+    ttlMs,
+    now: now(),
+  });
+
+  return { staging, metrics, blocked: null };
+}
+
+export default runScout;

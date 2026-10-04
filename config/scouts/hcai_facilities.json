@@ -1,0 +1,92 @@
+{
+  "$comment": "Manifiesto de un scout de la fase 3. Separado del allowlist de San Diego a proposito: cada scout responde por su propia evidencia, su propia cuota y su propia decision operativa. 'eligible' NO es 'enabled': elegible es permiso legal, habilitada es una decision humana que ademas exige egress.",
+  "version": 1,
+  "scoutId": "hcai_facilities",
+  "displayName": "CaliClean Commercial Facility Scout",
+  "label": "Instalaciones sanitarias con licencia · HCAI (California)",
+  "state": "ELIGIBLE_BUT_DISABLED",
+  "eligible": true,
+  "enabled": false,
+  "implemented": true,
+  "accessType": "ckan-datastore",
+  "egressHost": "data.chhs.ca.gov",
+  "dedupNamespace": "hcai",
+  "serviceArea": "San Diego County, CA",
+  "catalog": {
+    "title": "Licensed Healthcare Facility Listing",
+    "publisher": "Department of Health Care Access and Information (HCAI)",
+    "packageId": "59d9abe7-2664-407a-a5aa-f89a866f3381",
+    "resourceId": "641c5557-7d65-4379-8fea-6b7dedbda40b",
+    "sqlEndpoint": "https://data.chhs.ca.gov/api/3/action/datastore_search_sql",
+    "searchEndpoint": "https://data.chhs.ca.gov/api/3/action/datastore_search",
+    "updateCadence": "mensual",
+    "currentPublished": "2026-10-02",
+    "noS3Redirect": "Solo la API de CKAN en el host exacto. Un redirect a S3 se rechaza: ese recurso no es el que se audito y no lleva el esquema que aqui se valida."
+  },
+  "license": {
+    "name": "Creative Commons Attribution",
+    "termsUrl": "https://data.chhs.ca.gov/pages/terms",
+    "attributionRequired": true,
+    "redistribution": "permitida con atribucion"
+  },
+  "robots": {
+    "observed": "404 / sin politica",
+    "interpretation": "Un robots inexistente NO es permiso. Lo que autoriza es el catalogo oficial de CA Open Data y su API CKAN publica. Solo se piden esos endpoints.",
+    "htmlCrawlingAllowed": false
+  },
+  "limits": {
+    "maxAcceptedPerRun": 50,
+    "maxSuccessfulRunsPer24h": 1,
+    "pageSize": 200,
+    "maxPages": 25,
+    "timeoutMs": 60000,
+    "stableOrder": "OSHPD_ID",
+    "retry": {
+      "maxAttempts": 4,
+      "baseMs": 1000,
+      "capMs": 30000,
+      "jitter": "full",
+      "respectRetryAfter": true
+    }
+  },
+  "filters": {
+    "county": "San Diego",
+    "facilityStatus": "Open",
+    "facilityLevelAllowed": [
+      "Parent Facility",
+      "Consolidated Facility"
+    ],
+    "facilityLevelNote": "Otra categoria institucional solo se admite con documentacion explicita y fixture. Un nivel que no se reconoce se descarta.",
+    "requireLicense": true,
+    "requireBusinessAddress": true
+  },
+  "fields": {
+    "allowed": [
+      "OSHPD_ID",
+      "FACILITY_NAME",
+      "LICENSE_NUM",
+      "FACILITY_LEVEL_DESC",
+      "DBA_ADDRESS1",
+      "DBA_CITY",
+      "DBA_ZIP_CODE",
+      "COUNTY_NAME",
+      "FACILITY_STATUS_DESC",
+      "LICENSE_TYPE_DESC",
+      "LICENSE_CATEGORY_DESC"
+    ],
+    "neverRequested": [
+      "LATITUDE",
+      "LONGITUDE",
+      "ADMINISTRATOR",
+      "CONTACT",
+      "PHONE",
+      "EMAIL"
+    ],
+    "forbiddenReason": "Ni coordenadas, ni contacto, ni dato de paciente o de personal. La fila cruda no se conserva en ningun sitio."
+  },
+  "blockers": [
+    "Egress pendiente: data.chhs.ca.gov no esta permitido en la red de Cloud.",
+    "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real."
+  ],
+  "decision": "Elegible: catalogo oficial de CA Open Data, licencia Creative Commons Attribution, actualizacion mensual y API CKAN publica. DESACTIVADA."
+}

@@ -1,0 +1,90 @@
+{
+  "$comment": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T09:00:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
+  "collectedFrom": {
+    "method": "auditoria manual desde la red local autorizada del operador",
+    "liveVerifiedFromCloud": false,
+    "note": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio."
+  },
+  "sources": {
+    "hcai_facilities": {
+      "sourceId": "hcai_facilities",
+      "displayName": "CaliClean Commercial Facility Scout",
+      "publisher": "Department of Health Care Access and Information (HCAI), California",
+      "catalogTitle": "Licensed Healthcare Facility Listing",
+      "packageId": "59d9abe7-2664-407a-a5aa-f89a866f3381",
+      "resourceId": "641c5557-7d65-4379-8fea-6b7dedbda40b",
+      "sqlEndpoint": "https://data.chhs.ca.gov/api/3/action/datastore_search_sql",
+      "searchEndpoint": "https://data.chhs.ca.gov/api/3/action/datastore_search",
+      "egressHost": "data.chhs.ca.gov",
+      "updateCadence": "mensual",
+      "currentPublished": "2026-10-02",
+      "license": {
+        "licenseId": "CC-BY",
+        "name": "Creative Commons Attribution",
+        "termsUrl": "https://data.chhs.ca.gov/pages/terms",
+        "attributionRequired": true
+      },
+      "robots": {
+        "observedStatus": 404,
+        "observedAs": "sin politica",
+        "interpretation": "NO se interpreta como permiso. Lo que autoriza es el catalogo oficial de CA Open Data y su API CKAN publica. Un redirect a S3 se rechaza.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://data.chhs.ca.gov/api/3/action/datastore_search_sql",
+          "https://data.chhs.ca.gov/api/3/action/datastore_search"
+        ]
+      },
+      "limits": {
+        "maxAcceptedPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "pageSize": 200,
+        "maxPages": 25,
+        "stableOrder": "OSHPD_ID",
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000
+        }
+      },
+      "schema": {
+        "fieldAllowlist": [
+          "OSHPD_ID",
+          "FACILITY_NAME",
+          "LICENSE_NUM",
+          "FACILITY_LEVEL_DESC",
+          "DBA_ADDRESS1",
+          "DBA_CITY",
+          "DBA_ZIP_CODE",
+          "COUNTY_NAME",
+          "FACILITY_STATUS_DESC",
+          "LICENSE_TYPE_DESC",
+          "LICENSE_CATEGORY_DESC"
+        ],
+        "neverRequested": [
+          "LATITUDE",
+          "LONGITUDE",
+          "ADMINISTRATOR",
+          "CONTACT",
+          "PHONE",
+          "EMAIL"
+        ],
+        "resourceRotationNote": "El resourceId de un DataStore cambia cuando el publicador rota el recurso. Si el que responde no es el atestiguado, se falla cerrado: el esquema podria ser otro y la allowlist no significaria lo mismo."
+      },
+      "artifacts": {
+        "packageMetadata": {
+          "url": "https://data.chhs.ca.gov/api/3/action/package_show?id=59d9abe7-2664-407a-a5aa-f89a866f3381",
+          "httpStatus": 200,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sha256Scope": "PLACEHOLDER declarado: sin egress no hay descarga que hashear. El verificador lo trata como evidencia AUSENTE y falla cerrado.",
+          "evidencePending": true
+        }
+      },
+      "decision": "Elegible y DESACTIVADA. Falta egress a data.chhs.ca.gov y la decision operativa."
+    }
+  },
+  "digest": "sha256:ab2f863d683aafffa4dd95e4ea8502af8e1af329eac53187c83a853e418de7d0"
+}

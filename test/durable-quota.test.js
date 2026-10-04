@@ -336,3 +336,37 @@ test('ninguna ruta de este archivo enciende el outbound', async () => {
   const { config } = await import('../src/config.js');
   assert.equal(config.outbound.enabled, false);
 });
+
+test('unos segundos de desfase entre relojes no bloquean la corrida', async () => {
+  const { CLOCK_SKEW_TOLERANCE_MS } = await import('../src/prospecting/sources/durable-quota.js');
+
+  // El CRM va dos segundos por delante. Sin tolerancia, su propia marca se leería
+  // como "fechada en el futuro" y la fuente quedaría bloqueada para siempre.
+  const adelantado = await checkDurableQuota({
+    namespace: NS, now: AHORA,
+    lookup: async () => ({ dedupKey: `${NS}:X`, lastVerified: new Date(AHORA + 2000).toISOString() }),
+  });
+  assert.equal(adelantado.allowed, false, 'sigue dentro de la ventana de 24 h');
+  assert.equal(adelantado.reason, 'cuota_24h_durable', 'no es un problema de reloj: es la cuota');
+  assert.ok(adelantado.remainingMs <= DURABLE_WINDOW_MS,
+    'el tiempo restante no puede superar la ventana');
+
+  // Más allá de la tolerancia sí es un reloj mal puesto, y bloquea por eso.
+  const muyAdelantado = await checkDurableQuota({
+    namespace: NS, now: AHORA,
+    lookup: async () => ({
+      dedupKey: `${NS}:X`,
+      lastVerified: new Date(AHORA + CLOCK_SKEW_TOLERANCE_MS + 60000).toISOString(),
+    }),
+  });
+  assert.equal(muyAdelantado.allowed, false);
+  assert.equal(muyAdelantado.reason, 'cuota_durable_indeterminada');
+  assert.match(muyAdelantado.detail, /reloj mal puesto/);
+
+  // Y un desfase pequeño no convierte una marca vieja en válida.
+  const vieja = await checkDurableQuota({
+    namespace: NS, now: AHORA,
+    lookup: async () => ({ dedupKey: `${NS}:X`, lastVerified: new Date(AHORA - DURABLE_WINDOW_MS - 1000).toISOString() }),
+  });
+  assert.equal(vieja.allowed, true);
+});

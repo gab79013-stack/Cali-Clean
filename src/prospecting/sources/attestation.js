@@ -46,10 +46,17 @@ export function attestationPaths() {
   if (process.env.SOURCE_ATTESTATION_FILES) {
     return process.env.SOURCE_ATTESTATION_FILES.split(',').map((f) => f.trim()).filter(Boolean);
   }
-  return [
-    path.join(ROOT, 'config', 'source-attestation.json'),
-    path.join(ROOT, 'config', 'source-attestation-city.json'),
-  ];
+  // Se descubren por nombre en lugar de listarlas a mano: una lista fija
+  // significa que añadir una fuente y olvidar su archivo la deja sin evidencia
+  // sin que nada lo diga, y "sin evidencia" es justo lo que no debe pasar
+  // desapercibido.
+  const dir = path.join(ROOT, 'config');
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names
+    .filter((n) => /^source-attestation.*\.json$/.test(n))
+    .sort()
+    .map((n) => path.join(dir, n));
 }
 
 /**
@@ -113,6 +120,11 @@ export function verifyAttestation(attestation, { now = Date.now(), maxAgeDays = 
   if (attestation.kind !== 'hash-based-attestation') {
     problems.push(`kind "${attestation.kind}": se esperaba "hash-based-attestation"`);
   }
+  if (attestation.collectedFrom?.liveVerifiedFromCloud === true) {
+    checks.liveVerifiedFromCloud = true;
+  } else {
+    checks.liveVerifiedFromCloud = false;
+  }
   if (attestation.signature !== undefined) {
     // Una firma aquí sería una afirmación que este repositorio no puede
     // sostener: no hay clave autorizada con la que comprobarla.
@@ -137,6 +149,19 @@ export function verifyAttestation(attestation, { now = Date.now(), maxAgeDays = 
       }
       if (art?.sha256 !== undefined && !SHA256_RE.test(String(art.sha256))) {
         problems.push(`${key}/${name}: el sha256 no tiene forma de SHA256`);
+      }
+      // Evidencia AUSENTE, no evidencia débil.
+      //
+      // Un sha256 de ceros tiene forma de hash y no es uno: es el marcador de un
+      // artefacto que nadie ha descargado. Lo mismo con `evidencePending`. Las
+      // dos cosas invalidan la attestation a propósito: una fuente cuya
+      // evidencia está pendiente no puede pasar la puerta, y eso es lo que
+      // mantiene los scouts apagados mientras no haya egress para auditarlos.
+      if (art?.evidencePending === true) {
+        problems.push(`${key}/${name}: la evidencia está pendiente (evidencePending)`);
+      }
+      if (/^0{64}$/.test(String(art?.sha256 ?? ''))) {
+        problems.push(`${key}/${name}: el sha256 es un marcador de evidencia ausente, no una huella`);
       }
       if (art?.httpStatus !== undefined && art.httpStatus !== 200) {
         problems.push(`${key}/${name}: httpStatus ${art.httpStatus}, se esperaba 200`);

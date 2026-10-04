@@ -1,0 +1,97 @@
+{
+  "$comment": "Manifiesto de un scout de la fase 3. Separado del allowlist de San Diego a proposito: cada scout responde por su propia evidencia, su propia cuota y su propia decision operativa. 'eligible' NO es 'enabled': elegible es permiso legal, habilitada es una decision humana que ademas exige egress.",
+  "version": 1,
+  "scoutId": "cslb_contractors",
+  "displayName": "CaliClean State License Scout",
+  "label": "Licencias de contratista · CSLB (California)",
+  "state": "ELIGIBLE_BUT_DISABLED",
+  "eligible": true,
+  "enabled": false,
+  "implemented": true,
+  "accessType": "webforms-csv",
+  "egressHost": "web.cslb.ca.gov",
+  "dedupNamespace": "cslb",
+  "serviceArea": "San Diego County, CA",
+  "portalPage": "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList",
+  "download": {
+    "method": "WebForms postback",
+    "steps": [
+      "GET de la pagina del portal para obtener los tokens del formulario",
+      "postback seleccionando M (License Master)",
+      "postback sobre el control lbMasterCSV"
+    ],
+    "expectedContentType": "text/csv",
+    "expectedAttachment": "MasterLicenseData.csv",
+    "control": "lbMasterCSV",
+    "datasetChoice": "M",
+    "followRedirects": false,
+    "redirectPolicy": "Un redirect se RECHAZA. La descarga verificada responde el CSV directamente; seguir un redirect seria ir a un recurso que nadie audito.",
+    "noScraping": "Prohibido navegar o raspear los buscadores individuales de licencias. Solo esta descarga bulk, oficial y determinista."
+  },
+  "license": {
+    "name": "California Conditions of Use — informacion estatal en dominio publico salvo indicacion contraria",
+    "termsUrl": "https://www.ca.gov/use/",
+    "publicDisclosure": "La informacion de licencia de CSLB es publicamente divulgable y gratuita.",
+    "redistribution": "permitida"
+  },
+  "robots": {
+    "observed": "404 / sin politica",
+    "interpretation": "Un robots inexistente NO se interpreta como permiso. La autorizacion que se usa es otra y es explicita: el portal publica esta descarga CSV como su via oficial de datos masivos. El permiso es sobre ESE recurso, no sobre el dominio.",
+    "htmlCrawlingAllowed": false
+  },
+  "limits": {
+    "maxAcceptedPerRun": 50,
+    "maxSuccessfulRunsPer24h": 1,
+    "maxBytes": 536870912,
+    "timeoutMs": 300000,
+    "retry": {
+      "maxAttempts": 4,
+      "baseMs": 1000,
+      "capMs": 30000,
+      "jitter": "full",
+      "respectRetryAfter": true
+    }
+  },
+  "filters": {
+    "county": "San Diego",
+    "primaryStatus": "CLEAR",
+    "businessTypeAllowed": [
+      "Corporation",
+      "Limited Liability"
+    ],
+    "businessTypeNote": "Valores EXACTOS observados en el volcado. Cualquier variante exige fixture y documentacion antes de admitirse: una forma juridica que no se reconoce se descarta.",
+    "classificationRequired": "B",
+    "classificationMatch": "token exacto dentro de Classifications(s)"
+  },
+  "fields": {
+    "allowed": [
+      "LicenseNo",
+      "BusinessName",
+      "FullBusinessName",
+      "BusinessType",
+      "PrimaryStatus",
+      "SecondaryStatus",
+      "Classifications(s)",
+      "County",
+      "LastUpdate"
+    ],
+    "retained": [
+      "LicenseNo",
+      "businessName",
+      "BusinessType",
+      "PrimaryStatus",
+      "Classifications(s)",
+      "LastUpdate",
+      "sourceUrl",
+      "verifiedAt"
+    ],
+    "forbiddenReason": "El volcado trae direccion, telefono, personas, bonds, workers comp y polizas. NADA de eso se conserva: ni en el prospecto, ni en el snapshot, ni en un log, ni en el texto de un error. La lista de permitidos es cerrada, asi que una columna nueva se cae sin esperar a que alguien la prohiba.",
+    "addressRetained": false,
+    "addressNote": "Esta fuente NO conserva direccion a proposito. Eso la hace la mas debil de las tres cuando dos fuentes describen la misma entidad: una ficha sin direccion no se puede situar."
+  },
+  "blockers": [
+    "Egress pendiente: web.cslb.ca.gov no esta permitido en la red de Cloud.",
+    "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real."
+  ],
+  "decision": "Elegible: informacion de licencia publicamente divulgable, descarga CSV oficial y determinista, y pagina que declara 'Updated as of 10/3/2026'. DESACTIVADA."
+}

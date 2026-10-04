@@ -35,7 +35,18 @@ if (asJson) {
   process.exit(resultados.every((r) => r.result?.valid) ? 0 : 2);
 }
 
+/**
+ * Una evidencia cuyos únicos problemas son "está pendiente" no es un fallo: es
+ * una fuente que todavía no se ha podido auditar porque no hay egress a su host.
+ * Se distingue del resto para que este comando siga significando algo —"¿hay algo
+ * que debería estar bien y no lo está?"— en lugar de salir con error para
+ * siempre mientras quede un scout sin habilitar.
+ */
+const soloPendiente = (result) => result?.problems?.length > 0
+  && result.problems.every((p) => /evidencia está pendiente|evidencia ausente/.test(p));
+
 let fallos = 0;
+let pendientes = 0;
 for (const entrada of resultados) {
   if (entrada !== resultados[0]) console.log(`\n${'═'.repeat(70)}\n`);
   if (!entrada.att) {
@@ -44,12 +55,26 @@ for (const entrada of resultados) {
     continue;
   }
   verUna(entrada.file, entrada.att, entrada.result);
-  if (!entrada.result.valid) fallos++;
+  if (entrada.result.valid) continue;
+  if (soloPendiente(entrada.result)) {
+    pendientes++;
+    console.log('→ PENDIENTE por diseño: falta auditar esta fuente desde una red con acceso a su host.');
+    console.log('  La attestation no vale, y por eso su fuente no puede cruzar la puerta. Correcto.');
+  } else {
+    fallos++;
+  }
 }
-console.log(`\n${fallos === 0
-  ? `✓ ${resultados.length} evidencia(s), todas válidas.`
-  : `✗ ${fallos} de ${resultados.length} evidencia(s) no validan.`}`);
-process.exit(fallos === 0 ? 0 : 2);
+
+const validas = resultados.length - fallos - pendientes;
+console.log(`\n${validas} válida(s) · ${pendientes} pendiente(s) por diseño · ${fallos} con problemas`);
+if (fallos) {
+  console.log('✗ Hay evidencia que debería valer y no vale.');
+  process.exit(2);
+}
+console.log(pendientes
+  ? '✓ Todo lo auditable está en regla. Lo pendiente mantiene su fuente apagada, que es lo que toca.'
+  : '✓ Todas las evidencias válidas.');
+process.exit(0);
 
 function verUna(file, att, result) {
 

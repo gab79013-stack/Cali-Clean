@@ -37,6 +37,18 @@
 export const DURABLE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Tolerancia de desfase de reloj.
+ *
+ * La marca la escribe el CRM y la comparación la hace este contenedor: dos
+ * relojes distintos. Unos segundos de desfase son normales y no significan nada.
+ * Sin tolerancia, un CRM con dos segundos de adelanto haría que CADA corrida
+ * leyera su propia marca como "fechada en el futuro" y se bloqueara para
+ * siempre. Más allá de la tolerancia sí es un reloj mal puesto, y entonces se
+ * bloquea: no saber cuándo se corrió no es permiso para correr.
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
  * @param {object} opts
  * @param {string} opts.namespace  prefijo de la clave, sin los dos puntos
  * @param {Function} opts.lookup   (prefix) => { dedupKey, lastVerified } | null
@@ -110,18 +122,22 @@ export async function checkDurableQuota({
   }
 
   const elapsed = now - at;
-  if (elapsed < 0) {
-    // Una marca en el futuro significa un reloj mal puesto en algún sitio. No
-    // se descarta como si no existiera: se bloquea, que es el lado seguro.
+  if (elapsed < -CLOCK_SKEW_TOLERANCE_MS) {
+    // Más allá de la tolerancia, una marca en el futuro significa un reloj mal
+    // puesto en algún sitio. No se descarta como si no existiera: se bloquea,
+    // que es el lado seguro.
     return {
       allowed: false, authority: 'crm', reason: 'cuota_durable_indeterminada',
-      detail: `Last Verified en el futuro (${new Date(at).toISOString()}): hay un reloj mal puesto.`,
+      detail: `Last Verified ${Math.round(-elapsed / 60000)} min en el futuro `
+        + `(${new Date(at).toISOString()}): hay un reloj mal puesto.`,
       lastVerifiedAt: new Date(at).toISOString(),
     };
   }
 
   if (elapsed < windowMs) {
-    const remainingMs = windowMs - elapsed;
+    // Un desfase pequeño hacia el futuro cuenta como "acaba de pasar", no como
+    // tiempo negativo: así el minutaje que se reporta nunca supera la ventana.
+    const remainingMs = windowMs - Math.max(0, elapsed);
     return {
       allowed: false, authority: 'crm', reason: 'cuota_24h_durable',
       lastVerifiedAt: new Date(at).toISOString(),

@@ -154,6 +154,15 @@ ningún sitio; el CSV descargado se borra al terminar.
     npm run sources:preview:city          # lo mismo para la fuente de la Ciudad
     npm run enrich:preview                # qué se puede afirmar de lo que ya hay
     npm run routine:daily                 # las dos fuentes + enriquecimiento, en plan
+    npm run phase3:preview                # los tres scouts de la fase 3 (deshabilitados)
+    npm run phase3:plan                   # capa central: valida, deduplica, planifica
+
+La **fase 3** añade tres scouts más —licencias de contratista de CSLB, propiedades
+multifamiliares de HUD e instalaciones sanitarias de HCAI— y una capa central que
+valida sus staging, deduplica contra lo que ya hay y planifica. Los tres están
+**deshabilitados y fail-closed**: no hay egress a sus hosts y su evidencia está
+marcada como pendiente. Detalle en
+[`docs/phase3-scouts.md`](docs/phase3-scouts.md).
     npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot
 
 El ciclo es de una sola consulta: `preview` pregunta al portal una vez y deja un

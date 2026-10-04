@@ -1,0 +1,84 @@
+{
+  "$comment": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T09:00:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
+  "collectedFrom": {
+    "method": "auditoria manual desde la red local autorizada del operador",
+    "liveVerifiedFromCloud": false,
+    "note": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio."
+  },
+  "sources": {
+    "hud_multifamily": {
+      "sourceId": "hud_multifamily",
+      "displayName": "CaliClean Property & Manager Scout",
+      "publisher": "U.S. Department of Housing and Urban Development (HUD)",
+      "queryUrl": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query",
+      "metadataUrl": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0",
+      "egressHost": "egis.hud.gov",
+      "license": {
+        "licenseId": "US-OPEN-GOV-DATA-ACT",
+        "name": "HUD Open Data (OPEN Government Data Act)",
+        "termsUrl": "https://www.hud.gov/open",
+        "summary": "Activo de HUD Open Data. La cartera son propiedades multifamiliares FHA/assisted, principalmente de 5 o mas unidades."
+      },
+      "robots": {
+        "observedStatus": 404,
+        "observedAs": "sin politica",
+        "interpretation": "NO se interpreta como permiso. Lo que autoriza es que sea una API REST publica de HUD Open Data.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query",
+          "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0"
+        ]
+      },
+      "limits": {
+        "maxAcceptedPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "pageSize": 200,
+        "maxPages": 25,
+        "returnGeometry": false,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000
+        }
+      },
+      "schema": {
+        "fieldAllowlist": [
+          "PROPERTY_ID",
+          "PROPERTY_NAME_TEXT",
+          "TOTAL_UNIT_COUNT",
+          "PROPERTY_CATEGORY_NAME",
+          "STD_ADDR",
+          "STD_CITY",
+          "STD_ST",
+          "STD_ZIP5",
+          "MGMT_AGENT_ORG_NAME"
+        ],
+        "neverRequested": [
+          "PROJECT_MANAGER_NAME_TEXT",
+          "MGMT_CONTACT_FULL_NAME",
+          "PHONE",
+          "EMAIL",
+          "OWNER",
+          "LATITUDE",
+          "LONGITUDE",
+          "geometry"
+        ]
+      },
+      "artifacts": {
+        "layerMetadata": {
+          "url": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0",
+          "httpStatus": 200,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sha256Scope": "PLACEHOLDER declarado: sin egress no hay descarga que hashear. El verificador lo trata como evidencia AUSENTE y falla cerrado.",
+          "evidencePending": true
+        }
+      },
+      "decision": "Elegible y DESACTIVADA. Falta egress a egis.hud.gov y la decision operativa."
+    }
+  },
+  "digest": "sha256:6aab1a83eb5a4093ee590f23e7d3abe7d870fb91c771996eb594e33e418e1063"
+}

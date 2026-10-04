@@ -1,0 +1,82 @@
+{
+  "$comment": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T09:00:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
+  "collectedFrom": {
+    "method": "auditoria manual desde la red local autorizada del operador",
+    "liveVerifiedFromCloud": false,
+    "note": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio."
+  },
+  "sources": {
+    "cslb_contractors": {
+      "sourceId": "cslb_contractors",
+      "displayName": "CaliClean State License Scout",
+      "publisher": "Contractors State License Board (CSLB), State of California",
+      "portalPage": "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList",
+      "portalStatedUpdate": "2026-10-03",
+      "egressHost": "web.cslb.ca.gov",
+      "license": {
+        "licenseId": "CA-PUBLIC-DOMAIN-CONDITIONS-OF-USE",
+        "name": "California Conditions of Use",
+        "termsUrl": "https://www.ca.gov/use/",
+        "summary": "Salvo indicacion contraria, la informacion estatal esta en dominio publico. La informacion de licencia de CSLB es publicamente divulgable y gratuita."
+      },
+      "robots": {
+        "observedStatus": 404,
+        "observedAs": "sin politica",
+        "interpretation": "NO se interpreta como permiso. Lo que autoriza es que el portal publique esta descarga CSV como su via oficial de datos masivos.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList"
+        ]
+      },
+      "limits": {
+        "maxAcceptedPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000
+        }
+      },
+      "schema": {
+        "observedHeaderSubset": [
+          "LicenseNo",
+          "LastUpdate",
+          "BusinessName",
+          "FullBusinessName",
+          "County",
+          "BusinessType",
+          "PrimaryStatus",
+          "SecondaryStatus",
+          "Classifications(s)"
+        ],
+        "headerNote": "El volcado trae ademas muchas columnas sensibles o innecesarias (direccion, telefono, personas, bonds, workers comp, polizas). La allowlist es cerrada.",
+        "fieldAllowlist": [
+          "LicenseNo",
+          "BusinessName",
+          "FullBusinessName",
+          "BusinessType",
+          "PrimaryStatus",
+          "SecondaryStatus",
+          "Classifications(s)",
+          "County",
+          "LastUpdate"
+        ]
+      },
+      "artifacts": {
+        "portalPage": {
+          "url": "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList",
+          "httpStatus": 200,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sha256Scope": "PLACEHOLDER declarado: sin egress, Cloud no ha descargado este recurso y no puede hashearlo. El verificador trata un sha256 de ceros como evidencia AUSENTE y falla cerrado, que es lo correcto: no se finge una huella que nadie ha calculado.",
+          "evidencePending": true
+        }
+      },
+      "decision": "Elegible y DESACTIVADA. Falta egress a web.cslb.ca.gov y la decision operativa."
+    }
+  },
+  "digest": "sha256:faf683fdcbdb7dc08997fd0c8d3f0482c2b164c4568113515e2dbb615d5a5526"
+}
