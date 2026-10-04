@@ -94,11 +94,12 @@ export const config = {
     userAgent: process.env.PROSPECT_USER_AGENT
       || 'CaliCleanProspector/1.0 (+https://cali-clean.net/bot; contact: info@cali-clean.net)',
     requestTimeoutMs: num(process.env.PROSPECT_TIMEOUT_MS, 12000),
-    // Área de San Diego. Ninguna se consulta hasta que `verify-sources` deje
-    // constancia de su robots.txt, sus términos y su endpoint real.
+    // Área de San Diego. Estar en esta lista solo significa "se intentaría":
+    // la auditoría (config/source-allowlist.json) y la constancia operativa
+    // deciden si de verdad puede salir a la red. Al 2026-10-03, ninguna puede.
     sources: list(process.env.PROSPECT_SOURCES).length
       ? list(process.env.PROSPECT_SOURCES)
-      : ['sd_building_permits', 'sd_business_certificates'],
+      : ['sdcounty_food_facility_permits'],
     socrataAppToken: process.env.SOCRATA_APP_TOKEN || '',
   },
 

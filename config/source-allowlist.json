@@ -1,0 +1,234 @@
+{
+  "$comment": "Evidencia de la auditoría de fuentes. La escribe una persona tras verificar desde una red autorizada; el código la lee pero nunca la genera. 'eligible' NO significa 'enabled': una fuente elegible está autorizada legalmente, pero no puede salir a la red hasta que alguien ponga enabled=true Y exista una constancia operativa vigente en data/source-compliance.json.",
+  "version": 1,
+  "auditedAt": "2026-10-03",
+  "timezone": "America/Los_Angeles",
+  "auditMethod": "verificación manual desde red autorizada (HEAD/GET y lectura de páginas de licencia)",
+  "globalPolicy": {
+    "userAgentRequired": true,
+    "noHtmlCrawling": true,
+    "personalDataPolicy": "solo datos de contacto empresarial; los campos que identifican a una persona física se excluyen en origen y no se almacenan ni se registran"
+  },
+
+  "sources": {
+    "sd_business_tax_certificates": {
+      "label": "City of San Diego · Business Tax Certificates (activos)",
+      "state": "ELIGIBLE_BUT_DISABLED",
+      "eligible": true,
+      "enabled": false,
+      "accessType": "csv-static",
+      "implemented": false,
+      "baseDomain": "seshat.datasd.org",
+      "datasetPage": "https://data.sandiego.gov/datasets/business-tax-certificates/",
+      "downloadUrl": "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv",
+      "datasetId": null,
+      "evidence": {
+        "headStatus": 200,
+        "etagPresent": true,
+        "lastModifiedPresent": true,
+        "updateCadence": "diaria",
+        "headerVerified": true,
+        "columnsObserved": [
+          "account_key", "account_status", "date_account_creation", "date_cert_expiration",
+          "date_cert_effective", "business_owner_name", "ownership_type", "date_business_start",
+          "dba_name", "naics_sector", "naics_code", "naics_description", "address_no",
+          "address_pd", "address_road", "address_sfx", "address_no_fraction", "address_city",
+          "address_state", "address_zip", "address_suite", "address_pmb_box", "address_po_box",
+          "bid", "council_district", "lat", "lng"
+        ]
+      },
+      "license": {
+        "name": "ODC PDDL 1.0",
+        "termsUrl": "https://data.sandiego.gov/help/guides/terms/",
+        "faqUrl": "https://data.sandiego.gov/help/guides/faq/",
+        "redistributionAllowed": true,
+        "note": "La FAQ oficial declara que no hay limitaciones de uso ni de redistribución."
+      },
+      "robots": {
+        "portalRobotsUrl": "https://data.sandiego.gov/robots.txt",
+        "portalRobotsStatus": 404,
+        "downloadRobotsUrl": "https://seshat.datasd.org/robots.txt",
+        "downloadRobotsStatus": 403,
+        "interpretation": "Ninguno de los dos robots.txt es legible, pero el portal documenta la automatización y enlaza los archivos para descarga directa. El tutorial oficial demuestra pandas.read_csv contra seshat.",
+        "automationDocumentedAt": "https://data.sandiego.gov/help/tutorials/getitdone-closed-2025/"
+      },
+      "rateLimit": {
+        "publishedLimit": null,
+        "internalPolicy": {
+          "maxDownloadsPerDay": 1,
+          "conditionalGet": ["If-None-Match", "If-Modified-Since"],
+          "localCacheRequired": true,
+          "htmlCrawling": false
+        }
+      },
+      "fields": {
+        "allowed": [
+          "account_key", "account_status", "date_account_creation", "date_cert_effective",
+          "date_business_start", "dba_name", "naics_sector", "naics_code", "naics_description",
+          "address_no", "address_pd", "address_road", "address_sfx", "address_city",
+          "address_state", "address_zip", "address_suite", "bid", "council_district"
+        ],
+        "forbidden": ["business_owner_name"],
+        "forbiddenReason": "Nombre de persona física. No se mapea, no se almacena y no se registra."
+      },
+      "blockers": [
+        "No existe ingestión CSV con ETag/If-None-Match en el código: accessType csv-static no está implementado.",
+        "Falta caché local y control de 1 descarga/día."
+      ],
+      "decision": "Elegible por licencia y por documentación oficial de automatización. Desactivada hasta implementar y probar la ingestión CSV condicional."
+    },
+
+    "sd_development_approvals": {
+      "label": "City of San Diego · Approvals for development projects (2026)",
+      "state": "RESEARCH_ONLY_DISABLED",
+      "eligible": true,
+      "enabled": false,
+      "leadUseAllowed": false,
+      "accessType": "csv-static",
+      "implemented": false,
+      "baseDomain": "seshat.datasd.org",
+      "datasetPage": "https://data.sandiego.gov/datasets/development-permits/",
+      "downloadUrl": "https://seshat.datasd.org/development_permits/approvals_created_2026_datasd.csv",
+      "datasetId": null,
+      "evidence": {
+        "headStatus": 200,
+        "etagPresent": true,
+        "lastModifiedPresent": true,
+        "updateCadence": "diaria",
+        "headerVerified": true,
+        "columnsObserved": [
+          "PROJECT_ID", "PROJECT_TYPE", "PROJECT_CREATE_DATE", "PROJECT_TITLE", "PROJECT_SCOPE",
+          "GIS_ADDRESS", "APPROVAL_ID", "APPROVAL_TYPE", "APPROVAL_STATUS", "APPROVAL_SCOPE",
+          "APPROVAL_CREATE_DATE", "APPROVAL_VALUATION", "APPROVAL_PERMIT_HOLDER"
+        ]
+      },
+      "license": {
+        "name": "ODC PDDL 1.0",
+        "termsUrl": "https://data.sandiego.gov/help/guides/terms/",
+        "redistributionAllowed": true
+      },
+      "robots": {
+        "portalRobotsUrl": "https://data.sandiego.gov/robots.txt",
+        "portalRobotsStatus": 404,
+        "downloadRobotsUrl": "https://seshat.datasd.org/robots.txt",
+        "downloadRobotsStatus": 403,
+        "interpretation": "Igual que business-tax-certificates: descarga directa documentada por el portal."
+      },
+      "rateLimit": {
+        "publishedLimit": null,
+        "internalPolicy": {
+          "maxDownloadsPerDay": 1,
+          "conditionalGet": ["If-None-Match", "If-Modified-Since"],
+          "localCacheRequired": true,
+          "htmlCrawling": false
+        }
+      },
+      "fields": {
+        "allowed": [
+          "PROJECT_ID", "PROJECT_TYPE", "PROJECT_CREATE_DATE", "PROJECT_TITLE", "PROJECT_SCOPE",
+          "GIS_ADDRESS", "APPROVAL_ID", "APPROVAL_TYPE", "APPROVAL_STATUS", "APPROVAL_SCOPE",
+          "APPROVAL_CREATE_DATE", "APPROVAL_VALUATION"
+        ],
+        "forbidden": ["APPROVAL_PERMIT_HOLDER"],
+        "forbiddenReason": "Puede ser una persona física, no una empresa. No se mapea ni se almacena mientras no exista filtro de organización y verificación externa por dos señales."
+      },
+      "blockers": [
+        "APPROVAL_PERMIT_HOLDER puede identificar a una persona: falta un filtro que distinga organización de particular.",
+        "Falta verificación externa de dos señales antes de tratar una aprobación como lead.",
+        "accessType csv-static no implementado."
+      ],
+      "decision": "Solo investigación. Prohibido su uso como fuente de leads hasta cumplir los tres bloqueos."
+    },
+
+    "sdcounty_food_facility_permits": {
+      "label": "County of San Diego · Food Facility Permits",
+      "state": "ELIGIBLE_BUT_DISABLED",
+      "eligible": true,
+      "enabled": false,
+      "accessType": "soda",
+      "implemented": true,
+      "baseDomain": "data.sandiegocounty.gov",
+      "datasetId": "c5ez-ufrd",
+      "metadataUrl": "https://data.sandiegocounty.gov/api/views/c5ez-ufrd",
+      "endpoint": "https://data.sandiegocounty.gov/resource/c5ez-ufrd.json",
+      "evidence": {
+        "metadataReadable": true,
+        "updateCadence": "mensual",
+        "dataCurrent": true
+      },
+      "license": {
+        "name": "Public Domain",
+        "termsUrl": "https://data.sandiegocounty.gov/api/views/c5ez-ufrd",
+        "redistributionAllowed": true,
+        "note": "Licencia declarada en el metadata del propio dataset."
+      },
+      "robots": {
+        "portalRobotsUrl": "https://data.sandiegocounty.gov/robots.txt",
+        "portalRobotsStatus": 200,
+        "crawlDelaySeconds": 1,
+        "resourcePathAllowed": true,
+        "odataPathBlocked": true,
+        "interpretation": "robots.txt no bloquea /resource pero sí OData. Se usa exclusivamente la API SODA en /resource."
+      },
+      "rateLimit": {
+        "publishedLimit": null,
+        "tokenRequired": false,
+        "tokenOptionalHeader": "X-App-Token",
+        "throttleSignal": "HTTP 429",
+        "internalPolicy": {
+          "maxRowsPerRun": 50,
+          "maxRunsPerDay": 1,
+          "minDelayMs": 2000,
+          "backoff": "exponencial",
+          "respectRetryAfter": true
+        }
+      },
+      "fields": {
+        "allowed": [
+          "record_id", "record_open_date", "record_issue_date", "record_name",
+          "permit_status", "active_permit", "business_type", "address", "city",
+          "state", "zip", "last_updated"
+        ],
+        "forbidden": [
+          "permit_owner_full", "permit_owner", "permit_owner_email", "latitude", "longitude"
+        ],
+        "forbiddenReason": "permit_owner* identifica a una persona física; latitude/longitude son geolocalización precisa que no necesitamos. Se excluyen en origen mediante $select, de modo que el servidor no llega a enviarlos."
+      },
+      "blockers": [
+        "Falta implementar y probar el manejo de 429 con Retry-After y el backoff exponencial.",
+        "Falta el control de 1 corrida/día.",
+        "El mapeo a prospecto está definido pero sin datos reales contra los que contrastarlo."
+      ],
+      "decision": "Elegible: dominio público, /resource permitido por robots y datos actuales. Desactivada hasta que el control de caudal y el mapeo pasen pruebas."
+    }
+  },
+
+  "rejected": {
+    "sd_building_permits_invented": {
+      "reason": "ID de dataset inventado por una sesión anterior. El portal municipal no sirve ese dataset por Socrata.",
+      "bannedDatasetIds": ["development-permits-set1"],
+      "bannedDomains": [],
+      "neverUse": true
+    },
+    "sd_business_listings_invented": {
+      "reason": "ID de dataset inventado por una sesión anterior. El portal municipal no es Socrata para ese contenido.",
+      "bannedDatasetIds": ["business-listings"],
+      "neverUse": true
+    },
+    "sdcounty_business_licenses": {
+      "reason": "Nunca tuvo dataset asignado y no existe un catálogo general de licencias de actividad del condado.",
+      "bannedDatasetIds": [],
+      "neverUse": true
+    },
+    "sdcounty_building_permits": {
+      "reason": "Dominio público y /resource permitido, pero el último dato observado es de 2023 y el Last-Modified de 2024: obsoleto para detectar obra reciente.",
+      "bannedDatasetIds": ["dyzh-7eat"],
+      "neverUse": true
+    },
+    "sdcounty_building_permits_contractors": {
+      "reason": "No declara licencia y expone datos personales.",
+      "bannedDatasetIds": ["76h4-nnmj"],
+      "neverUse": true
+    }
+  }
+}

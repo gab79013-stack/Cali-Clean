@@ -7,8 +7,20 @@ import os from 'node:os';
 // Base aislada y outbound encendido: este archivo ejercita el pipeline entero.
 const dbFile = path.join(os.tmpdir(), `cc-prospect-${Date.now()}.db`);
 const attFile = path.join(os.tmpdir(), `cc-prospect-att-${Date.now()}.json`);
+const allowFile = path.join(os.tmpdir(), `cc-prospect-allow-${Date.now()}.json`);
+
+// Allowlist propio del test: copia del real con la fuente SODA habilitada.
+// El pipeline se ejercita cruzando la puerta de verdad, no esquivándola; el
+// allowlist versionado sigue con todas las fuentes apagadas.
+const realAllowlist = JSON.parse(
+  fs.readFileSync(new URL('../config/source-allowlist.json', import.meta.url), 'utf8'),
+);
+realAllowlist.sources.sdcounty_food_facility_permits.enabled = true;
+fs.writeFileSync(allowFile, JSON.stringify(realAllowlist, null, 2));
+
 process.env.DB_PATH = dbFile;
 process.env.SOURCE_ATTESTATION_PATH = attFile;
+process.env.SOURCE_ALLOWLIST_PATH = allowFile;
 process.env.OUTBOUND_ENABLED = 'true';
 process.env.OUTBOUND_REQUIRE_MX = 'false';
 process.env.OUTBOUND_DAILY_LIMIT = '25';
@@ -17,7 +29,7 @@ process.env.PROSPECT_CRAWL_DELAY_MS = '0';
 process.env.MAIL_DRIVER = 'log';
 process.env.APP_SECRET = 'test-secret-for-prospecting';
 
-const { createFakeServer } = await import('./fixtures/fake-sources.js');
+const { createFakeServer, DATOS_PROHIBIDOS } = await import('./fixtures/fake-sources.js');
 const { db } = await import('../src/db.js');
 const { setRequestRewriter } = await import('../src/prospecting/http.js');
 const { discover, dedupeKey } = await import('../src/prospecting/agents/discover.js');
@@ -34,7 +46,7 @@ const { saveAttestation } = await import('../src/prospecting/sources/compliance.
 // Las fuentes del fixture pasan por la misma puerta de cumplimiento que las
 // reales: aquí se registra la constancia en lugar de esquivarla, para que el
 // pipeline se pruebe tal y como se ejecuta en producción.
-for (const key of ['sd_building_permits', 'sd_business_certificates']) {
+for (const key of ['sdcounty_food_facility_permits']) {
   saveAttestation(key, {
     robotsAllowed: true,
     endpointVerified: true,
@@ -57,6 +69,7 @@ setRequestRewriter((url) => {
 test.after(() => {
   server.close();
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(dbFile + suffix, { force: true });
+  fs.rmSync(allowFile, { force: true });
 });
 
 // ── Clasificación ────────────────────────────────────────────
@@ -134,7 +147,7 @@ test('una sola coincidencia no basta, dos sí', () => {
 
 // ── Pipeline completo ────────────────────────────────────────
 test('el agente descubridor carga prospectos clasificables y descarta el resto', async () => {
-  const stats = await discover({ sources: ['sd_building_permits', 'sd_business_certificates'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base });
   assert.ok(stats.inserted >= 4, `esperaba al menos 4 prospectos, hubo ${stats.inserted}`);
   assert.ok(stats.unclassified >= 1, 'la editorial debería quedar fuera del ICP');
   assert.deepEqual(stats.errors, []);
@@ -144,9 +157,38 @@ test('el agente descubridor carga prospectos clasificables y descarta el resto',
   assert.ok(!names.some((n) => n.includes('Quiet Books')), 'un negocio fuera del ICP no debe entrar');
 });
 
+test('ningún dato personal sobrevive al pipeline, ni en raw_json', () => {
+  // El servidor del fixture devuelve los campos prohibidos a propósito,
+  // ignorando el $select. Esta prueba comprueba que el filtrado del cliente es
+  // una red real: lo que llega a disco no puede contener un dato personal.
+  const filas = db.prepare('SELECT * FROM prospects').all();
+  assert.ok(filas.length >= 4);
+
+  const volcado = JSON.stringify(filas);
+  for (const aguja of DATOS_PROHIBIDOS) {
+    assert.ok(!volcado.includes(aguja),
+      `"${aguja}" quedó almacenado en la tabla prospects`);
+  }
+
+  // Y en concreto en raw_json, que es donde se guarda la fila tal cual vino.
+  for (const fila of filas) {
+    const raw = JSON.parse(fila.raw_json || '{}');
+    for (const prohibido of ['permit_owner_full', 'permit_owner', 'permit_owner_email', 'latitude', 'longitude']) {
+      assert.ok(!(prohibido in raw), `${prohibido} sobrevivió en raw_json de ${fila.business_name}`);
+    }
+    // Lo permitido sí tiene que estar: el filtro no puede vaciar la fila.
+    assert.ok(raw.record_id, `raw_json de ${fila.business_name} perdió los campos útiles`);
+  }
+});
+
+test('el nombre del negocio conserva sus tildes', () => {
+  const taqueria = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Faro%'").get();
+  assert.equal(taqueria.business_name, 'Taquería El Faro');
+});
+
 test('una segunda corrida no duplica nada', async () => {
   const before = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
-  const stats = await discover({ sources: ['sd_building_permits', 'sd_business_certificates'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base });
   const after = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
   assert.equal(after, before);
   assert.ok(stats.duplicates > 0);

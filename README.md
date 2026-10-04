@@ -119,12 +119,19 @@ export CSV. Inbound y outbound conviven ahí.
 Portales de datos abiertos de California (Socrata), consultables por API sin
 credenciales:
 
-| Clave | Qué trae | Señal |
+Auditadas el 2026-10-03 desde una red autorizada. Detalle completo en
+[`docs/source-verification.md`](docs/source-verification.md); evidencia
+machine-readable en [`config/source-allowlist.json`](config/source-allowlist.json).
+
+| Clave | Qué trae | Estado |
 |---|---|---|
-| `la_building_permits` | Permisos de obra cerrados en Los Ángeles | Obra terminada: limpieza inminente |
-| `la_active_businesses` | Licencias de negocio nuevas en Los Ángeles | Acaba de abrir: sin proveedor fijo |
-| `sf_building_permits` | Permisos completados en San Francisco | Obra terminada |
-| `sf_registered_businesses` | Negocios registrados en San Francisco | Acaba de abrir |
+| `sdcounty_food_facility_permits` | Permisos de alimentación del Condado (SODA, dominio público) | Elegible · **apagada** |
+| `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | Elegible · **apagada**, acceso sin implementar |
+| `sd_development_approvals` | Aprobaciones de desarrollo de la Ciudad (CSV, ODC PDDL) | **Solo investigación**, prohibido su uso como lead |
+
+**Ninguna fuente está habilitada.** `eligible` significa que la licencia lo
+permite; `enabled` significa que dejamos al código salir a por los datos. Son
+decisiones distintas y el código las comprueba por separado.
 
 Añadir una ciudad es añadir una entrada en `src/prospecting/sources/index.js`
 con su dataset y el mapeo de campos. El resto del pipeline no cambia.

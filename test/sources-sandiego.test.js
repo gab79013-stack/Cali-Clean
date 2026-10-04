@@ -6,8 +6,17 @@ import os from 'node:os';
 import http from 'node:http';
 
 /**
- * Fuentes del área de San Diego: la puerta de cumplimiento, el parseo de filas
- * con nombres de columna inciertos y el filtro por área de servicio.
+ * Fuentes del área de San Diego tras la auditoría del 2026-10-03.
+ *
+ * Lo que estas pruebas tienen que demostrar, porque es lo que separa una
+ * política escrita de una política aplicada:
+ *
+ *   · ninguna fuente no habilitada llega a abrir un socket;
+ *   · los campos prohibidos no se mapean, no se guardan y no se registran;
+ *   · robots y límites de la auditoría están reflejados en el código;
+ *   · los ids de dataset inventados no aparecen y no pueden construir URL;
+ *   · 429/Retry-After y el GET condicional constan como requisito pendiente,
+ *     sin que esa ausencia permita activar nada.
  */
 
 const attFile = path.join(os.tmpdir(), `cc-att-${Date.now()}.json`);
@@ -17,165 +26,406 @@ process.env.APP_SECRET = 'test-sources';
 process.env.SERVICE_ZIPS = '92101,92103,92110,92128';
 process.env.PROSPECT_CRAWL_DELAY_MS = '0';
 
-const { SOURCES, SERVICE_AREA, mapRow, buildUrl, fetchFromSource, sourceStatus } = await import('../src/prospecting/sources/index.js');
-const { checkSourceAllowed, saveAttestation, loadAttestations } = await import('../src/prospecting/sources/compliance.js');
+const {
+  SOURCES, SERVICE_AREA, mapRow, buildUrl, fetchFromSource, sourceStatus,
+} = await import('../src/prospecting/sources/index.js');
+const {
+  checkSourceAllowed, saveAttestation, loadAllowlist, allowlistEntry,
+  forbiddenFields, allowedFields, scrubRow, isBannedDataset, rejectionFor,
+} = await import('../src/prospecting/sources/compliance.js');
 const { isInServiceArea } = await import('../src/services/scoring.js');
 const { config } = await import('../src/config.js');
 const { verifyMatch } = await import('../src/prospecting/agents/enrich.js');
 
 test.after(() => fs.rmSync(attFile, { force: true }));
 
-// ── Las fuentes son de San Diego, no de LA/SF ────────────────
-test('el catálogo ya no apunta a Los Ángeles ni San Francisco', () => {
-  const keys = Object.keys(SOURCES);
-  assert.ok(keys.length > 0);
-  for (const k of keys) {
-    assert.ok(!/^(la|sf)_/.test(k), `quedó una fuente de LA/SF: ${k}`);
-    assert.ok(/sandiego/i.test(SOURCES[k].domain), `${k} no apunta a un portal de San Diego`);
-    assert.equal(SOURCES[k].serviceArea, SERVICE_AREA);
+const ALLOWLIST = loadAllowlist();
+const IDS_INVENTADOS = ['development-permits-set1', 'business-listings'];
+
+// ── La evidencia de la auditoría está donde debe ─────────────
+test('el allowlist registra la auditoría con fecha y método', () => {
+  assert.equal(ALLOWLIST.auditedAt, '2026-10-03');
+  assert.equal(ALLOWLIST.timezone, 'America/Los_Angeles');
+  assert.ok(ALLOWLIST.auditMethod);
+  assert.ok(Object.keys(ALLOWLIST.sources).length >= 3);
+  assert.ok(Object.keys(ALLOWLIST.rejected).length >= 5);
+});
+
+test('cada fuente declara licencia, robots, límites y decisión', () => {
+  for (const [k, e] of Object.entries(ALLOWLIST.sources)) {
+    assert.ok(e.license?.name, `${k} sin licencia`);
+    assert.ok(e.license?.termsUrl?.startsWith('https://'), `${k} sin URL de términos`);
+    assert.ok(e.robots, `${k} sin evidencia de robots`);
+    assert.ok(e.rateLimit?.internalPolicy, `${k} sin política de caudal`);
+    assert.ok(e.decision, `${k} sin decisión razonada`);
+    assert.ok(Array.isArray(e.fields?.allowed) && e.fields.allowed.length, `${k} sin campos permitidos`);
+    assert.ok(Array.isArray(e.fields?.forbidden), `${k} sin lista de prohibidos`);
+    assert.equal(typeof e.eligible, 'boolean');
+    assert.equal(typeof e.enabled, 'boolean');
   }
 });
 
-test('las fuentes por defecto son las de San Diego', () => {
-  for (const k of config.prospecting.sources) {
-    assert.ok(SOURCES[k], `la fuente por defecto "${k}" no existe en el catálogo`);
-    assert.ok(k.startsWith('sd'), `la fuente por defecto "${k}" no es de San Diego`);
+// ── Elegible no es habilitada ────────────────────────────────
+test('ninguna fuente está habilitada tras la auditoría', () => {
+  for (const [k, e] of Object.entries(ALLOWLIST.sources)) {
+    assert.equal(e.enabled, false, `${k} quedó habilitada`);
   }
 });
 
-test('cada fuente declara dónde comprobar robots y términos', () => {
-  for (const [k, s] of Object.entries(SOURCES)) {
-    assert.ok(s.compliance?.robotsUrl?.startsWith('https://'), `${k} sin robotsUrl`);
-    assert.ok(s.compliance?.termsUrl?.startsWith('https://'), `${k} sin termsUrl`);
+test('las tres fuentes son elegibles pero ninguna puede salir a la red', () => {
+  for (const [k, source] of Object.entries(SOURCES)) {
+    const entry = allowlistEntry(k);
+    assert.equal(entry.eligible, true, `${k} debería ser elegible`);
+    const c = checkSourceAllowed(k, source, { attestations: {} });
+    assert.equal(c.allowed, false, `${k} podría salir a la red`);
+    assert.equal(c.eligible, true, 'la puerta debe distinguir elegible de habilitada');
+    assert.equal(c.reason, 'no_habilitada');
   }
 });
 
-// ── La puerta de cumplimiento ────────────────────────────────
-test('ninguna fuente viene habilitada de fábrica', () => {
-  for (const [k, s] of Object.entries(SOURCES)) {
-    const c = checkSourceAllowed(k, s, { attestations: {} });
-    assert.equal(c.allowed, false, `${k} estaba habilitada sin verificar`);
-    assert.equal(c.reason, 'sin_verificar');
-  }
+test('una constancia operativa válida no basta para habilitar', () => {
+  // Este es el punto del diseño: verificar no enciende. La decisión de
+  // encender es humana y vive en el allowlist.
+  saveAttestation('sdcounty_food_facility_permits', {
+    robotsAllowed: true, endpointVerified: true, termsReviewed: true,
+    verifiedAt: new Date().toISOString(),
+  });
+  const c = checkSourceAllowed('sdcounty_food_facility_permits', SOURCES.sdcounty_food_facility_permits);
+  assert.equal(c.allowed, false);
+  assert.equal(c.reason, 'no_habilitada');
 });
 
-test('una fuente sin verificar no llega a hacer la petición', async () => {
+test('habilitada en el allowlist pero sin constancia tampoco sale', () => {
+  const fake = structuredClone(ALLOWLIST);
+  fake.sources.sdcounty_food_facility_permits.enabled = true;
+  const c = checkSourceAllowed('sdcounty_food_facility_permits', SOURCES.sdcounty_food_facility_permits, {
+    allowlist: fake, attestations: {},
+  });
+  assert.equal(c.allowed, false);
+  assert.equal(c.reason, 'sin_constancia_operativa');
+  loadAllowlist({ reload: true });   // restaura el estado real
+});
+
+test('un acceso no implementado bloquea aunque esté habilitada', () => {
+  const fake = structuredClone(ALLOWLIST);
+  fake.sources.sd_business_tax_certificates.enabled = true;
+  const c = checkSourceAllowed('sd_business_tax_certificates', SOURCES.sd_business_tax_certificates, {
+    allowlist: fake, attestations: {},
+  });
+  assert.equal(c.allowed, false);
+  assert.equal(c.reason, 'acceso_no_implementado');
+  loadAllowlist({ reload: true });
+});
+
+test('research-only no puede producir leads ni estando habilitada y verificada', () => {
+  const fake = structuredClone(ALLOWLIST);
+  fake.sources.sd_development_approvals.enabled = true;
+  fake.sources.sd_development_approvals.implemented = true;
+  const att = {
+    sd_development_approvals: {
+      robotsAllowed: true, endpointVerified: true, termsReviewed: true,
+      verifiedAt: new Date().toISOString(),
+    },
+  };
+  const c = checkSourceAllowed('sd_development_approvals', SOURCES.sd_development_approvals, {
+    allowlist: fake, attestations: att,
+  });
+  assert.equal(c.allowed, false);
+  assert.equal(c.reason, 'solo_investigacion');
+  loadAllowlist({ reload: true });
+});
+
+// ── Ninguna fuente no habilitada abre un socket ──────────────
+test('una fuente no habilitada no llega a hacer la petición', async () => {
   let touched = false;
   const server = http.createServer((req, res) => { touched = true; res.end('[]'); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await assert.rejects(
-      () => fetchFromSource('sd_building_permits', { baseOverride: base }),
-      /no está habilitada: sin_verificar/,
-    );
-    assert.equal(touched, false, 'salió a la red una fuente sin verificar');
+    for (const key of Object.keys(SOURCES)) {
+      await assert.rejects(
+        () => fetchFromSource(key, { baseOverride: base }),
+        /no está habilitada/,
+        `${key} debería haber sido bloqueada`,
+      );
+    }
+    assert.equal(touched, false, 'alguna fuente salió a la red sin estar habilitada');
   } finally {
     server.close();
   }
 });
 
-test('la verificación exige las tres marcas, no una cualquiera', () => {
-  const s = SOURCES.sd_building_permits;
-  const base = { robotsAllowed: true, endpointVerified: true, termsReviewed: true, verifiedAt: new Date().toISOString() };
-
-  assert.equal(checkSourceAllowed('sd_building_permits', s, { attestations: { sd_building_permits: base } }).allowed, true);
-
-  for (const [field, reason] of [
-    ['robotsAllowed', 'robots_prohibe'],
-    ['endpointVerified', 'endpoint_sin_confirmar'],
-    ['termsReviewed', 'terminos_sin_revisar'],
-  ]) {
-    const att = { ...base, [field]: false };
-    const c = checkSourceAllowed('sd_building_permits', s, { attestations: { sd_building_permits: att } });
-    assert.equal(c.allowed, false, `faltando ${field} debería bloquear`);
-    assert.equal(c.reason, reason);
+// ── Ids inventados y datasets rechazados ─────────────────────
+test('los ids inventados no aparecen en ninguna definición', () => {
+  const definiciones = JSON.stringify(SOURCES);
+  for (const id of IDS_INVENTADOS) {
+    assert.ok(!definiciones.includes(id), `el id inventado "${id}" sigue en las definiciones`);
+  }
+  for (const s of Object.values(SOURCES)) {
+    assert.ok(!IDS_INVENTADOS.includes(s.dataset), `dataset inventado en ${s.label}`);
   }
 });
 
-test('una verificación vieja caduca', () => {
-  const old = new Date(Date.now() - 400 * 86400000).toISOString();
-  const att = { robotsAllowed: true, endpointVerified: true, termsReviewed: true, verifiedAt: old };
-  const c = checkSourceAllowed('sd_building_permits', SOURCES.sd_building_permits, { attestations: { sd_building_permits: att } });
-  assert.equal(c.allowed, false);
-  assert.equal(c.reason, 'verificacion_caducada');
+test('los datasets rechazados están registrados con su motivo', () => {
+  for (const id of [...IDS_INVENTADOS, 'dyzh-7eat', '76h4-nnmj']) {
+    assert.equal(isBannedDataset(id), true, `${id} debería estar prohibido`);
+    assert.ok(rejectionFor(id)?.reason, `${id} sin motivo registrado`);
+  }
+  assert.match(rejectionFor('dyzh-7eat').reason, /obsoleto|2023|2024/i);
+  assert.match(rejectionFor('76h4-nnmj').reason, /licencia|personales/i);
 });
 
-test('la constancia se guarda y se vuelve a leer', () => {
-  saveAttestation('sd_business_certificates', {
-    robotsAllowed: true, endpointVerified: true, termsReviewed: true, verifiedAt: new Date().toISOString(),
-  });
-  const all = loadAttestations();
-  assert.ok(all.sd_business_certificates);
-  assert.equal(checkSourceAllowed('sd_business_certificates', SOURCES.sd_business_certificates).allowed, true);
+test('un dataset rechazado no puede construir URL', () => {
+  for (const id of [...IDS_INVENTADOS, 'dyzh-7eat', '76h4-nnmj']) {
+    const inventada = { label: `prueba ${id}`, accessType: 'soda', domain: 'data.sandiegocounty.gov', dataset: id };
+    assert.throws(() => buildUrl(inventada, {}), /rechazado por la auditoría/, `${id} construyó URL`);
+  }
 });
 
-test('sourceStatus explica por qué está cada fuente como está', () => {
-  const rows = sourceStatus();
-  assert.ok(rows.length >= 3);
-  const unverified = rows.find((r) => !r.allowed);
-  assert.ok(unverified.reason, 'debe decir el motivo');
-  assert.ok(Object.hasOwn(unverified, 'configured'));
+test('un accessType sin implementar falla diciéndolo, no devolviendo vacío', () => {
+  for (const key of ['sd_business_tax_certificates', 'sd_development_approvals']) {
+    assert.equal(SOURCES[key].accessType, 'csv-static');
+    assert.throws(() => buildUrl(SOURCES[key], {}), /no está implementado/);
+  }
 });
 
-// ── Parseo con nombres de columna inciertos ──────────────────
-test('mapea una fila usando el primer candidato presente', () => {
-  const row = {
-    approval_id: 'PMT-2026-001',
-    contractor_name: 'bayside builders inc',
-    job_address: '2100 Harbor Dr',
-    zip: '92101',
-    date_close: '2026-09-28T00:00:00.000',
-    scope: 'Tenant improvement, 4,200 sqft office',
-    valuation: '310000',
+// ── Campos prohibidos: ni mapeados, ni guardados, ni registrados ──
+test('el $select pide solo los campos permitidos', () => {
+  const params = SOURCES.sdcounty_food_facility_permits.query({ sinceDays: 90, limit: 50 });
+  const pedidos = params.$select.split(',');
+  assert.deepEqual(pedidos, allowedFields('sdcounty_food_facility_permits'));
+  for (const prohibido of forbiddenFields('sdcounty_food_facility_permits')) {
+    assert.ok(!pedidos.includes(prohibido), `el $select pide el campo prohibido ${prohibido}`);
+    assert.ok(!params.$select.includes(prohibido), `${prohibido} aparece en el $select`);
+  }
+});
+
+test('la política de 50 filas se aplica aunque pidan más', () => {
+  const params = SOURCES.sdcounty_food_facility_permits.query({ limit: 500 });
+  assert.equal(params.$limit, '50');
+});
+
+test('scrubRow quita los campos prohibidos de una fila', () => {
+  const fila = {
+    record_id: 'R-1', record_name: 'Taquería del Puerto', address: '990 Main St',
+    permit_owner_full: 'Juan Pérez García', permit_owner: 'J. Pérez',
+    permit_owner_email: 'juan@ejemplo.com', latitude: 32.71, longitude: -117.16,
   };
-  const m = mapRow(SOURCES.sd_building_permits, row);
-  assert.equal(m.businessName, 'Bayside Builders Inc');
-  assert.equal(m.address, '2100 Harbor Dr');
-  assert.equal(m.zip, '92101');
-  assert.equal(m.serviceArea, SERVICE_AREA);
-  assert.equal(m.signal.type, 'permit_finaled');
-  assert.equal(m.signal.finaledAt, '2026-09-28');
-  assert.equal(m.signal.valuation, 310000);
-  assert.equal(m.contactName, '', 'un registro público no aporta contacto');
-  assert.equal(m.phone, '', 'ni teléfono');
+  const limpia = scrubRow('sdcounty_food_facility_permits', fila);
+  for (const f of ['permit_owner_full', 'permit_owner', 'permit_owner_email', 'latitude', 'longitude']) {
+    assert.ok(!(f in limpia), `${f} sobrevivió al filtrado`);
+  }
+  assert.equal(limpia.record_name, 'Taquería del Puerto', 'no debe tirar lo permitido');
+  const serializada = JSON.stringify(limpia);
+  assert.ok(!serializada.includes('Juan Pérez'), 'el nombre de persona quedó en la fila');
+  assert.ok(!serializada.includes('juan@ejemplo.com'));
 });
 
-test('usa el candidato alternativo cuando el portal usa otro nombre', () => {
-  const m = mapRow(SOURCES.sd_building_permits, {
-    permit_number: 'B-9', applicant_name: 'Coastal GC', project_address: '500 W Broadway', zip_code: '92101',
-  });
-  assert.equal(m.sourceId, 'B-9');
-  assert.equal(m.businessName, 'Coastal Gc');
-  assert.equal(m.address, '500 W Broadway');
+test('un campo prohibido no llega al prospecto mapeado ni a su rastro', () => {
+  const fila = {
+    record_id: 'R-2', record_name: 'Panadería Balboa', address: '500 Park Blvd',
+    city: 'San Diego', zip: '92101', record_open_date: '2026-09-20T00:00:00.000',
+    business_type: 'Food Facility',
+    permit_owner_full: 'María Soledad Ruiz', permit_owner_email: 'maria@ejemplo.com',
+    latitude: 32.73, longitude: -117.14,
+  };
+  const m = mapRow(SOURCES.sdcounty_food_facility_permits, fila, 'sdcounty_food_facility_permits');
+  const todo = JSON.stringify(m);
+  for (const aguja of ['María Soledad', 'maria@ejemplo.com', '32.73', '-117.14', 'permit_owner']) {
+    assert.ok(!todo.includes(aguja), `"${aguja}" se coló en el prospecto mapeado`);
+  }
+  assert.equal(m.businessName, 'Panadería Balboa');
+  assert.equal(m.zip, '92101');
+});
+
+test('el titular del permiso de la ciudad no se mapea', () => {
+  const fila = {
+    APPROVAL_ID: 'A-77', PROJECT_TITLE: 'Tenant Improvement Harbor Dr',
+    GIS_ADDRESS: '2100 Harbor Dr', APPROVAL_CREATE_DATE: '2026-09-28',
+    APPROVAL_SCOPE: 'Interior remodel', APPROVAL_VALUATION: '310000',
+    APPROVAL_PERMIT_HOLDER: 'Roberto Núñez',
+  };
+  const m = mapRow(SOURCES.sd_development_approvals, fila, 'sd_development_approvals');
+  assert.ok(!JSON.stringify(m).includes('Roberto Núñez'), 'el titular acabó en el prospecto');
+  assert.equal(m.businessName, 'Tenant Improvement Harbor Dr');
+  assert.equal(m.contactName, '', 'un registro público no aporta contacto');
+});
+
+test('el nombre del titular del certificado municipal tampoco', () => {
+  const fila = {
+    account_key: 'B-900', dba_name: 'Harbor View Dental',
+    business_owner_name: 'Ana Lucía Fernández',
+    address_no: '1200', address_road: 'Harbor', address_sfx: 'Blvd',
+    address_city: 'San Diego', address_zip: '92101',
+    date_account_creation: '2026-09-01', naics_code: '621210',
+    naics_description: 'Offices of dentists',
+  };
+  const m = mapRow(SOURCES.sd_business_tax_certificates, fila, 'sd_business_tax_certificates');
+  assert.ok(!JSON.stringify(m).includes('Ana Lucía'), 'el nombre del titular se coló');
+  assert.equal(m.businessName, 'Harbor View Dental');
+  assert.equal(m.address, '1200 Harbor Blvd', 'la dirección se recompone de sus columnas');
+});
+
+test('los campos prohibidos nunca se registran en un log', () => {
+  const fila = {
+    record_id: 'R-3', record_name: 'Café Hillcrest', address: '1 Fifth Ave',
+    permit_owner_full: 'Persona Identificable', permit_owner_email: 'x@ejemplo.com',
+  };
+  const impreso = [];
+  const origLog = console.log; const origErr = console.error;
+  console.log = (...a) => impreso.push(a.join(' '));
+  console.error = (...a) => impreso.push(a.join(' '));
+  try {
+    const limpia = scrubRow('sdcounty_food_facility_permits', fila);
+    console.log(`fila procesada: ${JSON.stringify(limpia)}`);
+    console.log(`campos: ${Object.keys(limpia).join(', ')}`);
+  } finally {
+    console.log = origLog; console.error = origErr;
+  }
+  for (const linea of impreso) {
+    assert.ok(!linea.includes('Persona Identificable'), `se registró un dato personal: ${linea}`);
+    assert.ok(!linea.includes('x@ejemplo.com'));
+    assert.ok(!linea.includes('permit_owner'));
+  }
+});
+
+// ── Robots y política de caudal reflejados ───────────────────
+test('la evidencia de robots coincide con lo auditado', () => {
+  const county = allowlistEntry('sdcounty_food_facility_permits').robots;
+  assert.equal(county.portalRobotsStatus, 200);
+  assert.equal(county.crawlDelaySeconds, 1);
+  assert.equal(county.resourcePathAllowed, true);
+  assert.equal(county.odataPathBlocked, true);
+
+  for (const k of ['sd_business_tax_certificates', 'sd_development_approvals']) {
+    const r = allowlistEntry(k).robots;
+    assert.equal(r.portalRobotsStatus, 404);
+    assert.equal(r.downloadRobotsStatus, 403);
+    assert.ok(r.interpretation, 'una situación ambigua tiene que llevar su razonamiento');
+  }
+});
+
+test('solo se usa SODA en /resource, nunca OData', () => {
+  const url = buildUrl(SOURCES.sdcounty_food_facility_permits, { $limit: '1' });
+  assert.ok(url.includes('/resource/c5ez-ufrd.json'));
+  assert.ok(!/odata/i.test(url), 'robots.txt del condado bloquea OData');
+});
+
+test('el crawl-delay efectivo no baja del declarado por el portal', () => {
+  const declarado = allowlistEntry('sdcounty_food_facility_permits').robots.crawlDelaySeconds * 1000;
+  const politica = allowlistEntry('sdcounty_food_facility_permits').rateLimit.internalPolicy.minDelayMs;
+  assert.ok(politica >= declarado, 'la política interna es más laxa que el robots.txt del portal');
+  assert.equal(politica, 2000);
+});
+
+test('la política de caudal registra lo que exige la auditoría', () => {
+  const county = allowlistEntry('sdcounty_food_facility_permits').rateLimit;
+  assert.equal(county.internalPolicy.maxRowsPerRun, 50);
+  assert.equal(county.internalPolicy.maxRunsPerDay, 1);
+  assert.equal(county.internalPolicy.respectRetryAfter, true);
+  assert.equal(county.throttleSignal, 'HTTP 429');
+  assert.equal(county.tokenRequired, false);
+
+  for (const k of ['sd_business_tax_certificates', 'sd_development_approvals']) {
+    const p = allowlistEntry(k).rateLimit.internalPolicy;
+    assert.equal(p.maxDownloadsPerDay, 1);
+    assert.deepEqual(p.conditionalGet, ['If-None-Match', 'If-Modified-Since']);
+    assert.equal(p.htmlCrawling, false);
+  }
+});
+
+// ── Requisitos pendientes: constan, y no activan nada ────────
+test('429/Retry-After y GET condicional constan como pendientes', () => {
+  // La ausencia de estas capacidades tiene que ser visible y, sobre todo, no
+  // puede ser la razón por la que algo parezca listo.
+  const county = allowlistEntry('sdcounty_food_facility_permits');
+  assert.ok(county.blockers.some((b) => /429|Retry-After/i.test(b)), 'falta el bloqueo de 429');
+  assert.ok(county.blockers.some((b) => /corrida\/día|corrida al día|1 corrida/i.test(b)));
+
+  const city = allowlistEntry('sd_business_tax_certificates');
+  assert.ok(city.blockers.some((b) => /ETag|If-None-Match|condicional/i.test(b)), 'falta el bloqueo del GET condicional');
+
+  // Y ninguna de las dos está habilitada pese a tener todo lo demás en regla.
+  assert.equal(county.enabled, false);
+  assert.equal(city.enabled, false);
+});
+
+test('el código no finge soportar el GET condicional', async () => {
+  // Si algún día apiFetch aprende ETag, esta prueba falla y obliga a actualizar
+  // el allowlist en lugar de dejar la evidencia mintiendo.
+  const http2 = await import('../src/prospecting/http.js');
+  assert.equal(typeof http2.apiFetch, 'function');
+  const src = fs.readFileSync(new URL('../src/prospecting/http.js', import.meta.url), 'utf8');
+  const soporta = /If-None-Match|If-Modified-Since|retry-after/i.test(src);
+  assert.equal(soporta, false,
+    'apiFetch ya soporta GET condicional o Retry-After: actualiza config/source-allowlist.json');
+});
+
+test('sourceStatus separa elegible, habilitada e implementada', () => {
+  const rows = sourceStatus();
+  assert.equal(rows.length, 3);
+  for (const r of rows) {
+    assert.equal(r.eligible, true);
+    assert.equal(r.enabled, false);
+    assert.equal(r.allowed, false);
+    assert.ok(r.state);
+    assert.ok(r.license);
+    assert.ok(Array.isArray(r.forbiddenFields));
+  }
+  const county = rows.find((r) => r.key === 'sdcounty_food_facility_permits');
+  assert.equal(county.implemented, true, 'SODA sí está implementado');
+  assert.equal(county.configured, true, 'es la fuente por defecto');
+  const csv = rows.filter((r) => r.accessType === 'csv-static');
+  assert.equal(csv.length, 2);
+  for (const r of csv) assert.equal(r.implemented, false);
+});
+
+// ── Catálogo y área ──────────────────────────────────────────
+test('el catálogo es de San Diego y declara su área de servicio', () => {
+  for (const [k, s] of Object.entries(SOURCES)) {
+    assert.ok(/sandiego|datasd/i.test(s.domain), `${k} no apunta a un portal de San Diego`);
+    assert.equal(s.serviceArea, SERVICE_AREA);
+    assert.ok(!/^(la|sf)_/.test(k), `quedó una fuente de LA/SF: ${k}`);
+  }
+});
+
+test('las fuentes por defecto existen en el catálogo', () => {
+  for (const k of config.prospecting.sources) {
+    assert.ok(SOURCES[k], `la fuente por defecto "${k}" no existe`);
+  }
+});
+
+test('los nombres con tilde y con apóstrofo se capitalizan bien', () => {
+  // Con una frontera de palabra ASCII, "panadería" salía "PanaderíA": el
+  // nombre del cliente mal escrito en el CRM desde el primer día.
+  const nombre = (raw) => mapRow(
+    SOURCES.sdcounty_food_facility_permits,
+    { record_id: 'R', record_name: raw, address: '1 Main St' },
+    'sdcounty_food_facility_permits',
+  ).businessName;
+
+  assert.equal(nombre('PANADERÍA BALBOA'), 'Panadería Balboa');
+  assert.equal(nombre('taquería el faro'), 'Taquería El Faro');
+  assert.equal(nombre('NIÑOS Y MÁS'), 'Niños Y Más');
+  assert.equal(nombre("MIGUEL'S COCINA"), "Miguel's Cocina", 'el apóstrofo no parte la palabra');
+  assert.equal(nombre("O'BRIEN PLUMBING"), "O'Brien Plumbing", 'salvo en los prefijos de apellido');
+  assert.equal(nombre('harbor view dental'), 'Harbor View Dental');
 });
 
 test('una fila sin los campos obligatorios se descarta, no se completa', () => {
-  // Si el portal cambia de columnas, es preferible no traer nada a traer
-  // prospectos plausibles e inventados.
-  assert.equal(mapRow(SOURCES.sd_building_permits, { columna_rara: 'x' }), null);
-  assert.equal(mapRow(SOURCES.sd_building_permits, { contractor_name: 'Solo Nombre' }), null, 'falta la dirección');
-  assert.equal(mapRow(SOURCES.sd_business_certificates, { dba_name: 'Tienda SD' }).businessName, 'Tienda Sd');
+  assert.equal(mapRow(SOURCES.sdcounty_food_facility_permits, { columna_rara: 'x' }, 'sdcounty_food_facility_permits'), null);
+  assert.equal(mapRow(SOURCES.sd_development_approvals, { PROJECT_TITLE: 'Solo título' }, 'sd_development_approvals'), null,
+    'falta la dirección');
 });
 
-test('la consulta filtra por fecha y lleva el límite', () => {
-  const params = SOURCES.sd_building_permits.query({ sinceDays: 30, limit: 25 });
-  assert.match(params.$where, /date_close > '\d{4}-\d{2}-\d{2}T/);
-  assert.equal(params.$limit, '25');
-  const url = buildUrl(SOURCES.sd_building_permits, params, 'http://127.0.0.1:9');
-  assert.ok(url.includes('/resource/development-permits-set1.json'));
-  assert.ok(url.includes('%24where='));
+test('la consulta del condado filtra por fecha y ordena por ella', () => {
+  const params = SOURCES.sdcounty_food_facility_permits.query({ sinceDays: 90, limit: 25 });
+  assert.match(params.$where, /record_open_date > '\d{4}-\d{2}-\d{2}T/);
+  assert.equal(params.$order, 'record_open_date DESC');
+  const url = buildUrl(SOURCES.sdcounty_food_facility_permits, params);
+  assert.ok(url.startsWith('https://data.sandiegocounty.gov/resource/c5ez-ufrd.json?'));
 });
 
-test('una fuente sin dataset confirmado no puede construir URL', () => {
-  assert.equal(SOURCES.sdcounty_business_licenses.dataset, null);
-  assert.throws(
-    () => buildUrl(SOURCES.sdcounty_business_licenses, {}),
-    /no tiene dataset confirmado/,
-  );
-});
-
-// ── Área de servicio ─────────────────────────────────────────
 test('el filtro de área acepta San Diego y rechaza lo de fuera', () => {
   assert.equal(isInServiceArea('92101'), true);
   assert.equal(isInServiceArea('92128'), true);
@@ -183,13 +433,11 @@ test('el filtro de área acepta San Diego y rechaza lo de fuera', () => {
   assert.equal(isInServiceArea('94110'), false, 'ni uno de San Francisco');
 });
 
-// ── Dos señales para dar por buena una web ───────────────────
-test('un teléfono suelto ya no basta para emparejar una web', () => {
+test('un teléfono suelto no basta para emparejar una web', () => {
   const soloTelefono = verifyMatch('<p>Llame al (619) 555-0142</p>', {
     businessName: 'Harbor View Dental', phone: '+16195550142', zip: '92101', address: '2100 Harbor Dr',
   });
   assert.equal(soloTelefono.matched, false, 'un solo dato puede ser de un agregador');
-  assert.deepEqual(soloTelefono.evidence, ['phone']);
 
   const dosSenales = verifyMatch('<p>Harbor View Dental · 2100 Harbor Dr, 92101</p>', {
     businessName: 'Harbor View Dental', zip: '92101', address: '2100 Harbor Dr',

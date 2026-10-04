@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { config } from '../../config.js';
 import { db } from '../../db.js';
 import { fetchFromSource, SOURCES } from '../sources/index.js';
+import { scrubRow } from '../sources/compliance.js';
 import { classify } from '../icp.js';
 import { newUid } from '../../utils/tokens.js';
 
@@ -77,12 +78,17 @@ export async function discover({ sources, sinceDays = 30, limit, baseOverride } 
         ).run(
           newUid(), key, row.sourceId || null, key_, row.businessName, row.contactName || null,
           segment, row.address || null, row.city || null, row.zip || null, row.phone || null,
-          row.signal?.type || null, JSON.stringify(row.signal || {}), JSON.stringify(row.raw || {}),
+          row.signal?.type || null, JSON.stringify(row.signal || {}),
+          // Segunda pasada del filtro de campos prohibidos, justo antes de
+          // escribir en disco. `fetchFromSource` ya limpia, pero esta es la
+          // última línea antes de que un dato personal quede persistido, y
+          // quien añada mañana otro productor de filas no tiene por qué saberlo.
+          JSON.stringify(scrubRow(key, row.raw) || {}),
           JSON.stringify({ classifier: { confidence, matched }, source: row.sourceLabel }),
           // El área y la URL del registro viajan al CRM: sin ellas no se puede
           // auditar de dónde salió una empresa ni filtrar por zona.
           row.serviceArea || null,
-          row.sourceUrl || SOURCES[key]?.compliance?.portal || null,
+          row.sourceUrl || null,
         );
         stats.inserted++;
       } catch (err) {
