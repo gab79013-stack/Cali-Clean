@@ -193,6 +193,47 @@ negocia: **si el CRM está configurado y no se puede leer, no se hace bootstrap.
 Un bootstrap a ciegas gastaría la única corrida del día releyendo lo que ya
 teníamos. Se para con `cursor_indeterminado` y se dice por qué.
 
+### La cuota de 24 h que sobrevive al contenedor
+
+`data/source-runtime-state.json` muere con el contenedor, así que dos
+contenedores del mismo día no se ven entre sí: cada uno cree ser el primero y
+los dos consultan el portal. La cuota local no está mal — es que no puede saber
+lo que no vivió.
+
+La autoridad durable es el CRM, **sin crear ningún registro de control**. Cada
+empresa ingerida lleva su `lastVerified`, que es la marca del snapshot con el que
+se escribió, así que:
+
+> última corrida con éxito = `max(lastVerified)` entre las Companies **activas**
+> cuya `dedupKey` empieza por `sdcounty-ffp:`
+
+Un GET, una fila, cero escrituras. La consulta es
+`filter=dedupKey[startsWith]:sdcounty-ffp:,deletedAt[is]:NULL` con
+`order_by=lastVerified[DescNullsLast]&limit=1`.
+
+Qué queda fuera a propósito: las **5 demos retiradas** (en borrado blando —
+alguien las apartó, su marca no puede gobernar lo que el sistema hace hoy) y los
+**3 leads manuales** (otra procedencia, otra clave: no dicen nada sobre cuándo se
+consultó este portal).
+
+Las cuatro decisiones, y van **antes** de resolver el cursor y antes de construir
+una sola URL:
+
+| Situación | Resultado |
+|---|---|
+| Hay marca y han pasado < 24 h | **Bloqueado** · `quota_blocked=1`, `fetched=0`, `crm_writes=0`, `outbound=0`, cero peticiones al Condado |
+| Han pasado ≥ 24 h (a las 24 h **exactas** ya pasa) | Permitido |
+| Hay empresas del prefijo pero el CRM no se puede leer, o la marca falta, es ilegible, está en el futuro o viene de otro namespace | **Bloqueado** · fail-closed: no saber cuándo se corrió no es permiso para correr |
+| No hay ninguna empresa del prefijo | Permitido (bootstrap de verdad) |
+
+La cuota local sigue en pie como segunda defensa dentro del mismo contenedor.
+
+**El hueco que queda, dicho en voz alta.** La marca mide *ingestión visible en el
+CRM*, no *consulta al portal*. Si un día la preview consulta pero el `apply`
+falla, nada se escribe y la marca no avanza, así que el siguiente contenedor
+volverá a consultar. Cerrar eso exigiría un registro de control, y la condición
+era no crearlo. Dentro del mismo contenedor lo cubre la cuota local.
+
 ### Un solo ciclo de recolección
 
     node scripts/source-run.js preview
@@ -336,6 +377,31 @@ Lo que sigue sin hacer, y lo que haría falta para cada cosa:
    constancia —importada con hash, o
    `node scripts/verify-sources.js <clave> --terms-ok` desde una red con
    acceso.
+
+### Cómo debe invocarlo una Routine diaria de escritura
+
+    npm run sources:preview || exit $?
+    SNAP=$(ls -t data/snapshots/sdcounty_food_facility_permits-*.json | head -1)
+    HASH=$(jq -r .sha256 "$SNAP")
+    TWENTY_WRITE_ENABLED=true NODE_USE_ENV_PROXY=1       node scripts/source-run.js apply --snapshot "$SNAP" --confirm       --expect-hash "$HASH" --max-creates 50
+
+Qué significan los códigos de salida de `preview`, que es lo que decide si el
+segundo paso debe correr:
+
+| Salida | Qué pasó | Qué debe hacer la Routine |
+|---|---|---|
+| 0 | Hay candidatos y snapshot | Seguir al `apply` |
+| 2 | Bloqueada (cuota durable, cuota local o cursor indeterminado) | **Terminar en silencio.** No es un fallo: es el guard |
+| 3 | Consultó y ninguna fila sobrevivió a los filtros | Terminar. No hay nada que cargar |
+| 1 | Error real (attestation, puerta, escrituras inesperadas) | Avisar |
+
+**Una advertencia sobre `--expect-hash` en esa cadena.** Sacar el hash del mismo
+archivo que protege lo convierte en una comprobación circular: ya no significa
+"este snapshot concreto lo autorizó una persona", solo "el que acabo de hacer".
+Lo que **sí** sigue comprobándose es la integridad del archivo, porque
+`readSnapshot` recomputa el hash sobre el contenido y lo compara con el guardado;
+una edición a mano se detecta igual. Si se quiere mantener el sentido original
+—autorización humana por snapshot— el `apply` no puede ir en la misma Routine.
 
 ### Cuando se renueve la evidencia
 

@@ -7,6 +7,12 @@ import http from 'node:http';
  * afirmar "el dry-run no escribió nada" mirando el registro en vez de
  * confiando en el código que se está probando.
  *
+ * Filtra y ordena como la instancia real: `campo[eq]`, `campo[startsWith]`,
+ * `deletedAt[is]:NULL|NOT_NULL` y `order_by=campo[AscNullsLast]`. Las borradas
+ * en blando quedan fuera salvo que se pregunte por ellas, igual que en la API.
+ * Un filtro o un order_by que no entienda devuelve 400 en lugar de ignorarlo:
+ * un fixture permisivo hace pasar pruebas que en producción fallarían.
+ *
  * Las respuestas imitan la forma real verificada contra la instancia:
  *   { data: { companies: [...] }, totalCount, pageInfo }
  */
@@ -45,9 +51,43 @@ export function createFakeTwenty({ seed = [], conflictOnce = false } = {}) {
     const id = m[1];
 
     if (req.method === 'GET' && !id) {
+      // Se emula el filtrado y la ordenación de verdad, con la sintaxis
+      // verificada contra la instancia real. Un fixture que devolviera todo
+      // haría pasar pruebas que en producción fallarían: la primera versión de
+      // este archivo solo entendía `dedupKey[eq]`, y una prueba del guard de
+      // cuota lo descubrió al recibir una empresa de otro namespace.
       const filter = url.searchParams.get('filter') || '';
-      const fm = filter.match(/^dedupKey\[eq\]:(.*)$/);
-      const rows = fm ? companies.filter((c) => c.dedupKey === fm[1]) : companies;
+      const clauses = filter ? filter.split(',').filter(Boolean) : [];
+      let rows = companies.slice();
+
+      // La API excluye las borradas en blando salvo que se pregunte por ellas.
+      const pideBorradas = /deletedAt\[is\]:NOT_NULL/.test(filter);
+      rows = pideBorradas
+        ? rows.filter((c) => c.deletedAt)
+        : rows.filter((c) => !c.deletedAt);
+
+      for (const clause of clauses) {
+        const eq = clause.match(/^([A-Za-z0-9_.]+)\[eq\]:(.*)$/);
+        if (eq) { rows = rows.filter((c) => String(c[eq[1]] ?? '') === eq[2]); continue; }
+        const sw = clause.match(/^([A-Za-z0-9_.]+)\[startsWith\]:(.*)$/);
+        if (sw) { rows = rows.filter((c) => String(c[sw[1]] ?? '').startsWith(sw[2])); continue; }
+        // `deletedAt[is]` ya se resolvió arriba; cualquier otra cláusula que
+        // aparezca aquí es una que este fixture no entiende, y callarse sería
+        // repetir el error de antes.
+        if (/^deletedAt\[is\]:(NULL|NOT_NULL)$/.test(clause)) continue;
+        return json(res, 400, { statusCode: 400, messages: [`fixture: filtro no soportado "${clause}"`] });
+      }
+
+      const orderBy = url.searchParams.get('order_by') || '';
+      if (orderBy) {
+        const om = orderBy.match(/^([A-Za-z0-9_.]+)(?:\[(Asc|Desc)[A-Za-z]*\])?$/);
+        if (!om) return json(res, 400, { statusCode: 400, messages: [`fixture: order_by no soportado "${orderBy}"`] });
+        const [, field, dir = 'Asc'] = om;
+        const key = (c) => (c[field] === null || c[field] === undefined ? '' : String(c[field]));
+        rows.sort((a, b) => key(a).localeCompare(key(b)));
+        if (dir === 'Desc') rows.reverse();
+      }
+
       const limit = Number(url.searchParams.get('limit') || 60);
       return json(res, 200, {
         data: { companies: rows.slice(0, limit) },

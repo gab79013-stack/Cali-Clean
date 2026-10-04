@@ -192,6 +192,36 @@ export async function lowestDedupKeyWithPrefix(client, prefix) {
   return rows[0]?.[COMPANY_FIELDS.dedupKey] || null;
 }
 
+/**
+ * La empresa ACTIVA de un namespace con el `lastVerified` más reciente.
+ *
+ * Es la autoridad durable de la cuota de 24 h: cada empresa ingerida lleva la
+ * marca del snapshot con el que se escribió, así que la más reciente dice
+ * cuándo se consultó el portal por última vez, y eso sobrevive a que el
+ * contenedor muera. Un GET, una fila, cero escrituras.
+ *
+ * `deletedAt[is]:NULL` no es decoración: una empresa que alguien retiró no
+ * puede seguir gobernando lo que el sistema hace hoy.
+ */
+export async function latestVerifiedWithPrefix(client, prefix) {
+  const clean = trim(prefix, 60);
+  if (!clean) throw new Error('latestVerifiedWithPrefix requiere un prefijo.');
+
+  const res = await client.get(`/${OBJECTS.companies}`, {
+    filter: `${COMPANY_FIELDS.dedupKey}[startsWith]:${clean},deletedAt[is]:NULL`,
+    order_by: `${COMPANY_FIELDS.lastVerified}[DescNullsLast]`,
+    limit: 1,
+    depth: 0,
+  });
+  const row = (res?.data?.[OBJECTS.companies] || [])[0];
+  if (!row) return null;
+  return {
+    dedupKey: row[COMPANY_FIELDS.dedupKey] ?? null,
+    lastVerified: row[COMPANY_FIELDS.lastVerified] ?? null,
+    deletedAt: row.deletedAt ?? null,
+  };
+}
+
 // ── Mapeo ────────────────────────────────────────────────────
 const trim = (v, max = 400) => String(v ?? '').trim().slice(0, max);
 
@@ -480,5 +510,5 @@ export async function planProspect(client, prospect) {
 
 export default {
   createClient, planProspect, upsertCompany, planCompanyUpsert,
-  findCompanyByDedupKey, lowestDedupKeyWithPrefix, redact,
+  findCompanyByDedupKey, lowestDedupKeyWithPrefix, latestVerifiedWithPrefix, redact,
 };

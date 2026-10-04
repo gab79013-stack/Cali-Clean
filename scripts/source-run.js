@@ -30,7 +30,8 @@ import {
   writeSnapshot, readSnapshot, summarize, sessionId, latestSnapshot,
 } from '../src/prospecting/sources/snapshot.js';
 import {
-  createClient, planCompanyUpsert, upsertCompany, lowestDedupKeyWithPrefix,
+  createClient, planCompanyUpsert, upsertCompany,
+  lowestDedupKeyWithPrefix, latestVerifiedWithPrefix,
 } from '../src/services/crm/twenty.js';
 
 const [command, ...rest] = process.argv.slice(2);
@@ -176,13 +177,19 @@ async function preview() {
 
   const crmConfigured = Boolean(config.twenty.baseUrl);
   let crmLookup = null;
+  let verifiedLookup = null;
   if (crmConfigured) {
     const { client } = countingClient();
     crmLookup = (prefix) => lowestDedupKeyWithPrefix(client, prefix);
+    verifiedLookup = (prefix) => latestVerifiedWithPrefix(client, prefix);
   }
 
   const result = await fetchFromSource(sourceKey, {
     limit: rowLimit,
+    // La cuota que sobrevive al contenedor. Si el CRM no está configurado no se
+    // puede comprobar, y entonces la única defensa es la local: se dice en voz
+    // alta en lugar de dar por bueno el silencio.
+    durableQuotaOptions: { lookup: verifiedLookup, required: crmConfigured },
     cursorOptions: {
       crmConfigured,
       crmLookup,
@@ -192,6 +199,13 @@ async function preview() {
     },
   });
 
+  if (result.durableQuota) {
+    title('Cuota durable (autoridad: el CRM)');
+    console.log(`  permitida: ${result.durableQuota.allowed}`);
+    console.log(`  última ingestión visible: ${result.durableQuota.lastVerifiedAt ?? '(ninguna)'}`);
+    console.log(`  ${result.durableQuota.detail}`);
+  }
+
   title('Modo de la corrida');
   console.log(`  modo:    ${result.cursor?.mode}`);
   console.log(`  origen:  ${result.cursor?.origin}`);
@@ -200,6 +214,8 @@ async function preview() {
 
   if (result.blocked) {
     console.log(`\n  BLOQUEADA: ${result.blocked.reason} — ${result.blocked.detail}`);
+    console.log(`  quota_blocked=${result.metrics.quota_blocked} · fetched=${result.metrics.fetched}`
+      + ` · crm_writes=0 · outbound=0 · peticiones al Condado: 0`);
     die('la corrida queda bloqueada. Es el sistema funcionando, no un error.', 2);
   }
 

@@ -7,6 +7,7 @@ import { sodaGet } from './soda-client.js';
 import { withQuota, MAX_ROWS_PER_RUN } from './quota.js';
 import { filterRow, assertNoForbidden } from './row-filter.js';
 import { resolveCursor } from './cursor.js';
+import { checkDurableQuota } from './durable-quota.js';
 
 /**
  * Catálogo de fuentes del área de San Diego.
@@ -399,8 +400,12 @@ export const emptyMetrics = () => ({
  *
  * El orden importa y es el único correcto:
  *
- *   puerta de cumplimiento → cuota y lock → petición con reintentos →
- *   filtrado de filas → mapeo → filtrado otra vez antes de raw
+ *   puerta de cumplimiento → cuota durable (CRM) → cursor → cuota local y lock
+ *   → petición con reintentos → filtrado de filas → mapeo → filtrado otra vez
+ *   antes de raw
+ *
+ * La cuota durable va delante de todo lo que cuesta algo porque es la que
+ * sobrevive al contenedor: la local no puede saber lo que no vivió.
  *
  * Nada de esto es opcional ni se puede saltar desde el llamante. Devuelve
  * `{ rows, metrics, blocked }`: si la cuota lo impide, `rows` viene vacío y
@@ -414,12 +419,37 @@ export async function fetchFromSource(key, {
   // resuelva aquí. `cursorOptions` llega tal cual a resolveCursor.
   cursor: cursorOverride,
   cursorOptions = null,
+  // Cuota durable entre contenedores, derivada del CRM. `null` significa que no
+  // se comprueba, que es lo que quieren las pruebas de otras capas; el runner
+  // siempre la pasa.
+  durableQuotaOptions = null,
 } = {}) {
   const started = Date.now();
   const metrics = emptyMetrics();
   const source = SOURCES[key];
   if (!source) throw new Error(`Fuente desconocida: ${key}`);
   assertSourceAllowed(key, source);
+
+  // ── Cuota durable, antes que nada ─────────────────────────
+  //
+  // Esta es la primera comprobación que puede detener la corrida, y va antes de
+  // resolver el cursor y antes de construir una sola URL. El motivo es
+  // literal: si el portal no se puede consultar hoy, no hay nada más que
+  // averiguar.
+  let durable = null;
+  if (durableQuotaOptions) {
+    durable = await checkDurableQuota({
+      namespace: source.dedupNamespace, ...durableQuotaOptions,
+    });
+    if (!durable.allowed) {
+      metrics.quota_blocked = 1;
+      metrics.duration_ms = Date.now() - started;
+      return {
+        rows: [], metrics, cursor: null, durableQuota: durable,
+        blocked: { reason: durable.reason, detail: durable.detail, authority: durable.authority },
+      };
+    }
+  }
 
   // ── Modo de la corrida ────────────────────────────────────
   let cursorInfo;
@@ -443,7 +473,7 @@ export async function fetchFromSource(key, {
   if (cursorInfo.mode === 'blocked') {
     metrics.duration_ms = Date.now() - started;
     return {
-      rows: [], metrics, cursor: cursorInfo,
+      rows: [], metrics, cursor: cursorInfo, durableQuota: durable,
       blocked: { reason: cursorInfo.reason, detail: cursorInfo.detail },
     };
   }
@@ -521,7 +551,7 @@ export async function fetchFromSource(key, {
   if (outcome.blocked) {
     metrics.quota_blocked = 1;
     return {
-      rows: [], metrics, cursor: cursorInfo,
+      rows: [], metrics, cursor: cursorInfo, durableQuota: durable,
       blocked: { reason: outcome.reason, detail: outcome.detail },
     };
   }
@@ -529,6 +559,7 @@ export async function fetchFromSource(key, {
     rows: outcome.result.out,
     metrics,
     cursor: { ...cursorInfo, cursorOut: outcome.result.cursor ?? null },
+    durableQuota: durable,
     blocked: null,
   };
 }
