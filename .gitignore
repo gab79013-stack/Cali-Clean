@@ -12,5 +12,11 @@ data/*.db-wal
 # porque alguien la verificó en otra máquina.
 data/source-compliance.json
 
+# Estado de cuota de las fuentes: cuántas filas y cuándo fue la última corrida
+# con éxito en ESTA máquina. Versionarlo regalaría cuota ajena, o la quitaría.
+data/source-runtime-state.json
+data/source-runtime-state.json.*
+data/source-runtime-state.json.lock
+
 *.log
 .DS_Store

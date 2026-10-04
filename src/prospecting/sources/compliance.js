@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../../config.js';
+import { attestationFor } from './attestation.js';
 
 /**
  * Puerta de cumplimiento de las fuentes, en dos capas que tienen que pasar las
@@ -171,6 +172,27 @@ export function checkSourceAllowed(key, source, { attestations, allowlist } = {}
     return { allowed: false, reason: 'solo_investigacion', state: entry.state, eligible: true };
   }
 
+  // La constancia operativa puede venir por dos vías, y basta con una:
+  //
+  //   · la attestation hash-based importada (config/source-attestation.json),
+  //     que viaja con el repositorio y se verifica sin red;
+  //   · la constancia local de esta instalación, que escribe verify-sources.js
+  //     tras comprobar en vivo.
+  //
+  // Las dos caducan. Se prueba primero la importada porque es la que permite
+  // arrancar en un entorno sin egress, que es el caso real de esta instalación.
+  const imported = attestationFor(key, { maxAgeDays: MAX_ATTESTATION_AGE_DAYS });
+  if (imported.ok) {
+    return {
+      allowed: true,
+      state: entry.state,
+      eligible: true,
+      attestationKind: 'hash-based-imported',
+      verifiedAt: imported.attestation.evidenceCollectedAt,
+      digest: imported.attestation.digest,
+    };
+  }
+
   const atts = attestations || loadAttestations();
   const att = atts[key];
   if (!att) {
@@ -179,7 +201,9 @@ export function checkSourceAllowed(key, source, { attestations, allowlist } = {}
       reason: 'sin_constancia_operativa',
       state: entry.state,
       eligible: true,
-      detail: `Ejecuta: node scripts/verify-sources.js ${key}`,
+      detail: imported.reason === 'attestation_invalida'
+        ? `la attestation importada no valida: ${(imported.problems || []).join('; ')}`
+        : `Ejecuta: node scripts/verify-sources.js ${key}`,
     };
   }
   if (att.robotsAllowed !== true) return { allowed: false, reason: 'robots_prohibe', detail: att.robotsDetail };

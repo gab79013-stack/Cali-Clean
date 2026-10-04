@@ -21,6 +21,9 @@ fs.writeFileSync(allowFile, JSON.stringify(realAllowlist, null, 2));
 process.env.DB_PATH = dbFile;
 process.env.SOURCE_ATTESTATION_PATH = attFile;
 process.env.SOURCE_ALLOWLIST_PATH = allowFile;
+// El estado de cuota, aparte: una prueba no puede gastarse la cuota del
+// despliegue ni dejar bloqueada la fuente durante 24 h en data/.
+process.env.SOURCE_RUNTIME_STATE_PATH = path.join(os.tmpdir(), `cc-prospect-quota-${Date.now()}.json`);
 process.env.OUTBOUND_ENABLED = 'true';
 process.env.OUTBOUND_REQUIRE_MX = 'false';
 process.env.OUTBOUND_DAILY_LIMIT = '25';
@@ -38,6 +41,20 @@ const { qualify } = await import('../src/prospecting/agents/qualify.js');
 const { outreach } = await import('../src/prospecting/agents/outreach.js');
 const { classify } = await import('../src/prospecting/icp.js');
 const { parseRobots, robotsAllows } = await import('../src/prospecting/http.js');
+
+/**
+ * Cuota propia para cada corrida del descubridor.
+ *
+ * El límite de 1 corrida con éxito cada 24 h es correcto en producción y se
+ * prueba en test/soda-quota.test.js y test/source-defense.test.js. Aquí
+ * estorbaría: lo que se comprueba en este archivo es el pipeline, y hace falta
+ * poder correrlo dos veces seguidas para ver que no duplica.
+ */
+let nCorrida = 0;
+const cuotaAislada = () => {
+  const f = path.join(os.tmpdir(), `cc-prospect-run-${Date.now()}-${nCorrida++}.json`);
+  return { quotaOptions: { stateFile: f, lockFile: `${f}.lock` } };
+};
 const guards = await import('../src/prospecting/guards.js');
 const { toPayload } = await import('../src/services/crm.js');
 const { validateCopy, buildBrief } = await import('../src/prospecting/agents/write.js');
@@ -147,7 +164,7 @@ test('una sola coincidencia no basta, dos sí', () => {
 
 // ── Pipeline completo ────────────────────────────────────────
 test('el agente descubridor carga prospectos clasificables y descarta el resto', async () => {
-  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base, fetchOptions: cuotaAislada() });
   assert.ok(stats.inserted >= 4, `esperaba al menos 4 prospectos, hubo ${stats.inserted}`);
   assert.ok(stats.unclassified >= 1, 'la editorial debería quedar fuera del ICP');
   assert.deepEqual(stats.errors, []);
@@ -188,7 +205,7 @@ test('el nombre del negocio conserva sus tildes', () => {
 
 test('una segunda corrida no duplica nada', async () => {
   const before = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
-  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sdcounty_food_facility_permits'], sinceDays: 90, baseOverride: base, fetchOptions: cuotaAislada() });
   const after = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
   assert.equal(after, before);
   assert.ok(stats.duplicates > 0);

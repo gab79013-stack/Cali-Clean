@@ -29,6 +29,10 @@ const termsOk = args.includes('--terms-ok');
 const UA = config.prospecting.userAgent;
 
 const STATE_MARK = {
+  // Habilitada pero no permitida: pasa por aquí cuando la constancia caduca.
+  // Sin esta entrada el estado se imprimiría como '?', que es justo lo que no
+  // interesa ver cuando una fuente deja de poder salir.
+  ENABLED: '◑',
   ELIGIBLE_BUT_DISABLED: '○',
   RESEARCH_ONLY_DISABLED: '◐',
   REJECTED: '✗',
@@ -36,7 +40,9 @@ const STATE_MARK = {
 
 function status() {
   console.log(`Evidencia de auditoría: ${allowlistFile()}`);
-  console.log(`Constancias operativas: ${attestationFile()}`);
+  console.log(`Constancias locales:    ${attestationFile()}`);
+  console.log(`Constancia importada:   config/source-attestation.json ` +
+    '(node scripts/verify-attestation.js)');
   console.log(`Caducidad de constancia: ${MAX_ATTESTATION_AGE_DAYS} días\n`);
 
   const atts = loadAttestations();

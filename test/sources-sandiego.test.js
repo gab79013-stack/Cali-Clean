@@ -6,7 +6,8 @@ import os from 'node:os';
 import http from 'node:http';
 
 /**
- * Fuentes del área de San Diego tras la auditoría del 2026-10-03.
+ * Fuentes del área de San Diego: auditoría del 2026-10-03, ampliada el
+ * 2026-10-04 con la evidencia que habilitó la fuente del condado.
  *
  * Lo que estas pruebas tienen que demostrar, porque es lo que separa una
  * política escrita de una política aplicada:
@@ -15,8 +16,11 @@ import http from 'node:http';
  *   · los campos prohibidos no se mapean, no se guardan y no se registran;
  *   · robots y límites de la auditoría están reflejados en el código;
  *   · los ids de dataset inventados no aparecen y no pueden construir URL;
- *   · 429/Retry-After y el GET condicional constan como requisito pendiente,
- *     sin que esa ausencia permita activar nada.
+ *   · habilitar exige las DOS capas: decisión humana en el allowlist y
+ *     constancia operativa vigente. Tener una no basta.
+ *
+ * La única fuente habilitada es la del condado. Las de la ciudad siguen
+ * apagadas, y el GET condicional que necesitan sigue constando como pendiente.
  */
 
 const attFile = path.join(os.tmpdir(), `cc-att-${Date.now()}.json`);
@@ -66,17 +70,37 @@ test('cada fuente declara licencia, robots, límites y decisión', () => {
 });
 
 // ── Elegible no es habilitada ────────────────────────────────
-test('ninguna fuente está habilitada tras la auditoría', () => {
-  for (const [k, e] of Object.entries(ALLOWLIST.sources)) {
-    assert.equal(e.enabled, false, `${k} quedó habilitada`);
+test('solo la fuente del condado está habilitada', () => {
+  const habilitadas = Object.entries(ALLOWLIST.sources)
+    .filter(([, e]) => e.enabled === true)
+    .map(([k]) => k);
+  assert.deepEqual(habilitadas, ['sdcounty_food_facility_permits'],
+    `habilitadas: ${habilitadas.join(', ') || 'ninguna'}`);
+
+  // Y la que se habilitó dejó constancia de por qué y de qué lo resolvió.
+  const county = ALLOWLIST.sources.sdcounty_food_facility_permits;
+  assert.equal(county.state, 'ENABLED');
+  assert.equal(county.enabledAt, '2026-10-04');
+  assert.deepEqual(county.blockers, [], 'queda un bloqueo sin resolver');
+  assert.equal(county.resolvedBlockers.length, 3);
+  for (const r of county.resolvedBlockers) {
+    assert.ok(r.resolvedBy, 'un bloqueo resuelto sin decir con qué');
+    assert.ok(r.testedBy, 'un bloqueo resuelto sin prueba que lo sostenga');
   }
 });
 
-test('las tres fuentes son elegibles pero ninguna puede salir a la red', () => {
+test('las tres son elegibles; solo la del condado puede salir a la red', () => {
   for (const [k, source] of Object.entries(SOURCES)) {
     const entry = allowlistEntry(k);
     assert.equal(entry.eligible, true, `${k} debería ser elegible`);
     const c = checkSourceAllowed(k, source, { attestations: {} });
+
+    if (k === 'sdcounty_food_facility_permits') {
+      // Pasa por la constancia importada, que se comprueba sin red.
+      assert.equal(c.allowed, true, `la fuente habilitada quedó bloqueada: ${c.reason}`);
+      assert.equal(c.attestationKind, 'hash-based-imported');
+      continue;
+    }
     assert.equal(c.allowed, false, `${k} podría salir a la red`);
     assert.equal(c.eligible, true, 'la puerta debe distinguir elegible de habilitada');
     assert.equal(c.reason, 'no_habilitada');
@@ -85,25 +109,33 @@ test('las tres fuentes son elegibles pero ninguna puede salir a la red', () => {
 
 test('una constancia operativa válida no basta para habilitar', () => {
   // Este es el punto del diseño: verificar no enciende. La decisión de
-  // encender es humana y vive en el allowlist.
-  saveAttestation('sdcounty_food_facility_permits', {
+  // encender es humana y vive en el allowlist. Se prueba sobre una fuente que
+  // sigue apagada, porque es ahí donde la distinción importa.
+  saveAttestation('sd_business_tax_certificates', {
     robotsAllowed: true, endpointVerified: true, termsReviewed: true,
     verifiedAt: new Date().toISOString(),
   });
-  const c = checkSourceAllowed('sdcounty_food_facility_permits', SOURCES.sdcounty_food_facility_permits);
+  const c = checkSourceAllowed('sd_business_tax_certificates', SOURCES.sd_business_tax_certificates);
   assert.equal(c.allowed, false);
   assert.equal(c.reason, 'no_habilitada');
 });
 
 test('habilitada en el allowlist pero sin constancia tampoco sale', () => {
-  const fake = structuredClone(ALLOWLIST);
-  fake.sources.sdcounty_food_facility_permits.enabled = true;
-  const c = checkSourceAllowed('sdcounty_food_facility_permits', SOURCES.sdcounty_food_facility_permits, {
-    allowlist: fake, attestations: {},
-  });
-  assert.equal(c.allowed, false);
-  assert.equal(c.reason, 'sin_constancia_operativa');
-  loadAllowlist({ reload: true });   // restaura el estado real
+  // La fuente del condado está habilitada de verdad, así que para probar esta
+  // mitad de la puerta hay que quitarle la constancia: se apunta la attestation
+  // importada a un archivo que no existe y se pasa un juego local vacío.
+  const original = process.env.SOURCE_ATTESTATION_FILE;
+  process.env.SOURCE_ATTESTATION_FILE = path.join(os.tmpdir(), `cc-sin-att-${Date.now()}.json`);
+  try {
+    const c = checkSourceAllowed('sdcounty_food_facility_permits', SOURCES.sdcounty_food_facility_permits, {
+      attestations: {},
+    });
+    assert.equal(c.allowed, false, 'salió a la red sin constancia operativa');
+    assert.equal(c.reason, 'sin_constancia_operativa');
+  } finally {
+    if (original === undefined) delete process.env.SOURCE_ATTESTATION_FILE;
+    else process.env.SOURCE_ATTESTATION_FILE = original;
+  }
 });
 
 test('un acceso no implementado bloquea aunque esté habilitada', () => {
@@ -141,8 +173,10 @@ test('una fuente no habilitada no llega a hacer la petición', async () => {
   const server = http.createServer((req, res) => { touched = true; res.end('[]'); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const apagadas = Object.keys(SOURCES).filter((k) => allowlistEntry(k).enabled !== true);
+  assert.equal(apagadas.length, 2, 'se esperaban dos fuentes apagadas');
   try {
-    for (const key of Object.keys(SOURCES)) {
+    for (const key of apagadas) {
       await assert.rejects(
         () => fetchFromSource(key, { baseOverride: base }),
         /no está habilitada/,
@@ -335,19 +369,23 @@ test('la política de caudal registra lo que exige la auditoría', () => {
 });
 
 // ── Requisitos pendientes: constan, y no activan nada ────────
-test('429/Retry-After y GET condicional constan como pendientes', () => {
-  // La ausencia de estas capacidades tiene que ser visible y, sobre todo, no
-  // puede ser la razón por la que algo parezca listo.
+test('el 429 y la cuota constan como resueltos; el GET condicional sigue pendiente', () => {
+  // Lo que antes era un bloqueo pendiente ahora tiene que constar como
+  // resuelto y con la prueba que lo sostiene. Lo que sigue faltando tiene que
+  // seguir visible, y seguir impidiendo que la fuente que lo necesita se
+  // encienda.
   const county = allowlistEntry('sdcounty_food_facility_permits');
-  assert.ok(county.blockers.some((b) => /429|Retry-After/i.test(b)), 'falta el bloqueo de 429');
-  assert.ok(county.blockers.some((b) => /corrida\/día|corrida al día|1 corrida/i.test(b)));
+  const resueltos = county.resolvedBlockers.map((r) => r.blocker).join(' | ');
+  assert.match(resueltos, /429|Retry-After/i, 'el 429 no consta como resuelto');
+  assert.match(resueltos, /1 corrida|corrida\/día|corrida al día/i, 'la cuota no consta como resuelta');
+  assert.deepEqual(county.blockers, []);
+
+  const pruebas = county.resolvedBlockers.map((r) => r.testedBy);
+  assert.ok(pruebas.includes('test/soda-quota.test.js'));
 
   const city = allowlistEntry('sd_business_tax_certificates');
   assert.ok(city.blockers.some((b) => /ETag|If-None-Match|condicional/i.test(b)), 'falta el bloqueo del GET condicional');
-
-  // Y ninguna de las dos está habilitada pese a tener todo lo demás en regla.
-  assert.equal(county.enabled, false);
-  assert.equal(city.enabled, false);
+  assert.equal(city.enabled, false, 'la fuente de la ciudad no puede encenderse con un bloqueo abierto');
 });
 
 test('el código no finge soportar el GET condicional', async () => {
@@ -366,15 +404,22 @@ test('sourceStatus separa elegible, habilitada e implementada', () => {
   assert.equal(rows.length, 3);
   for (const r of rows) {
     assert.equal(r.eligible, true);
-    assert.equal(r.enabled, false);
-    assert.equal(r.allowed, false);
     assert.ok(r.state);
     assert.ok(r.license);
     assert.ok(Array.isArray(r.forbiddenFields));
+    // Habilitada y permitida van juntas: la única habilitada es la única que
+    // puede salir, y las demás no pueden por no estarlo.
+    assert.equal(r.allowed, r.enabled, `${r.key}: enabled=${r.enabled} pero allowed=${r.allowed}`);
   }
   const county = rows.find((r) => r.key === 'sdcounty_food_facility_permits');
+  assert.equal(county.enabled, true);
+  assert.equal(county.allowed, true);
   assert.equal(county.implemented, true, 'SODA sí está implementado');
   assert.equal(county.configured, true, 'es la fuente por defecto');
+  for (const r of rows.filter((x) => x.key !== county.key)) {
+    assert.equal(r.enabled, false, `${r.key} quedó habilitada`);
+    assert.equal(r.reason, 'no_habilitada');
+  }
   const csv = rows.filter((r) => r.accessType === 'csv-static');
   assert.equal(csv.length, 2);
   for (const r of csv) assert.equal(r.implemented, false);

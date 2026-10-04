@@ -119,19 +119,30 @@ export CSV. Inbound y outbound conviven ahí.
 Portales de datos abiertos de California (Socrata), consultables por API sin
 credenciales:
 
-Auditadas el 2026-10-03 desde una red autorizada. Detalle completo en
-[`docs/source-verification.md`](docs/source-verification.md); evidencia
-machine-readable en [`config/source-allowlist.json`](config/source-allowlist.json).
+Auditadas el 2026-10-03 y ampliadas el 2026-10-04 desde una red autorizada.
+Detalle completo en [`docs/source-verification.md`](docs/source-verification.md);
+evidencia machine-readable en
+[`config/source-allowlist.json`](config/source-allowlist.json) y constancia con
+hash, comprobable sin red, en
+[`config/source-attestation.json`](config/source-attestation.json).
 
 | Clave | Qué trae | Estado |
 |---|---|---|
-| `sdcounty_food_facility_permits` | Permisos de alimentación del Condado (SODA, dominio público) | Elegible · **apagada** |
+| `sdcounty_food_facility_permits` | Permisos de alimentación del Condado (SODA, dominio público) | **Habilitada** · 50 filas por corrida · 1 corrida cada 24 h |
 | `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | Elegible · **apagada**, acceso sin implementar |
 | `sd_development_approvals` | Aprobaciones de desarrollo de la Ciudad (CSV, ODC PDDL) | **Solo investigación**, prohibido su uso como lead |
 
-**Ninguna fuente está habilitada.** `eligible` significa que la licencia lo
+**Una sola fuente habilitada.** `eligible` significa que la licencia lo
 permite; `enabled` significa que dejamos al código salir a por los datos. Son
-decisiones distintas y el código las comprueba por separado.
+decisiones distintas y el código las comprueba por separado, y además exige una
+constancia operativa vigente para dejar salir a cualquiera de las dos.
+
+De esa fuente se descartan **enteras** las filas de cocinas domésticas
+(*Microenterprise Home Kitchen*, *cottage food*): el permiso se concede sobre la
+vivienda del titular, así que su dirección es un domicilio particular.
+
+    node scripts/verify-attestation.js    # comprueba la constancia, sin red
+    node scripts/dry-run-source.js        # métricas de una corrida, sin red ni CRM
 
 Añadir una ciudad es añadir una entrada en `src/prospecting/sources/index.js`
 con su dataset y el mapeo de campos. El resto del pipeline no cambia.

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from '../../config.js';
 import { db } from '../../db.js';
-import { fetchFromSource, SOURCES } from '../sources/index.js';
+import { fetchFromSource, SOURCES, emptyMetrics } from '../sources/index.js';
 import { scrubRow } from '../sources/compliance.js';
 import { classify } from '../icp.js';
 import { newUid } from '../../utils/tokens.js';
@@ -36,16 +36,42 @@ export function dedupeKey({ businessName, address, zip, website, phone }) {
   return `name:${crypto.createHash('sha1').update(basis).digest('hex').slice(0, 20)}`;
 }
 
-export async function discover({ sources, sinceDays = 30, limit, baseOverride } = {}) {
+export async function discover({ sources, sinceDays = 30, limit, baseOverride, fetchOptions = {} } = {}) {
   const active = (sources || config.prospecting.sources).filter((k) => SOURCES[k]);
   const cap = limit ?? config.prospecting.discoverLimit;
-  const stats = { sources: active.length, fetched: 0, inserted: 0, duplicates: 0, unclassified: 0, errors: [] };
+  const stats = {
+    sources: active.length,
+    fetched: 0,
+    inserted: 0,
+    duplicates: 0,
+    unclassified: 0,
+    errors: [],
+    // Métricas agregadas de la capa de red y de los filtros. Solo recuentos.
+    metrics: emptyMetrics(),
+    blocked: [],
+  };
+
+  const addMetrics = (m) => {
+    for (const k of Object.keys(stats.metrics)) {
+      if (typeof m[k] === 'number') stats.metrics[k] += m[k];
+    }
+  };
 
   for (const key of active) {
     if (stats.inserted >= cap) break;
     let rows = [];
     try {
-      rows = await fetchFromSource(key, { sinceDays, limit: Math.min(200, cap * 2), baseOverride });
+      const result = await fetchFromSource(key, {
+        sinceDays, limit: Math.min(200, cap * 2), baseOverride, ...fetchOptions,
+      });
+      addMetrics(result.metrics);
+      if (result.blocked) {
+        // La cuota no es un fallo: es el sistema funcionando. Se anota aparte
+        // para que no se confunda con un error en los informes.
+        stats.blocked.push({ source: key, ...result.blocked });
+        continue;
+      }
+      rows = result.rows;
     } catch (err) {
       stats.errors.push(`${key}: ${err.message}`);
       continue;

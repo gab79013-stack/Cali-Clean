@@ -17,7 +17,9 @@
     "test": "node --test test/*.test.js",
     "twenty:schema": "NODE_USE_ENV_PROXY=1 node scripts/twenty-sync.js schema",
     "twenty:dry-run": "NODE_USE_ENV_PROXY=1 node scripts/twenty-sync.js dry-run",
-    "sources:status": "node scripts/verify-sources.js"
+    "sources:status": "node scripts/verify-sources.js",
+    "sources:attestation": "node scripts/verify-attestation.js",
+    "sources:dry-run": "node scripts/dry-run-source.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

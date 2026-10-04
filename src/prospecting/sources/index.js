@@ -1,9 +1,11 @@
 import { config } from '../../config.js';
-import { apiFetch } from '../http.js';
 import {
   assertSourceAllowed, checkSourceAllowed, allowlistEntry,
   allowedFields, forbiddenFields, scrubRow, isBannedDataset, rejectionFor,
 } from './compliance.js';
+import { sodaGet } from './soda-client.js';
+import { withQuota, MAX_ROWS_PER_RUN } from './quota.js';
+import { filterRow, assertNoForbidden } from './row-filter.js';
 
 /**
  * Catálogo de fuentes del área de San Diego.
@@ -20,7 +22,8 @@ import {
  *      antes de guardarla.
  *   3. Un dataset de la lista de rechazados no puede ni construir su URL.
  *
- * Estado al 2026-10-03: ninguna fuente habilitada. Ver docs/source-verification.md.
+ * Estado al 2026-10-04: habilitada solo sdcounty_food_facility_permits; las dos
+ * municipales siguen apagadas. Ver docs/source-verification.md.
  */
 
 const clean = (v) => String(v ?? '').trim();
@@ -55,9 +58,10 @@ export const SOURCES = {
   /**
    * Condado de San Diego · permisos de establecimientos de alimentación.
    *
-   * La única con acceso implementado: API SODA, dominio público y /resource
-   * permitido por su robots.txt. Sigue apagada en el allowlist hasta que el
-   * control de caudal (429 + Retry-After) esté implementado y probado.
+   * La única habilitada, y la única con acceso implementado: API SODA, dominio
+   * público y /resource permitido por su robots.txt. Se encendió el 2026-10-04,
+   * cuando el control de caudal (429 + Retry-After) y la cuota de una corrida
+   * cada 24 h pasaron pruebas. Sigue atada a 50 filas por corrida.
    */
   sdcounty_food_facility_permits: {
     label: 'Permisos de alimentación · Condado de San Diego',
@@ -257,30 +261,102 @@ export function sourceStatus() {
   });
 }
 
+/** Métricas de una corrida. Solo recuentos: ni una fila, ni un dato personal. */
+export const emptyMetrics = () => ({
+  attempted: 0,
+  fetched: 0,
+  mapped: 0,
+  skipped_sensitive: 0,
+  skipped_residential: 0,
+  skipped_invalid: 0,
+  deduped: 0,
+  retries: 0,
+  http429: 0,
+  quota_blocked: 0,
+  duration_ms: 0,
+  crm_writes: 0,
+  outbound: 0,
+});
+
 /**
- * Consulta una fuente. Falla antes de salir a la red si no está habilitada:
- * la puerta se cruza aquí, no en el llamante, y no hay forma de esquivarla.
+ * Consulta una fuente bajo todos los controles.
+ *
+ * El orden importa y es el único correcto:
+ *
+ *   puerta de cumplimiento → cuota y lock → petición con reintentos →
+ *   filtrado de filas → mapeo → filtrado otra vez antes de raw
+ *
+ * Nada de esto es opcional ni se puede saltar desde el llamante. Devuelve
+ * `{ rows, metrics, blocked }`: si la cuota lo impide, `rows` viene vacío y
+ * `blocked` dice por qué, en lugar de lanzar como si fuera un error.
  */
-export async function fetchFromSource(key, { sinceDays, limit, baseOverride } = {}) {
+export async function fetchFromSource(key, {
+  sinceDays, limit, baseOverride,
+  fetchImpl, sleep, clock, random,
+  quotaOptions = {},
+} = {}) {
+  const started = Date.now();
+  const metrics = emptyMetrics();
   const source = SOURCES[key];
   if (!source) throw new Error(`Fuente desconocida: ${key}`);
   assertSourceAllowed(key, source);
 
-  const params = source.query({ sinceDays: sinceDays ?? 90, limit: limit ?? 50 });
-  const headers = config.prospecting.socrataAppToken
-    ? { 'X-App-Token': config.prospecting.socrataAppToken }
-    : {};
+  const outcome = await withQuota(key, async ({ maxRows }) => {
+    const effectiveLimit = Math.min(limit ?? maxRows, maxRows);
+    const params = source.query({ sinceDays: sinceDays ?? 90, limit: effectiveLimit });
+    const headers = config.prospecting.socrataAppToken
+      ? { 'X-App-Token': config.prospecting.socrataAppToken }
+      : {};
 
-  const rows = await apiFetch(buildUrl(source, params, baseOverride), { headers });
-  if (!Array.isArray(rows)) return [];
+    metrics.attempted = 1;
+    const url = buildUrl(source, params, baseOverride);
+    const { rows: rawRows, metrics: httpMetrics } = await sodaGet(url, {
+      fetchImpl, sleep, clock, random, headers,
+    });
+    metrics.retries = httpMetrics.retries;
+    metrics.http429 = httpMetrics.http429;
+    metrics.fetched = rawRows.length;
 
-  return rows
-    .map((row) => {
-      const mapped = mapRow(source, row, key);
-      // La fila cruda que se guarda también va limpia de campos prohibidos.
-      return mapped ? { ...mapped, source: key, sourceLabel: source.label, raw: scrubRow(key, row) } : null;
-    })
-    .filter(Boolean);
+    const out = [];
+    const seen = new Set();
+    for (const rawRow of rawRows) {
+      const { row: safeRow, reason } = filterRow(key, rawRow);
+      if (!safeRow) {
+        if (reason === 'residential') metrics.skipped_residential++;
+        else if (reason === 'invalid' || reason === 'sin_allowlist') metrics.skipped_invalid++;
+        else metrics.skipped_sensitive++;
+        continue;
+      }
+
+      const mapped = mapRow(source, safeRow, key);
+      if (!mapped) { metrics.skipped_invalid++; continue; }
+
+      const fingerprint = `${mapped.businessName}|${mapped.address}|${mapped.zip}`.toLowerCase();
+      if (seen.has(fingerprint)) { metrics.deduped++; continue; }
+      seen.add(fingerprint);
+
+      // Último filtrado antes de que la fila cruda viaje a disco. Que ya esté
+      // limpia no quita que esta sea la frontera donde hay que comprobarlo.
+      const raw = scrubRow(key, safeRow);
+      assertNoForbidden(key, raw, 'raw de la fila');
+      assertNoForbidden(key, mapped, 'prospecto mapeado');
+
+      metrics.mapped++;
+      out.push({ ...mapped, source: key, sourceLabel: source.label, raw });
+    }
+
+    // Se consultó al portal: la corrida gasta cuota aunque no saliera nada
+    // útil. Lo que limitamos es su carga, no nuestro provecho.
+    return { rows: out.length, consumed: true, out };
+  }, { maxRows: MAX_ROWS_PER_RUN, ...quotaOptions });
+
+  metrics.duration_ms = Date.now() - started;
+
+  if (outcome.blocked) {
+    metrics.quota_blocked = 1;
+    return { rows: [], metrics, blocked: { reason: outcome.reason, detail: outcome.detail } };
+  }
+  return { rows: outcome.result.out, metrics, blocked: null };
 }
 
 export default SOURCES;

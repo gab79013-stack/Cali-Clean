@@ -1,6 +1,6 @@
 {
-  "$comment": "Evidencia de la auditoría de fuentes. La escribe una persona tras verificar desde una red autorizada; el código la lee pero nunca la genera. 'eligible' NO significa 'enabled': una fuente elegible está autorizada legalmente, pero no puede salir a la red hasta que alguien ponga enabled=true Y exista una constancia operativa vigente en data/source-compliance.json.",
-  "version": 1,
+  "$comment": "Evidencia de la auditoría de fuentes. La escribe una persona tras verificar desde una red autorizada; el código la lee pero nunca la genera. 'eligible' NO significa 'enabled': una fuente elegible está autorizada legalmente, pero no puede salir a la red hasta que alguien ponga enabled=true Y exista una constancia operativa vigente (config/source-attestation.json importada con hash, o data/source-compliance.json local).",
+  "version": 2,
   "auditedAt": "2026-10-03",
   "timezone": "America/Los_Angeles",
   "auditMethod": "verificación manual desde red autorizada (HEAD/GET y lectura de páginas de licencia)",
@@ -9,7 +9,6 @@
     "noHtmlCrawling": true,
     "personalDataPolicy": "solo datos de contacto empresarial; los campos que identifican a una persona física se excluyen en origen y no se almacenan ni se registran"
   },
-
   "sources": {
     "sd_business_tax_certificates": {
       "label": "City of San Diego · Business Tax Certificates (activos)",
@@ -29,12 +28,33 @@
         "updateCadence": "diaria",
         "headerVerified": true,
         "columnsObserved": [
-          "account_key", "account_status", "date_account_creation", "date_cert_expiration",
-          "date_cert_effective", "business_owner_name", "ownership_type", "date_business_start",
-          "dba_name", "naics_sector", "naics_code", "naics_description", "address_no",
-          "address_pd", "address_road", "address_sfx", "address_no_fraction", "address_city",
-          "address_state", "address_zip", "address_suite", "address_pmb_box", "address_po_box",
-          "bid", "council_district", "lat", "lng"
+          "account_key",
+          "account_status",
+          "date_account_creation",
+          "date_cert_expiration",
+          "date_cert_effective",
+          "business_owner_name",
+          "ownership_type",
+          "date_business_start",
+          "dba_name",
+          "naics_sector",
+          "naics_code",
+          "naics_description",
+          "address_no",
+          "address_pd",
+          "address_road",
+          "address_sfx",
+          "address_no_fraction",
+          "address_city",
+          "address_state",
+          "address_zip",
+          "address_suite",
+          "address_pmb_box",
+          "address_po_box",
+          "bid",
+          "council_district",
+          "lat",
+          "lng"
         ]
       },
       "license": {
@@ -56,19 +76,39 @@
         "publishedLimit": null,
         "internalPolicy": {
           "maxDownloadsPerDay": 1,
-          "conditionalGet": ["If-None-Match", "If-Modified-Since"],
+          "conditionalGet": [
+            "If-None-Match",
+            "If-Modified-Since"
+          ],
           "localCacheRequired": true,
           "htmlCrawling": false
         }
       },
       "fields": {
         "allowed": [
-          "account_key", "account_status", "date_account_creation", "date_cert_effective",
-          "date_business_start", "dba_name", "naics_sector", "naics_code", "naics_description",
-          "address_no", "address_pd", "address_road", "address_sfx", "address_city",
-          "address_state", "address_zip", "address_suite", "bid", "council_district"
+          "account_key",
+          "account_status",
+          "date_account_creation",
+          "date_cert_effective",
+          "date_business_start",
+          "dba_name",
+          "naics_sector",
+          "naics_code",
+          "naics_description",
+          "address_no",
+          "address_pd",
+          "address_road",
+          "address_sfx",
+          "address_city",
+          "address_state",
+          "address_zip",
+          "address_suite",
+          "bid",
+          "council_district"
         ],
-        "forbidden": ["business_owner_name"],
+        "forbidden": [
+          "business_owner_name"
+        ],
         "forbiddenReason": "Nombre de persona física. No se mapea, no se almacena y no se registra."
       },
       "blockers": [
@@ -77,7 +117,6 @@
       ],
       "decision": "Elegible por licencia y por documentación oficial de automatización. Desactivada hasta implementar y probar la ingestión CSV condicional."
     },
-
     "sd_development_approvals": {
       "label": "City of San Diego · Approvals for development projects (2026)",
       "state": "RESEARCH_ONLY_DISABLED",
@@ -97,9 +136,19 @@
         "updateCadence": "diaria",
         "headerVerified": true,
         "columnsObserved": [
-          "PROJECT_ID", "PROJECT_TYPE", "PROJECT_CREATE_DATE", "PROJECT_TITLE", "PROJECT_SCOPE",
-          "GIS_ADDRESS", "APPROVAL_ID", "APPROVAL_TYPE", "APPROVAL_STATUS", "APPROVAL_SCOPE",
-          "APPROVAL_CREATE_DATE", "APPROVAL_VALUATION", "APPROVAL_PERMIT_HOLDER"
+          "PROJECT_ID",
+          "PROJECT_TYPE",
+          "PROJECT_CREATE_DATE",
+          "PROJECT_TITLE",
+          "PROJECT_SCOPE",
+          "GIS_ADDRESS",
+          "APPROVAL_ID",
+          "APPROVAL_TYPE",
+          "APPROVAL_STATUS",
+          "APPROVAL_SCOPE",
+          "APPROVAL_CREATE_DATE",
+          "APPROVAL_VALUATION",
+          "APPROVAL_PERMIT_HOLDER"
         ]
       },
       "license": {
@@ -118,18 +167,32 @@
         "publishedLimit": null,
         "internalPolicy": {
           "maxDownloadsPerDay": 1,
-          "conditionalGet": ["If-None-Match", "If-Modified-Since"],
+          "conditionalGet": [
+            "If-None-Match",
+            "If-Modified-Since"
+          ],
           "localCacheRequired": true,
           "htmlCrawling": false
         }
       },
       "fields": {
         "allowed": [
-          "PROJECT_ID", "PROJECT_TYPE", "PROJECT_CREATE_DATE", "PROJECT_TITLE", "PROJECT_SCOPE",
-          "GIS_ADDRESS", "APPROVAL_ID", "APPROVAL_TYPE", "APPROVAL_STATUS", "APPROVAL_SCOPE",
-          "APPROVAL_CREATE_DATE", "APPROVAL_VALUATION"
+          "PROJECT_ID",
+          "PROJECT_TYPE",
+          "PROJECT_CREATE_DATE",
+          "PROJECT_TITLE",
+          "PROJECT_SCOPE",
+          "GIS_ADDRESS",
+          "APPROVAL_ID",
+          "APPROVAL_TYPE",
+          "APPROVAL_STATUS",
+          "APPROVAL_SCOPE",
+          "APPROVAL_CREATE_DATE",
+          "APPROVAL_VALUATION"
         ],
-        "forbidden": ["APPROVAL_PERMIT_HOLDER"],
+        "forbidden": [
+          "APPROVAL_PERMIT_HOLDER"
+        ],
         "forbiddenReason": "Puede ser una persona física, no una empresa. No se mapea ni se almacena mientras no exista filtro de organización y verificación externa por dos señales."
       },
       "blockers": [
@@ -139,12 +202,11 @@
       ],
       "decision": "Solo investigación. Prohibido su uso como fuente de leads hasta cumplir los tres bloqueos."
     },
-
     "sdcounty_food_facility_permits": {
       "label": "County of San Diego · Food Facility Permits",
-      "state": "ELIGIBLE_BUT_DISABLED",
+      "state": "ENABLED",
       "eligible": true,
-      "enabled": false,
+      "enabled": true,
       "accessType": "soda",
       "implemented": true,
       "baseDomain": "data.sandiegocounty.gov",
@@ -185,34 +247,66 @@
       },
       "fields": {
         "allowed": [
-          "record_id", "record_open_date", "record_issue_date", "record_name",
-          "permit_status", "active_permit", "business_type", "address", "city",
-          "state", "zip", "last_updated"
+          "record_id",
+          "record_open_date",
+          "record_issue_date",
+          "record_name",
+          "permit_status",
+          "active_permit",
+          "business_type",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "last_updated"
         ],
         "forbidden": [
-          "permit_owner_full", "permit_owner", "permit_owner_email", "latitude", "longitude"
+          "permit_owner_full",
+          "permit_owner",
+          "permit_owner_email",
+          "latitude",
+          "longitude"
         ],
         "forbiddenReason": "permit_owner* identifica a una persona física; latitude/longitude son geolocalización precisa que no necesitamos. Se excluyen en origen mediante $select, de modo que el servidor no llega a enviarlos."
       },
-      "blockers": [
-        "Falta implementar y probar el manejo de 429 con Retry-After y el backoff exponencial.",
-        "Falta el control de 1 corrida/día.",
-        "El mapeo a prospecto está definido pero sin datos reales contra los que contrastarlo."
-      ],
-      "decision": "Elegible: dominio público, /resource permitido por robots y datos actuales. Desactivada hasta que el control de caudal y el mapeo pasen pruebas."
+      "blockers": [],
+      "decision": "Habilitada el 2026-10-04. Dominio público, /resource permitido por robots y datos actuales. Los tres bloqueos anteriores están resueltos y probados (ver resolvedBlockers). Sigue sujeta a: 50 filas por corrida, 1 corrida con éxito cada 24 h, campos prohibidos excluidos en el $select y filas residenciales (MHKO/cottage food) descartadas enteras.",
+      "enabledAt": "2026-10-04",
+      "enabledBy": "operador, tras la auditoría del 2026-10-04 desde red autorizada",
+      "resolvedBlockers": [
+        {
+          "blocker": "Falta implementar y probar el manejo de 429 con Retry-After y el backoff exponencial.",
+          "resolvedBy": "src/prospecting/sources/soda-client.js — 4 intentos, base 1 s, tope 30 s, jitter completo, Retry-After del servidor con prioridad y truncado a 300 s.",
+          "testedBy": "test/soda-quota.test.js"
+        },
+        {
+          "blocker": "Falta el control de 1 corrida/día.",
+          "resolvedBy": "src/prospecting/sources/quota.js — estado persistente con escritura atómica, lock y ventana de 24 h; 50 filas por corrida.",
+          "testedBy": "test/soda-quota.test.js"
+        },
+        {
+          "blocker": "El mapeo a prospecto está definido pero sin datos reales contra los que contrastarlo.",
+          "resolvedBy": "Mapeo contrastado contra la FORMA de la muestra SODA recogida el 2026-10-04 y registrada en config/source-attestation.json (sha256 850f68e3…b47d).",
+          "testedBy": "test/source-defense.test.js",
+          "residualRisk": "La muestra la obtuvo el operador desde su red; esta instalación no la ha descargado. La primera corrida real sigue siendo la primera vez que el mapeo ve datos del portal."
+        }
+      ]
     }
   },
-
   "rejected": {
     "sd_building_permits_invented": {
       "reason": "ID de dataset inventado por una sesión anterior. El portal municipal no sirve ese dataset por Socrata.",
-      "bannedDatasetIds": ["development-permits-set1"],
+      "bannedDatasetIds": [
+        "development-permits-set1"
+      ],
       "bannedDomains": [],
       "neverUse": true
     },
     "sd_business_listings_invented": {
       "reason": "ID de dataset inventado por una sesión anterior. El portal municipal no es Socrata para ese contenido.",
-      "bannedDatasetIds": ["business-listings"],
+      "bannedDatasetIds": [
+        "business-listings"
+      ],
       "neverUse": true
     },
     "sdcounty_business_licenses": {
@@ -222,13 +316,22 @@
     },
     "sdcounty_building_permits": {
       "reason": "Dominio público y /resource permitido, pero el último dato observado es de 2023 y el Last-Modified de 2024: obsoleto para detectar obra reciente.",
-      "bannedDatasetIds": ["dyzh-7eat"],
+      "bannedDatasetIds": [
+        "dyzh-7eat"
+      ],
       "neverUse": true
     },
     "sdcounty_building_permits_contractors": {
       "reason": "No declara licencia y expone datos personales.",
-      "bannedDatasetIds": ["76h4-nnmj"],
+      "bannedDatasetIds": [
+        "76h4-nnmj"
+      ],
       "neverUse": true
     }
+  },
+  "lastChange": {
+    "at": "2026-10-04",
+    "what": "sdcounty_food_facility_permits pasa a enabled=true. Las demás fuentes siguen en false.",
+    "why": "Sus tres bloqueos quedaron resueltos y probados: control de caudal (429/Retry-After), cuota de 1 corrida/24 h y mapeo contrastado con la muestra atestiguada."
   }
 }

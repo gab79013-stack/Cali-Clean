@@ -1,0 +1,96 @@
+{
+  "$comment": "Attestation operativa basada en hashes. NO es una firma: este repositorio no tiene clave autorizada y no se inventa ninguna. El campo digest es un SHA256 reproducible del propio documento, que demuestra que no ha cambiado desde que se escribió, no quién lo escribió. Los sha256 de artifacts son evidencia IMPORTADA: quien verifica offline no puede recomputarlos porque no tiene los artefactos ni red para pedirlos.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T00:00:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T05:11:43.000Z",
+  "collectedFrom": {
+    "network": "red local autorizada del operador",
+    "method": "GET manual con curl y proyección canónica con jq -S",
+    "importedInto": "sesión Claude Cloud sin egress a portales de datos",
+    "note": "La sesión que escribió este archivo NO realizó ninguna petición a data.sandiegocounty.gov. Toda la evidencia fue recogida fuera e importada como texto."
+  },
+  "sources": {
+    "sdcounty_food_facility_permits": {
+      "sourceId": "sdcounty_food_facility_permits",
+      "datasetId": "c5ez-ufrd",
+      "title": "Food Facility Permits",
+      "baseDomain": "data.sandiegocounty.gov",
+      "license": {
+        "licenseId": "PUBLIC_DOMAIN",
+        "source": "metadata del dataset",
+        "redistributionAllowed": true
+      },
+      "robots": {
+        "url": "https://data.sandiegocounty.gov/robots.txt",
+        "httpStatus": 200,
+        "crawlDelaySeconds": 1,
+        "allowedPaths": [
+          "/resource"
+        ],
+        "blockedPaths": [
+          "/OData.svc/",
+          "/api/odata/"
+        ],
+        "interpretation": "Se usa exclusivamente la API SODA en /resource. OData queda descartado por robots."
+      },
+      "limits": {
+        "publishedRateLimit": null,
+        "throttleSignal": "HTTP 429",
+        "appTokenRequired": false,
+        "maxRowsPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "minDelayMs": 2000,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000,
+          "jitter": "full",
+          "respectRetryAfter": true
+        },
+        "updateCadence": "mensual"
+      },
+      "artifacts": {
+        "robots": {
+          "url": "https://data.sandiegocounty.gov/robots.txt",
+          "httpStatus": 200,
+          "sha256": "0d8f965679b15e98c0cf18c01a14ab25d5b067fec3ea1d5ebc0db1c1b590ab84",
+          "description": "robots.txt completo tal cual se descargó"
+        },
+        "metadata": {
+          "url": "https://data.sandiegocounty.gov/api/views/c5ez-ufrd",
+          "httpStatus": 200,
+          "sha256": "b2d752bb871e0d6dd1544af56694b231a370f794bb39b610947b2eb5658ee5d7",
+          "description": "proyección canónica del metadata, normalizada con jq -S"
+        },
+        "sodaSample": {
+          "url": "https://data.sandiegocounty.gov/resource/c5ez-ufrd.json",
+          "httpStatus": 200,
+          "sha256": "850f68e3da646726353a2b49199f6bcd9c970d83bcfdeed79dce5f758e27b47d",
+          "description": "muestra canónica de 3 filas con $select de la allowlist, $order last_updated DESC, $limit 3",
+          "query": {
+            "$select": "record_id,record_open_date,record_issue_date,record_name,permit_status,active_permit,business_type,address,city,state,zip,last_updated",
+            "$order": "last_updated DESC",
+            "$limit": 3
+          },
+          "observations": [
+            "No apareció ningún nombre, correo ni teléfono de titular.",
+            "No aparecieron coordenadas.",
+            "Una de las tres filas es business_type=Microenterprise Home Kitchen y puede revelar un domicilio: se excluye por completo del mapeo y de raw_json.",
+            "Las otras dos son establecimientos comerciales de San Diego, emitidos y activos.",
+            "La muestra se usa solo para pruebas de esquema y mapeo. No alimenta CRM ni outreach."
+          ]
+        }
+      },
+      "decision": "Evidencia suficiente para habilitar la fuente en modo consulta, sujeta a la cuota de 50 filas y una corrida con éxito cada 24 h, y a la exclusión total de filas residenciales.",
+      "verifiedBy": "operador, desde red local autorizada",
+      "scope": "solo lectura; sin escrituras en CRM y sin outreach"
+    }
+  },
+  "disclaimers": [
+    "Los sha256 de artifacts no se pueden recomputar offline: son evidencia importada, no verificada por esta sesión.",
+    "El digest de este documento sí se recomputa sin red y es lo único que el verificador comprueba criptográficamente.",
+    "Ausencia de firma es deliberada: sin clave autorizada, una firma sería una afirmación infundada."
+  ],
+  "digest": "sha256:807f1a0309b8bf53eeb7ed82695a73ec2bef20a25c51747b4df77bf76d53267d"
+}
