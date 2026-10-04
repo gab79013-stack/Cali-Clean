@@ -94,15 +94,28 @@ export const config = {
     userAgent: process.env.PROSPECT_USER_AGENT
       || 'CaliCleanProspector/1.0 (+https://cali-clean.net/bot; contact: info@cali-clean.net)',
     requestTimeoutMs: num(process.env.PROSPECT_TIMEOUT_MS, 12000),
+    // Área de San Diego. Ninguna se consulta hasta que `verify-sources` deje
+    // constancia de su robots.txt, sus términos y su endpoint real.
     sources: list(process.env.PROSPECT_SOURCES).length
       ? list(process.env.PROSPECT_SOURCES)
-      : ['la_building_permits', 'la_active_businesses'],
+      : ['sd_building_permits', 'sd_business_certificates'],
     socrataAppToken: process.env.SOCRATA_APP_TOKEN || '',
   },
 
+  // Twenty CRM. La credencial no se lee nunca desde aquí: si TWENTY_API_KEY
+  // existe la usa el adaptador para despliegues externos, y si no, el entorno
+  // inyecta el Authorization en las peticiones al dominio autorizado.
+  twenty: {
+    baseUrl: (process.env.TWENTY_BASE_URL || '').replace(/\/+$/, ''),
+    // Presencia, nunca el valor. Sirve para que el panel diga cómo se autentica.
+    hasExplicitKey: Boolean(process.env.TWENTY_API_KEY),
+    // El dry-run es el valor por defecto: escribir exige pedirlo.
+    dryRunDefault: !bool(process.env.TWENTY_WRITE_ENABLED, false),
+  },
+
   crm: {
-    // Adaptador: none | webhook | espocrm | suitecrm | perfex | vtiger |
-    //            hubspot | gohighlevel
+    // Adaptador: none | twenty | webhook | espocrm | suitecrm | perfex |
+    //            vtiger | hubspot | gohighlevel
     driver: (process.env.CRM_DRIVER || 'none').toLowerCase(),
     webhookUrl: process.env.CRM_WEBHOOK_URL || '',
     webhookSecret: process.env.CRM_WEBHOOK_SECRET || '',

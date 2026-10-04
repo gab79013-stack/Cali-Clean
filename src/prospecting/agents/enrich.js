@@ -63,8 +63,10 @@ export function verifyMatch(html, { businessName, phone, zip, address }) {
   const streetNumber = String(address || '').match(/^\d+/)?.[0];
   if (streetNumber && streetNumber.length >= 3 && text.includes(streetNumber)) evidence.push('address');
 
-  // Una sola coincidencia puede ser casualidad; dos ya no lo son.
-  return { matched: evidence.length >= 2 || evidence.includes('phone'), evidence };
+  // Dos señales independientes, siempre. Un teléfono suelto puede ser el de la
+  // gestoría o el de un agregador que copió la ficha, así que por sí solo no
+  // basta para afirmar que esta web es de este negocio.
+  return { matched: evidence.length >= 2, evidence };
 }
 
 export function extractEmails(html, domain) {

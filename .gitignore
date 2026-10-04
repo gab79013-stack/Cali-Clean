@@ -1,10 +1,16 @@
 node_modules/
 .env
-data/*.db
 preview/
+
+# Base de datos local y sus archivos auxiliares de SQLite.
 data/*.db
-preview/-shm
-data/*.db
-preview/-wal
+data/*.db-shm
+data/*.db-wal
+
+# Constancias de verificación de fuentes: son propias de cada despliegue, con
+# sus fechas. Compartirlas haría creer que una fuente está verificada aquí
+# porque alguien la verificó en otra máquina.
+data/source-compliance.json
+
 *.log
 .DS_Store

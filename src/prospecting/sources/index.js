@@ -1,168 +1,213 @@
 import { config } from '../../config.js';
 import { apiFetch } from '../http.js';
+import { assertSourceAllowed, checkSourceAllowed } from './compliance.js';
 
 /**
- * Catálogo de fuentes de registros públicos.
+ * Catálogo de fuentes de registros públicos del área de San Diego.
  *
- * Todas son portales de datos abiertos de California (Socrata), consultables por
- * API sin credenciales. Añadir una ciudad es añadir una entrada aquí: el resto
- * del pipeline no cambia.
+ * Dos cosas que este archivo hace cumplir y que no son opcionales:
  *
- * Cada fuente declara cómo traduce una fila cruda al prospecto que entiende el
- * sistema, y qué señal de compra representa.
+ * 1. Ninguna fuente se consulta sin una verificación registrada de su
+ *    robots.txt, sus términos y su endpoint real. La puerta está en
+ *    `fetchFromSource`, no en la documentación.
+ *
+ * 2. Los nombres de columna se declaran como candidatos, no como certezas. Si
+ *    el portal no trae ninguno de los candidatos de un campo obligatorio, la
+ *    fila se descarta en lugar de inventarse: una columna mal adivinada
+ *    produciría prospectos plausibles y falsos, que es el peor resultado
+ *    posible.
+ *
+ * Para habilitar una fuente:  node scripts/verify-sources.js <clave>
  */
 
 const clean = (v) => String(v ?? '').trim();
 const titleCase = (s) => clean(s).toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
+/** Primer campo presente entre varios candidatos. */
+function pick(row, candidates) {
+  for (const c of candidates) {
+    const v = row?.[c];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+export const SERVICE_AREA = 'San Diego County, CA';
+
 export const SOURCES = {
-  // ── Permisos de obra finalizados: la señal más perecedera y más rentable ──
-  la_building_permits: {
-    label: 'Permisos de obra · Los Ángeles',
+  // ── Permisos de obra cerrados: la señal más perecedera y más rentable ──
+  sd_building_permits: {
+    label: 'Permisos de obra · Ciudad de San Diego',
+    serviceArea: SERVICE_AREA,
     signalType: 'permit_finaled',
-    domain: 'data.lacity.org',
-    dataset: 'yv23-pmwf',
-    /**
-     * Permisos cerrados en los últimos N días: la obra acaba de terminar y
-     * alguien tiene que limpiarla antes de la entrega.
-     */
+    domain: 'data.sandiego.gov',
+    dataset: 'development-permits-set1',
+    api: 'socrata',
+    compliance: {
+      robotsUrl: 'https://data.sandiego.gov/robots.txt',
+      termsUrl: 'https://data.sandiego.gov/terms/',
+      portal: 'https://data.sandiego.gov/datasets/',
+      note: 'Portal de datos abiertos de la Ciudad de San Diego.',
+    },
     query: ({ sinceDays = 30, limit = 50 }) => ({
-      $where: `status_date > '${isoDaysAgo(sinceDays)}' AND upper(status) like '%FINAL%'`,
-      $order: 'status_date DESC',
+      $where: `date_close > '${isoDaysAgo(sinceDays)}'`,
+      $order: 'date_close DESC',
       $limit: String(limit),
     }),
-    map: (row) => ({
-      sourceId: clean(row.pcis_permit_no || row.permit_nbr || row.assessor_book),
-      businessName: titleCase(row.applicant_business_name || row.contractor_business_name || row.applicant_first_name
-        ? `${row.applicant_business_name || row.contractor_business_name || ''}`.trim() || 'Contratista'
-        : 'Contratista'),
-      contactName: titleCase([row.applicant_first_name, row.applicant_last_name].filter(Boolean).join(' ')),
-      address: clean([row.address_start, row.street_direction, row.street_name, row.street_suffix]
-        .filter(Boolean).join(' ')),
-      city: 'Los Angeles',
-      zip: clean(row.zip_code).slice(0, 5),
-      phone: '',
-      description: clean(row.permit_type || row.permit_sub_type),
-      naics: '',
-      signal: {
-        type: 'permit_finaled',
-        permit: clean(row.pcis_permit_no),
-        permitType: clean(row.permit_type),
-        finaledAt: clean(row.status_date).slice(0, 10),
-        valuation: Number(row.valuation || 0) || null,
-        work: clean(row.work_desc_ext || row.use_desc).slice(0, 240),
-      },
-    }),
+    // Campos obligatorios para que la fila sirva de algo.
+    requires: ['businessName', 'address'],
+    fields: {
+      sourceId: ['approval_id', 'permit_number', 'pmt_number', 'approval_number'],
+      businessName: ['contractor_name', 'applicant_name', 'firm_name', 'company_name'],
+      address: ['job_address', 'address', 'project_address', 'site_address'],
+      city: ['city', 'job_city'],
+      zip: ['zip', 'zip_code', 'job_zip', 'postal_code'],
+      closedAt: ['date_close', 'close_date', 'completion_date', 'issue_date'],
+      scope: ['scope', 'description', 'work_description', 'project_scope'],
+      valuation: ['valuation', 'estimated_cost', 'job_value'],
+    },
   },
 
-  // ── Licencias de negocio activas: quién existe y a qué se dedica ──
-  la_active_businesses: {
-    label: 'Negocios activos · Los Ángeles',
+  // ── Certificados de actividad nuevos: aún no tienen proveedor fijo ──
+  sd_business_certificates: {
+    label: 'Certificados de actividad · Ciudad de San Diego',
+    serviceArea: SERVICE_AREA,
     signalType: 'new_business',
-    domain: 'data.lacity.org',
-    dataset: '6rrh-rzua',
+    domain: 'data.sandiego.gov',
+    dataset: 'business-listings',
+    api: 'socrata',
+    compliance: {
+      robotsUrl: 'https://data.sandiego.gov/robots.txt',
+      termsUrl: 'https://data.sandiego.gov/terms/',
+      portal: 'https://data.sandiego.gov/datasets/',
+      note: 'Registro mercantil municipal. Solo datos de empresa, nunca de persona física.',
+    },
     query: ({ sinceDays = 90, limit = 50 }) => ({
-      $where: `location_start_date > '${isoDaysAgo(sinceDays)}'`,
-      $order: 'location_start_date DESC',
+      $where: `creation_dt > '${isoDaysAgo(sinceDays)}'`,
+      $order: 'creation_dt DESC',
       $limit: String(limit),
     }),
-    map: (row) => ({
-      sourceId: clean(row.location_account || row.primary_naics_description),
-      businessName: titleCase(row.business_name || row.dba_name),
-      contactName: '',
-      address: clean(row.street_address),
-      city: titleCase(row.city || 'Los Angeles'),
-      zip: clean(row.zip_code).slice(0, 5),
-      phone: '',
-      description: clean(row.primary_naics_description),
-      naics: clean(row.naics),
-      signal: {
-        type: 'new_business',
-        openedAt: clean(row.location_start_date).slice(0, 10),
-        naicsDescription: clean(row.primary_naics_description),
-      },
-    }),
+    requires: ['businessName'],
+    fields: {
+      sourceId: ['account_key', 'certificate_number', 'business_account'],
+      businessName: ['dba_name', 'business_name', 'ownership_name'],
+      address: ['address_full', 'address', 'business_address'],
+      city: ['city', 'address_city'],
+      zip: ['zip', 'address_zip', 'zip_code'],
+      openedAt: ['creation_dt', 'date_account_creation', 'start_date'],
+      naics: ['naics_code', 'naics', 'sic_code'],
+      naicsDescription: ['naics_description', 'business_description', 'description'],
+    },
   },
 
-  // ── San Francisco: mismo patrón, otro portal ──
-  sf_registered_businesses: {
-    label: 'Negocios registrados · San Francisco',
+  // ── Condado de San Diego: cubre las ciudades fuera del municipio ──
+  sdcounty_business_licenses: {
+    label: 'Licencias de actividad · Condado de San Diego',
+    serviceArea: SERVICE_AREA,
     signalType: 'new_business',
-    domain: 'data.sfgov.org',
-    dataset: 'g8m3-pdis',
+    domain: 'data.sandiegocounty.gov',
+    dataset: null,            // a confirmar durante la verificación
+    api: 'socrata',
+    compliance: {
+      robotsUrl: 'https://data.sandiegocounty.gov/robots.txt',
+      termsUrl: 'https://data.sandiegocounty.gov/about',
+      portal: 'https://data.sandiegocounty.gov/browse',
+      note: 'Falta identificar el dataset concreto antes de verificar.',
+    },
     query: ({ sinceDays = 90, limit = 50 }) => ({
-      $where: `dba_start_date > '${isoDaysAgo(sinceDays)}'`,
-      $order: 'dba_start_date DESC',
+      $order: ':id DESC',
       $limit: String(limit),
     }),
-    map: (row) => ({
-      sourceId: clean(row.ttxid || row.location_id),
-      businessName: titleCase(row.dba_name || row.ownership_name),
-      contactName: '',
-      address: clean(row.full_business_address),
-      city: titleCase(row.city || 'San Francisco'),
-      zip: clean(row.business_zip).slice(0, 5),
-      phone: '',
-      description: clean(row.naic_code_description),
-      naics: clean(row.naic_code),
-      signal: {
-        type: 'new_business',
-        openedAt: clean(row.dba_start_date).slice(0, 10),
-        naicsDescription: clean(row.naic_code_description),
-      },
-    }),
-  },
-
-  sf_building_permits: {
-    label: 'Permisos de obra · San Francisco',
-    signalType: 'permit_finaled',
-    domain: 'data.sfgov.org',
-    dataset: 'i98e-djp9',
-    query: ({ sinceDays = 30, limit = 50 }) => ({
-      $where: `completed_date > '${isoDaysAgo(sinceDays)}'`,
-      $order: 'completed_date DESC',
-      $limit: String(limit),
-    }),
-    map: (row) => ({
-      sourceId: clean(row.permit_number),
-      businessName: titleCase(row.applicant || 'Contratista'),
-      contactName: '',
-      address: clean([row.street_number, row.street_name, row.street_suffix].filter(Boolean).join(' ')),
-      city: 'San Francisco',
-      zip: clean(row.zipcode).slice(0, 5),
-      phone: '',
-      description: clean(row.permit_type_definition),
-      naics: '',
-      signal: {
-        type: 'permit_finaled',
-        permit: clean(row.permit_number),
-        finaledAt: clean(row.completed_date).slice(0, 10),
-        valuation: Number(row.estimated_cost || 0) || null,
-        work: clean(row.description).slice(0, 240),
-      },
-    }),
+    requires: ['businessName'],
+    fields: {
+      sourceId: ['id', 'license_number', 'account_number'],
+      businessName: ['business_name', 'dba', 'dba_name'],
+      address: ['address', 'street_address', 'site_address'],
+      city: ['city'],
+      zip: ['zip', 'zip_code', 'postal_code'],
+      openedAt: ['issue_date', 'start_date', 'effective_date'],
+      naics: ['naics', 'naics_code'],
+      naicsDescription: ['naics_description', 'business_type', 'description'],
+    },
   },
 };
+
+/** Traduce una fila cruda usando los candidatos declarados por la fuente. */
+export function mapRow(source, row) {
+  const f = source.fields;
+  const get = (name) => (f[name] ? pick(row, f[name]) : '');
+
+  const businessName = titleCase(get('businessName'));
+  const mapped = {
+    sourceId: get('sourceId'),
+    businessName,
+    // Ninguna fuente de registro público aporta contacto: lo busca el
+    // enriquecedor en la web del propio negocio, y solo si allí está publicado.
+    contactName: '',
+    address: get('address'),
+    city: titleCase(get('city')) || 'San Diego',
+    zip: get('zip').slice(0, 5),
+    phone: '',
+    serviceArea: source.serviceArea,
+    description: get('naicsDescription') || get('scope'),
+    naics: get('naics'),
+    signal: source.signalType === 'permit_finaled'
+      ? {
+        type: 'permit_finaled',
+        permit: get('sourceId'),
+        finaledAt: get('closedAt').slice(0, 10),
+        valuation: Number(get('valuation')) || null,
+        work: get('scope').slice(0, 240),
+      }
+      : {
+        type: 'new_business',
+        openedAt: get('openedAt').slice(0, 10),
+        naicsDescription: get('naicsDescription'),
+      },
+  };
+
+  // Si falta algo obligatorio, la fila no vale: devolver null es preferible a
+  // devolver un prospecto a medias que luego nadie sabe de dónde salió.
+  for (const required of source.requires || []) {
+    if (!mapped[required]) return null;
+  }
+  return mapped;
+}
 
 function isoDaysAgo(days) {
   return new Date(Date.now() - days * 86400000).toISOString().slice(0, 19);
 }
 
-/** Construye la URL Socrata de una fuente. Se expone para poder probarla. */
+/** URL de consulta. Se expone para poder probarla sin red. */
 export function buildUrl(source, params, baseOverride) {
   const base = baseOverride || `https://${source.domain}`;
+  if (!source.dataset) throw new Error(`La fuente "${source.label}" no tiene dataset confirmado todavía.`);
   const url = new URL(`/resource/${source.dataset}.json`, base);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return url.toString();
 }
 
+/** Fuentes habilitadas ahora mismo, con el motivo de las que no lo están. */
+export function sourceStatus() {
+  return Object.entries(SOURCES).map(([key, source]) => ({
+    key,
+    label: source.label,
+    signalType: source.signalType,
+    configured: config.prospecting.sources.includes(key),
+    ...checkSourceAllowed(key, source),
+  }));
+}
+
 /**
- * Consulta una fuente y devuelve prospectos normalizados.
- * `baseOverride` permite apuntar a un servidor local en las pruebas.
+ * Consulta una fuente. Falla antes de salir a la red si no está verificada:
+ * la puerta se cruza aquí, no en el llamante.
  */
 export async function fetchFromSource(key, { sinceDays, limit, baseOverride } = {}) {
   const source = SOURCES[key];
   if (!source) throw new Error(`Fuente desconocida: ${key}`);
+  // Sin puerta trasera: tampoco las pruebas la esquivan. Las que necesitan
+  // consultar una fuente registran una constancia de verificación real.
+  assertSourceAllowed(key, source);
 
   const params = source.query({ sinceDays: sinceDays ?? 30, limit: limit ?? 50 });
   const headers = config.prospecting.socrataAppToken
@@ -172,10 +217,12 @@ export async function fetchFromSource(key, { sinceDays, limit, baseOverride } = 
   const rows = await apiFetch(buildUrl(source, params, baseOverride), { headers });
   if (!Array.isArray(rows)) return [];
 
-  return rows.map((row) => {
-    const mapped = source.map(row);
-    return { ...mapped, source: key, sourceLabel: source.label, raw: row };
-  }).filter((p) => p.businessName && p.businessName !== 'Contratista' ? true : Boolean(p.address));
+  return rows
+    .map((row) => {
+      const mapped = mapRow(source, row);
+      return mapped ? { ...mapped, source: key, sourceLabel: source.label, raw: row } : null;
+    })
+    .filter(Boolean);
 }
 
 export default SOURCES;

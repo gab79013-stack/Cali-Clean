@@ -102,12 +102,16 @@ export function toPayload(lead, prospect = null) {
 /** Configuración del adaptador activo, leída del entorno. */
 export function adapterConfig() {
   return {
+    // Twenty trae su propia URL base: el adaptador no debe heredar por error la
+    // de otro CRM configurado antes en el mismo .env.
+    baseUrl: config.crm.driver === 'twenty'
+      ? (config.twenty.baseUrl || config.crm.baseUrl)
+      : config.crm.baseUrl,
     webhookUrl: config.crm.webhookUrl,
     webhookSecret: config.crm.webhookSecret,
     apiKey: config.crm.apiKey,
     apiSecret: config.crm.apiSecret,
     apiUser: config.crm.apiUser,
-    baseUrl: config.crm.baseUrl,
     locationId: config.crm.locationId,
     assignedUserId: config.crm.assignedUserId,
   };

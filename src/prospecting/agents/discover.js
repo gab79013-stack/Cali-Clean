@@ -72,13 +72,17 @@ export async function discover({ sources, sinceDays = 30, limit, baseOverride } 
         db.prepare(`
           INSERT INTO prospects (uid, source, source_id, dedupe_key, business_name, contact_name,
             segment, address, city, zip, phone, signal_type, signal_json, raw_json,
-            evidence_json, stage)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered')`
+            evidence_json, stage, service_area, source_url)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?)`
         ).run(
           newUid(), key, row.sourceId || null, key_, row.businessName, row.contactName || null,
           segment, row.address || null, row.city || null, row.zip || null, row.phone || null,
           row.signal?.type || null, JSON.stringify(row.signal || {}), JSON.stringify(row.raw || {}),
           JSON.stringify({ classifier: { confidence, matched }, source: row.sourceLabel }),
+          // El área y la URL del registro viajan al CRM: sin ellas no se puede
+          // auditar de dónde salió una empresa ni filtrar por zona.
+          row.serviceArea || null,
+          row.sourceUrl || SOURCES[key]?.compliance?.portal || null,
         );
         stats.inserted++;
       } catch (err) {

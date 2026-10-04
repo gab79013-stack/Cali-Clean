@@ -18,6 +18,23 @@ const lastName = (name) => {
 };
 
 export const adapters = {
+  // ── Twenty CRM ──
+  // El único adaptador con upsert idempotente de verdad: busca por clave de
+  // deduplicación y actualiza, en lugar de crear y rezar. Vive en twenty.js
+  // porque el flujo lookup → plan → aplicar no cabe en una función.
+  twenty: {
+    label: 'Twenty CRM',
+    needs: ['baseUrl'],
+    async push(payload, cfg, http, opts = {}) {
+      const { createClient, upsertCompany } = await import('../twenty.js');
+      const client = createClient({ baseUrl: cfg.baseUrl, fetchImpl: opts.fetchImpl || fetch });
+      const res = await upsertCompany(client, payloadToProspect(payload), {
+        dryRun: opts.dryRun !== undefined ? opts.dryRun : true,
+      });
+      return { ref: res.id || null, raw: res };
+    },
+  },
+
   // ── Webhook genérico: sirve para n8n, Make, Zapier o una API propia ──
   webhook: {
     label: 'Webhook genérico',
@@ -214,6 +231,37 @@ export const adapters = {
     },
   },
 };
+
+/**
+ * Traduce el payload canónico al prospecto que entiende el adaptador de Twenty.
+ * Mantiene los dos modelos separados: el canónico lo consumen los webhooks y el
+ * resto de CRM, y cambiarlo por conveniencia de uno rompería a los demás.
+ */
+function payloadToProspect(payload) {
+  const p = payload.prospecting || {};
+  return {
+    dedupKey: p.prospect_id || payload.id,
+    businessName: payload.company || payload.contact.name,
+    website: payload.contact.website,
+    sourceUrl: p.source_url || null,
+    source: p.source || payload.attribution.source,
+    email: payload.contact.email,
+    phone: payload.contact.phone,
+    contactName: payload.contact.name,
+    contactSource: p.contact_source || null,
+    address: payload.location.address,
+    city: payload.location.city,
+    zip: payload.location.zip,
+    serviceArea: payload.location.service_area || null,
+    icpScore: p.icp_score ?? payload.scoring.score,
+    stage: p.stage || 'qualified',
+    optedOut: payload.status === 'unsubscribed',
+    channel: payload.channel,
+    lastVerified: p.last_verified || payload.created_at,
+    estAnnualValue: payload.value.annual,
+    estVisitValue: payload.value.quote,
+  };
+}
 
 /**
  * Nota que se escribe en el CRM. Es lo que lee el comercial antes de llamar,

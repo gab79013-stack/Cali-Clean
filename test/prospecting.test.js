@@ -6,11 +6,13 @@ import os from 'node:os';
 
 // Base aislada y outbound encendido: este archivo ejercita el pipeline entero.
 const dbFile = path.join(os.tmpdir(), `cc-prospect-${Date.now()}.db`);
+const attFile = path.join(os.tmpdir(), `cc-prospect-att-${Date.now()}.json`);
 process.env.DB_PATH = dbFile;
+process.env.SOURCE_ATTESTATION_PATH = attFile;
 process.env.OUTBOUND_ENABLED = 'true';
 process.env.OUTBOUND_REQUIRE_MX = 'false';
 process.env.OUTBOUND_DAILY_LIMIT = '25';
-process.env.SERVICE_ZIPS = '90010,90012,90026';
+process.env.SERVICE_ZIPS = '92101,92103,92113';
 process.env.PROSPECT_CRAWL_DELAY_MS = '0';
 process.env.MAIL_DRIVER = 'log';
 process.env.APP_SECRET = 'test-secret-for-prospecting';
@@ -27,6 +29,20 @@ const { parseRobots, robotsAllows } = await import('../src/prospecting/http.js')
 const guards = await import('../src/prospecting/guards.js');
 const { toPayload } = await import('../src/services/crm.js');
 const { validateCopy, buildBrief } = await import('../src/prospecting/agents/write.js');
+const { saveAttestation } = await import('../src/prospecting/sources/compliance.js');
+
+// Las fuentes del fixture pasan por la misma puerta de cumplimiento que las
+// reales: aquí se registra la constancia en lugar de esquivarla, para que el
+// pipeline se pruebe tal y como se ejecuta en producción.
+for (const key of ['sd_building_permits', 'sd_business_certificates']) {
+  saveAttestation(key, {
+    robotsAllowed: true,
+    endpointVerified: true,
+    termsReviewed: true,
+    verifiedAt: new Date().toISOString(),
+    note: 'constancia de prueba contra el servidor local del fixture',
+  });
+}
 
 const { server, port } = await createFakeServer();
 const base = `http://127.0.0.1:${port}`;
@@ -45,8 +61,8 @@ test.after(() => {
 
 // ── Clasificación ────────────────────────────────────────────
 test('clasifica cada negocio en su segmento', () => {
-  assert.equal(classify({ businessName: 'Sunset Dental Care', naics: '621210' }).segment, 'office_clinic');
-  assert.equal(classify({ businessName: 'Harbor Property Group', naics: '531311' }).segment, 'property_manager');
+  assert.equal(classify({ businessName: 'Harbor View Dental', naics: '621210' }).segment, 'office_clinic');
+  assert.equal(classify({ businessName: 'Gaslamp Property Group', naics: '531311' }).segment, 'property_manager');
   assert.equal(classify({ businessName: 'Taqueria El Faro', naics: '722511' }).segment, 'restaurant_retail');
   assert.equal(classify({ signalType: 'permit_finaled', businessName: 'Cualquiera' }).segment, 'post_construction');
 });
@@ -59,8 +75,8 @@ test('un negocio fuera del ICP no se clasifica', () => {
 
 // ── Deduplicación ────────────────────────────────────────────
 test('el mismo negocio escrito de dos formas produce la misma clave', () => {
-  const a = dedupeKey({ businessName: 'Sunset Dental Care, Inc.', address: '1200 Sunset Blvd', zip: '90026' });
-  const b = dedupeKey({ businessName: 'SUNSET DENTAL CARE LLC', address: '1200 Sunset Blvd', zip: '90026' });
+  const a = dedupeKey({ businessName: 'Harbor View Dental, Inc.', address: '1200 Harbor Blvd', zip: '92101' });
+  const b = dedupeKey({ businessName: 'HARBOR VIEW DENTAL LLC', address: '1200 Harbor Blvd', zip: '92101' });
   assert.equal(a, b);
 });
 
@@ -89,18 +105,18 @@ test('sin robots.txt se permite el rastreo', () => {
 
 // ── Extracción ───────────────────────────────────────────────
 test('prioriza el correo del propio dominio y descarta los de plantilla', () => {
-  const html = `<a href="mailto:jobs@sunsetdentalcare.com">jobs</a>
-    <a href="mailto:front.desk@sunsetdentalcare.com">contacto</a>
+  const html = `<a href="mailto:jobs@harborviewdental.com">jobs</a>
+    <a href="mailto:front.desk@harborviewdental.com">contacto</a>
     name@example.com sentry@wixpress.com`;
-  const emails = extractEmails(html, 'sunsetdentalcare.com');
-  assert.equal(emails[0], 'front.desk@sunsetdentalcare.com');
+  const emails = extractEmails(html, 'harborviewdental.com');
+  assert.equal(emails[0], 'front.desk@harborviewdental.com');
   assert.ok(!emails.includes('name@example.com'));
   assert.ok(!emails.includes('sentry@wixpress.com'));
 });
 
 test('genera candidatos de dominio razonables', () => {
-  const c = domainCandidates('Sunset Dental Care, Inc.');
-  assert.ok(c.includes('sunsetdentalcare.com'));
+  const c = domainCandidates('Harbor View Dental, Inc.');
+  assert.ok(c.includes('harborviewdental.com'));
 });
 
 test('no acepta una web que no corresponde al negocio', () => {
@@ -110,27 +126,27 @@ test('no acepta una web que no corresponde al negocio', () => {
 });
 
 test('una sola coincidencia no basta, dos sí', () => {
-  const weak = verifyMatch('<p>Sunset Dental Care</p>', { businessName: 'Sunset Dental Care', zip: '90026' });
+  const weak = verifyMatch('<p>Harbor View Dental</p>', { businessName: 'Harbor View Dental', zip: '92101' });
   assert.equal(weak.matched, false, 'solo el nombre no debería bastar');
-  const strong = verifyMatch('<p>Sunset Dental Care · 90026</p>', { businessName: 'Sunset Dental Care', zip: '90026' });
+  const strong = verifyMatch('<p>Harbor View Dental · 92101</p>', { businessName: 'Harbor View Dental', zip: '92101' });
   assert.equal(strong.matched, true);
 });
 
 // ── Pipeline completo ────────────────────────────────────────
 test('el agente descubridor carga prospectos clasificables y descarta el resto', async () => {
-  const stats = await discover({ sources: ['la_building_permits', 'la_active_businesses'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sd_building_permits', 'sd_business_certificates'], sinceDays: 90, baseOverride: base });
   assert.ok(stats.inserted >= 4, `esperaba al menos 4 prospectos, hubo ${stats.inserted}`);
   assert.ok(stats.unclassified >= 1, 'la editorial debería quedar fuera del ICP');
   assert.deepEqual(stats.errors, []);
 
   const names = db.prepare('SELECT business_name FROM prospects').all().map((r) => r.business_name);
-  assert.ok(names.some((n) => n.includes('Sunset Dental')));
+  assert.ok(names.some((n) => n.includes('Harbor View Dental')));
   assert.ok(!names.some((n) => n.includes('Quiet Books')), 'un negocio fuera del ICP no debe entrar');
 });
 
 test('una segunda corrida no duplica nada', async () => {
   const before = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
-  const stats = await discover({ sources: ['la_building_permits', 'la_active_businesses'], sinceDays: 90, baseOverride: base });
+  const stats = await discover({ sources: ['sd_building_permits', 'sd_business_certificates'], sinceDays: 90, baseOverride: base });
   const after = db.prepare('SELECT COUNT(*) AS n FROM prospects').get().n;
   assert.equal(after, before);
   assert.ok(stats.duplicates > 0);
@@ -140,14 +156,14 @@ test('el enriquecedor encuentra correos, respeta robots.txt y rechaza lo que no 
   const stats = await enrich({ skipDns: true });
   assert.ok(stats.enriched >= 2, `esperaba al menos 2 enriquecidos, hubo ${stats.enriched}`);
 
-  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Sunset Dental%'").get();
+  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Harbor View Dental%'").get();
   assert.equal(dental.stage, 'enriched');
-  assert.equal(dental.email, 'front.desk@sunsetdentalcare.com');
+  assert.equal(dental.email, 'front.desk@harborviewdental.com');
   assert.equal(dental.email_source, 'published_on_website');
 
   // El sitio con Disallow: / publica un correo en su home, pero prohíbe el
   // rastreo: el agente no lo toma y deja constancia del motivo.
-  const harbor = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Harbor Property%'").get();
+  const harbor = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Gaslamp Property%'").get();
   assert.equal(harbor.stage, 'rejected');
   assert.equal(harbor.email, null);
   assert.equal(harbor.reject_reason, 'robots_disallow');
@@ -163,7 +179,7 @@ test('el cualificador puntúa y filtra por umbral y zona', () => {
   const stats = qualify({});
   assert.ok(stats.qualified >= 1, `esperaba al menos 1 cualificado, hubo ${stats.qualified}`);
 
-  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Sunset Dental%'").get();
+  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Harbor View Dental%'").get();
   assert.equal(dental.stage, 'qualified');
   assert.ok(dental.icp_score >= 45);
   assert.ok(dental.est_annual_value > 0, 'un contrato recurrente debe tener valor anual');
@@ -176,14 +192,14 @@ test('el agente de contacto crea el lead y encola la secuencia en frío', async 
   const stats = await outreach({});
   assert.ok(stats.engaged >= 1, `esperaba al menos 1 contactado, hubo ${stats.engaged}`);
 
-  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Sunset Dental%'").get();
+  const dental = db.prepare("SELECT * FROM prospects WHERE business_name LIKE '%Harbor View Dental%'").get();
   assert.equal(dental.stage, 'contacted');
   assert.ok(dental.lead_id);
 
   const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(dental.lead_id);
   assert.equal(lead.contact_channel, 'outbound');
-  assert.equal(lead.company, 'Sunset Dental Care');
-  assert.equal(lead.email, 'front.desk@sunsetdentalcare.com');
+  assert.equal(lead.company, 'Harbor View Dental');
+  assert.equal(lead.email, 'front.desk@harborviewdental.com');
   assert.equal(lead.utm_medium, 'cold_email');
 
   const steps = db.prepare('SELECT * FROM sequence_steps WHERE lead_id = ? ORDER BY scheduled_at').all(lead.id);
@@ -192,7 +208,7 @@ test('el agente de contacto crea el lead y encola la secuencia en frío', async 
 
   const copy = JSON.parse(dental.copy_json);
   for (const key of ['subject', 'opener', 'value', 'ask']) assert.ok(copy[key]);
-  assert.ok(copy.opener.includes('Sunset Dental Care'), 'el correo debe nombrar al negocio');
+  assert.ok(copy.opener.includes('Harbor View Dental'), 'el correo debe nombrar al negocio');
 });
 
 // ── Salvaguardas ─────────────────────────────────────────────
@@ -252,24 +268,24 @@ test('el cupo agotado frena el contacto sin descartar prospectos', async () => {
 
 // ── Redacción ────────────────────────────────────────────────
 test('rechaza un texto del modelo con marcadores sin rellenar', () => {
-  const brief = buildBrief({ business_name: 'Sunset Dental Care', signal_json: '{}', locale: 'es' }, null);
+  const brief = buildBrief({ business_name: 'Harbor View Dental', signal_json: '{}', locale: 'es' }, null);
   const bad = validateCopy({ subject: 'Hola {{nombre}}', opener: 'x', value: 'y', ask: 'z' }, brief);
   assert.equal(bad.ok, false);
   assert.equal(bad.reason, 'unfilled_placeholder');
 });
 
 test('rechaza un texto que no nombra al negocio', () => {
-  const brief = buildBrief({ business_name: 'Sunset Dental Care', signal_json: '{}', locale: 'es' }, null);
+  const brief = buildBrief({ business_name: 'Harbor View Dental', signal_json: '{}', locale: 'es' }, null);
   const generic = validateCopy({ subject: 'Limpieza profesional', opener: 'Hola', value: 'Somos buenos', ask: '¿Hablamos?' }, brief);
   assert.equal(generic.ok, false);
   assert.equal(generic.reason, 'business_name_missing');
 });
 
 test('acepta un texto correcto', () => {
-  const brief = buildBrief({ business_name: 'Sunset Dental Care', signal_json: '{}', locale: 'es' }, null);
+  const brief = buildBrief({ business_name: 'Harbor View Dental', signal_json: '{}', locale: 'es' }, null);
   const ok = validateCopy({
-    subject: 'Sunset Dental Care: limpieza de consultorio',
-    opener: 'Vi que Sunset Dental Care abrió hace poco.',
+    subject: 'Harbor View Dental: limpieza de consultorio',
+    opener: 'Vi que Harbor View Dental abrió hace poco.',
     value: 'Trabajamos con consultorios en Los Ángeles.',
     ask: '¿Le paso un número esta semana?',
   }, brief);

@@ -205,6 +205,17 @@ for (const [name, ddl] of [
   if (!leadColumns.has(name)) db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${ddl}`);
 }
 
+// Columnas que la integración con el CRM necesita y que el esquema original no
+// tenía: el área de servicio y la URL del registro público del que salió el
+// prospecto, que es lo que permite auditar de dónde vino cada empresa.
+const prospectColumns = new Set(db.prepare('PRAGMA table_info(prospects)').all().map((c) => c.name));
+for (const [name, ddl] of [
+  ['service_area', 'TEXT'],
+  ['source_url', 'TEXT'],
+]) {
+  if (!prospectColumns.has(name)) db.exec(`ALTER TABLE prospects ADD COLUMN ${name} ${ddl}`);
+}
+
 export function logEvent(leadId, type, data = null) {
   db.prepare('INSERT INTO events (lead_id, type, data) VALUES (?, ?, ?)')
     .run(leadId, type, data ? JSON.stringify(data) : null);

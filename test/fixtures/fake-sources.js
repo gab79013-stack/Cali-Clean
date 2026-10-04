@@ -1,82 +1,104 @@
 import http from 'node:http';
 
 /**
- * Servidor de pruebas: imita un portal Socrata y las webs públicas de los
- * prospectos, incluido un robots.txt que prohíbe una de ellas. Permite ejercitar
- * el pipeline completo sin tocar un solo servidor real.
+ * Servidor de pruebas: imita los portales de datos abiertos de San Diego y las
+ * webs públicas de los prospectos, incluido un robots.txt que prohíbe una de
+ * ellas. Permite ejercitar el pipeline completo sin tocar un servidor real.
+ *
+ * Las columnas son las que declara el catálogo como candidatas, para que el
+ * mapeo se pruebe con los nombres que se esperan de verdad.
  */
 
 const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 19);
 
 export const PERMIT_ROWS = [
   {
-    pcis_permit_no: 'P-1001',
-    applicant_business_name: 'Brightline Builders',
-    applicant_first_name: 'Dana', applicant_last_name: 'Ruiz',
-    address_start: '4820', street_name: 'Wilshire', street_suffix: 'Blvd',
-    zip_code: '90010', status: 'CofO Final', status_date: daysAgo(5),
-    permit_type: 'Bldg-Alter/Repair', valuation: '380000',
-    work_desc_ext: 'Interior remodel of 6,200 sqft office suite',
+    approval_id: 'PMT-2026-1001',
+    contractor_name: 'Bayside Builders',
+    job_address: '2100 Harbor Dr',
+    city: 'San Diego',
+    zip: '92101',
+    date_close: daysAgo(5),
+    scope: 'Tenant improvement of 6,200 sqft office suite',
+    valuation: '380000',
   },
   {
-    pcis_permit_no: 'P-1002',
-    applicant_business_name: 'Northgate Construction',
-    address_start: '221', street_name: 'Spring', street_suffix: 'St',
-    zip_code: '90012', status: 'Permit Finaled', status_date: daysAgo(60),
-    permit_type: 'Bldg-New', valuation: '90000',
-    work_desc_ext: 'New retail shell',
+    approval_id: 'PMT-2026-1002',
+    contractor_name: 'Northgate Construction',
+    job_address: '221 Spring St',
+    city: 'San Diego',
+    zip: '92103',
+    date_close: daysAgo(60),
+    scope: 'New retail shell',
+    valuation: '90000',
   },
 ];
 
 export const BUSINESS_ROWS = [
   {
-    location_account: 'B-2001', business_name: 'Sunset Dental Care',
-    street_address: '1200 Sunset Blvd', city: 'Los Angeles', zip_code: '90026',
-    naics: '621210', primary_naics_description: 'Offices of dentists',
-    location_start_date: daysAgo(20),
+    account_key: 'B-2001',
+    dba_name: 'Harbor View Dental',
+    address_full: '1200 Harbor Blvd',
+    city: 'San Diego',
+    zip: '92101',
+    naics_code: '621210',
+    naics_description: 'Offices of dentists',
+    creation_dt: daysAgo(20),
   },
   {
-    location_account: 'B-2002', business_name: 'Harbor Property Group',
-    street_address: '88 Harbor Way', city: 'Los Angeles', zip_code: '90012',
-    naics: '531311', primary_naics_description: 'Residential property managers',
-    location_start_date: daysAgo(40),
+    account_key: 'B-2002',
+    dba_name: 'Gaslamp Property Group',
+    address_full: '88 Fifth Ave',
+    city: 'San Diego',
+    zip: '92103',
+    naics_code: '531311',
+    naics_description: 'Residential property managers',
+    creation_dt: daysAgo(40),
   },
   {
-    location_account: 'B-2003', business_name: 'Quiet Books LLC',
-    street_address: '5 Nowhere Rd', city: 'Fresno', zip_code: '93650',
-    naics: '511130', primary_naics_description: 'Book publishers',
-    location_start_date: daysAgo(10),
+    account_key: 'B-2003',
+    dba_name: 'Quiet Books LLC',
+    address_full: '5 Nowhere Rd',
+    city: 'Fresno',
+    zip: '93650',
+    naics_code: '511130',
+    naics_description: 'Book publishers',
+    creation_dt: daysAgo(10),
   },
   {
-    location_account: 'B-2004', business_name: 'Taqueria El Faro',
-    street_address: '990 Main St', city: 'Los Angeles', zip_code: '90012',
-    naics: '722511', primary_naics_description: 'Full-service restaurants',
-    location_start_date: daysAgo(15),
+    account_key: 'B-2004',
+    dba_name: 'Taqueria El Faro',
+    address_full: '990 Main St',
+    city: 'San Diego',
+    zip: '92113',
+    naics_code: '722511',
+    naics_description: 'Full-service restaurants',
+    creation_dt: daysAgo(15),
   },
 ];
 
 /** Webs simuladas de los prospectos, indexadas por host. */
 const SITES = {
-  'sunsetdentalcare.com': {
+  'harborviewdental.com': {
     robots: 'User-agent: *\nDisallow: /admin\n',
     pages: {
-      '/': `<html><head><title>Sunset Dental Care</title></head><body>
-        <h1>Sunset Dental Care</h1>
-        <p>Family dentistry at 1200 Sunset Blvd, Los Angeles, CA 90026.</p>
-        <p>Call us: (213) 555-0142</p>
+      '/': `<html><head><title>Harbor View Dental</title></head><body>
+        <h1>Harbor View Dental</h1>
+        <p>Family dentistry at 1200 Harbor Blvd, San Diego, CA 92101.</p>
+        <p>Call us: (619) 555-0142</p>
         <a href="/contact">Contact</a></body></html>`,
-      '/contact': `<html><body><h1>Contact Sunset Dental Care</h1>
-        <p>Email: <a href="mailto:front.desk@sunsetdentalcare.com">front.desk@sunsetdentalcare.com</a></p>
-        <p>Billing: billing@sunsetdentalcare.com</p>
-        <p>Careers: jobs@sunsetdentalcare.com</p>
-        <p>1200 Sunset Blvd, Los Angeles, CA 90026 · (213) 555-0142</p></body></html>`,
+      '/contact': `<html><body><h1>Contact Harbor View Dental</h1>
+        <p>Email: <a href="mailto:front.desk@harborviewdental.com">front.desk@harborviewdental.com</a></p>
+        <p>Billing: billing@harborviewdental.com</p>
+        <p>Careers: jobs@harborviewdental.com</p>
+        <p>1200 Harbor Blvd, San Diego, CA 92101 · (619) 555-0142</p></body></html>`,
     },
   },
-  'harborpropertygroup.com': {
+  'gaslamppropertygroup.com': {
     // Este sitio prohíbe el rastreo: el agente debe respetarlo y descartarlo.
     robots: 'User-agent: *\nDisallow: /\n',
     pages: {
-      '/': '<html><body><h1>Harbor Property Group</h1><p>info@harborpropertygroup.com</p></body></html>',
+      '/': '<html><body><h1>Gaslamp Property Group</h1><p>info@gaslamppropertygroup.com</p></body></html>',
     },
   },
   'taqueriaelfaro.com': {
@@ -84,17 +106,17 @@ const SITES = {
     pages: {
       // Sin correo en ninguna página: debe rechazarse por no_public_email.
       '/': `<html><body><h1>Taqueria El Faro</h1>
-        <p>990 Main St, Los Angeles 90012</p><a href="/contact">Contacto</a></body></html>`,
-      '/contact': '<html><body><h1>Taqueria El Faro</h1><p>Llámanos: (213) 555-0199</p></body></html>',
+        <p>990 Main St, San Diego 92113</p><a href="/contact">Contacto</a></body></html>`,
+      '/contact': '<html><body><h1>Taqueria El Faro</h1><p>Llámanos: (619) 555-0199</p></body></html>',
     },
   },
-  'brightlinebuilders.com': {
+  'baysidebuilders.com': {
     robots: '',
     pages: {
-      '/': `<html><body><h1>Brightline Builders</h1>
-        <p>Commercial construction · 4820 Wilshire Blvd, Los Angeles CA 90010</p>
-        <p>Contact: <a href="mailto:hello@brightlinebuilders.com">hello@brightlinebuilders.com</a></p>
-        <p>(213) 555-0177</p></body></html>`,
+      '/': `<html><body><h1>Bayside Builders</h1>
+        <p>Commercial construction · 2100 Harbor Dr, San Diego CA 92101</p>
+        <p>Contact: <a href="mailto:hello@baysidebuilders.com">hello@baysidebuilders.com</a></p>
+        <p>(619) 555-0177</p></body></html>`,
     },
   },
   // Sitio que existe pero pertenece a otro negocio: la verificación debe fallar.
@@ -112,21 +134,19 @@ export function createFakeServer() {
       res.end(body);
     };
 
-    // ── Portal Socrata simulado ──
+    // ── Portal de datos abiertos simulado ──
     if (url.pathname.startsWith('/resource/')) {
       const dataset = url.pathname.split('/')[2].replace('.json', '');
       const where = url.searchParams.get('$where') || '';
       const limit = Number(url.searchParams.get('$limit') || 50);
-      let rows = dataset === 'yv23-pmwf' ? PERMIT_ROWS : dataset === '6rrh-rzua' ? BUSINESS_ROWS : [];
+      let rows = dataset === 'development-permits-set1' ? PERMIT_ROWS
+        : dataset === 'business-listings' ? BUSINESS_ROWS : [];
 
       // Filtro de fecha mínimo, suficiente para comprobar que la query viaja.
       const since = where.match(/> '([^']+)'/)?.[1];
       if (since) {
-        const field = dataset === 'yv23-pmwf' ? 'status_date' : 'location_start_date';
+        const field = dataset === 'development-permits-set1' ? 'date_close' : 'creation_dt';
         rows = rows.filter((r) => r[field] > since);
-      }
-      if (/like '%FINAL%'/i.test(where)) {
-        rows = rows.filter((r) => /final/i.test(r.status || ''));
       }
       return send(200, JSON.stringify(rows.slice(0, limit)), 'application/json');
     }

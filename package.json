@@ -5,14 +5,19 @@
   "description": "Lead generation machine for Cali Clean (cali-clean.net) - instant quote funnel, lead scoring, bilingual email nurture over Sender SMTP/API",
   "type": "module",
   "main": "src/server.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "worker": "node src/worker.js",
     "seed": "node scripts/seed.js",
     "test:email": "node scripts/test-email.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "twenty:schema": "NODE_USE_ENV_PROXY=1 node scripts/twenty-sync.js schema",
+    "twenty:dry-run": "NODE_USE_ENV_PROXY=1 node scripts/twenty-sync.js dry-run",
+    "sources:status": "node scripts/verify-sources.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
