@@ -164,6 +164,34 @@ export async function findCompanyByDedupKey(client, dedupKey) {
   return rows[0] || null;
 }
 
+/**
+ * La clave de deduplicación más baja que ya existe con un namespace dado.
+ *
+ * Es cómo se recupera el cursor de una fuente sin guardarlo en ningún sitio: si
+ * la clave se deriva del identificador del registro oficial, el CRM ya sabe
+ * hasta dónde se llegó. Un GET, una fila, cero escrituras.
+ *
+ * Mira también los registros borrados en blando: una empresa que alguien
+ * eliminó sigue habiendo sido ingerida, y volver a traerla el día siguiente
+ * sería resucitar lo que el administrador decidió retirar.
+ */
+export async function lowestDedupKeyWithPrefix(client, prefix) {
+  const clean = trim(prefix, 60);
+  if (!clean) throw new Error('lowestDedupKeyWithPrefix requiere un prefijo.');
+
+  const query = {
+    filter: `${COMPANY_FIELDS.dedupKey}[startsWith]:${clean}`,
+    // Sintaxis verificada contra el OpenAPI de la instancia:
+    // `campo[AscNullsLast]`, no `campoAsc`.
+    order_by: `${COMPANY_FIELDS.dedupKey}[AscNullsLast]`,
+    limit: 1,
+    depth: 0,
+  };
+  const res = await client.get(`/${OBJECTS.companies}`, query);
+  const rows = res?.data?.[OBJECTS.companies] || [];
+  return rows[0]?.[COMPANY_FIELDS.dedupKey] || null;
+}
+
 // ── Mapeo ────────────────────────────────────────────────────
 const trim = (v, max = 400) => String(v ?? '').trim().slice(0, max);
 
@@ -428,4 +456,7 @@ export async function planProspect(client, prospect) {
   };
 }
 
-export default { createClient, planProspect, upsertCompany, planCompanyUpsert, findCompanyByDedupKey, redact };
+export default {
+  createClient, planProspect, upsertCompany, planCompanyUpsert,
+  findCompanyByDedupKey, lowestDedupKeyWithPrefix, redact,
+};

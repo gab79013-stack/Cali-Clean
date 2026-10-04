@@ -18,7 +18,13 @@ import { newUid } from '../../utils/tokens.js';
  * Clave de deduplicación. Un mismo negocio aparece en varios registros y varias
  * veces en el mismo registro; sin esto el CRM se llena de basura en una semana.
  */
-export function dedupeKey({ businessName, address, zip, website, phone }) {
+export function dedupeKey({ dedupKey, businessName, address, zip, website, phone }) {
+  // Si la fuente da una clave determinista —derivada del identificador del
+  // registro oficial, con namespace estable—, manda esa. Es la única que
+  // sobrevive a que el negocio cambie de nombre, de teléfono o de web, y es la
+  // que permite recuperar el cursor leyendo el CRM.
+  if (dedupKey) return String(dedupKey);
+
   const norm = (s) => String(s || '')
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')

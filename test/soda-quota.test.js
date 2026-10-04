@@ -336,5 +336,21 @@ test('el estado persistido no contiene secretos', () => {
   }
   const estado = JSON.parse(texto);
   assert.deepEqual(Object.keys(estado).sort(), ['sources', 'version']);
-  assert.deepEqual(Object.keys(estado.sources.fuente).sort(), ['lastRows', 'lastSuccessAt', 'rowsTotal', 'runs']);
+  assert.deepEqual(Object.keys(estado.sources.fuente).sort(),
+    ['cursor', 'lastRows', 'lastSuccessAt', 'rowsTotal', 'runs']);
+  // El cursor es un identificador de registro público, nunca una credencial.
+  assert.equal(estado.sources.fuente.cursor, null);
+});
+
+test('el cursor se guarda y se conserva entre corridas del mismo contenedor', () => {
+  const { stateFile } = nuevoEstado();
+  quota.recordSuccess('fuente', { rows: 5, cursor: 'DEH2026-100', file: stateFile });
+  assert.equal(quota.readState(stateFile).sources.fuente.cursor, 'DEH2026-100');
+
+  // Una corrida que no avanza el cursor no lo borra.
+  quota.recordSuccess('fuente', { rows: 0, file: stateFile });
+  assert.equal(quota.readState(stateFile).sources.fuente.cursor, 'DEH2026-100');
+
+  quota.recordSuccess('fuente', { rows: 3, cursor: 'DEH2026-050', file: stateFile });
+  assert.equal(quota.readState(stateFile).sources.fuente.cursor, 'DEH2026-050');
 });

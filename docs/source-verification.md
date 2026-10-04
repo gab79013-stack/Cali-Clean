@@ -149,6 +149,66 @@ ningún campo prohibido aparezca. La comprobación se hace **antes** de recortar
 campos, porque si se recortara primero `business_type` ya no estaría ahí para
 delatarla.
 
+### Lo que el dataset es de verdad (2026-10-04)
+
+La primera corrida real devolvió **0 filas**. No fue la red ni la puerta: fue el
+dataset. Comprobado con cuatro GET de agregados —respuestas de decenas de bytes,
+sin traer una sola fila de datos:
+
+| Hecho | Consecuencia |
+|---|---|
+| `record_open_date` y `record_issue_date` existen en el esquema pero están **vacíos en las 15 906 filas** (`count()` = 0) | Un `$where` sobre esas columnas devuelve 0 **con cualquier ventana**. Era la causa del cero |
+| `last_updated` vale `2026-08-10` en **todas** las filas (min = max) | Es el sello del volcado mensual, no la fecha de cambio de cada fila. Ordena de forma estable; no sirve de cursor |
+| `permit_status`: Permit Renewed 14 074 · Issued 1 481 · **Expired 351** | Hay que filtrar por estado, no solo por la bandera |
+| `active_permit` es `'A'` **también en las expiradas** | La bandera por sí sola no significa activo. Se exigen las dos condiciones |
+| `record_id`: 15 905 distintos en 15 906 filas | Hay **un identificador repetido**. La clave de deduplicación lo absorbe |
+| El servidor devuelve además `id`, `permit_owner` y `permit_owner_full` | Una clave desconocida y dos prohibidas: las tres se caen en el filtro |
+
+Así que la consulta dejó de filtrar por fecha. Filtra por permiso activo
+(`active_permit = 'A' AND permit_status in ('Issued','Permit Renewed')`) y
+recorre el dataset por `record_id` descendente, que es el único orden total que
+tiene. Sin paginación: 50 filas, una corrida, y la siguiente continúa.
+
+### El cursor durable no está en un archivo
+
+El contenedor donde corre la Routine es **efímero**:
+`data/source-runtime-state.json` desaparece entre ejecuciones. Un cursor
+guardado ahí no es un cursor, es la ilusión de uno, y en la práctica cada día
+volvería a empezar por la cabeza del dataset.
+
+Hay exactamente una cosa durable en este sistema que ya sabe qué se ha
+ingerido: **el propio CRM**. La clave de deduplicación es
+`sdcounty-ffp:<record_id>`, determinista y con namespace estable, así que
+
+> el cursor = el `record_id` más bajo que ya existe en Companies
+
+y se recupera con un GET de una fila (`dedupKey[startsWith]` + `order_by`
+ascendente + `limit=1`). No hace falta inventar persistencia, no se escribe nada
+en ningún sitio, y no hay estado que pueda desincronizarse de la realidad:
+el estado **es** la realidad.
+
+Tres orígenes, en orden: `local` (el archivo, mientras el contenedor viva) →
+`crm` (el durable) → ninguno (bootstrap de verdad). Y una regla que no se
+negocia: **si el CRM está configurado y no se puede leer, no se hace bootstrap.**
+Un bootstrap a ciegas gastaría la única corrida del día releyendo lo que ya
+teníamos. Se para con `cursor_indeterminado` y se dice por qué.
+
+### Un solo ciclo de recolección
+
+    node scripts/source-run.js preview
+    node scripts/source-run.js sync --snapshot <archivo> --confirm
+
+`preview` consulta **una vez** y deja un snapshot saneado en `data/snapshots/`
+(fuera de git) con su `sha256`. `sync` reutiliza exactamente ese archivo: ni una
+petición más a la fuente, ni una cuota más, y lo que se escribiría es
+literalmente lo que se enseñó. Si el archivo se edita a mano, el hash no cuadra
+y se rechaza; si la sesión cambió (otro contenedor), tampoco se reutiliza: el
+hash dice que el contenido no cambió, no que la autorización siga vigente.
+
+La preview enseña conteos y campos **semánticos** —nombre comercial, ciudad,
+tipo de establecimiento, estado del permiso, identificador recortado— nunca un
+dato personal.
+
 **Por qué se pudo encender.** Los tres bloqueos de la auditoría del 2026-10-03
 están resueltos, y cada uno con la prueba que lo sostiene (consta en
 `resolvedBlockers` del allowlist):
@@ -157,14 +217,19 @@ están resueltos, y cada uno con la prueba que lo sostiene (consta en
 |---|---|---|
 | 429 + `Retry-After` + backoff | `src/prospecting/sources/soda-client.js` | `test/soda-quota.test.js` |
 | 1 corrida/día con persistencia | `src/prospecting/sources/quota.js` | `test/soda-quota.test.js` |
-| Mapeo sin datos contra los que contrastarlo | Contrastado contra la **forma** de la muestra del 2026-10-04 atestiguada | `test/source-defense.test.js` |
+| Mapeo sin datos contra los que contrastarlo | Contrastado contra la **forma** de la muestra del 2026-10-04 atestiguada, y después contra una corrida real | `test/source-defense.test.js`, `test/source-bootstrap.test.js` |
 
-**Riesgo que queda, escrito para no olvidarlo.** La muestra la obtuvo el
-operador desde su red; esta instalación nunca la ha descargado. El mapeo se
-probó contra su forma, no contra sus datos: **la primera corrida real sigue
-siendo la primera vez que el mapeo ve datos del portal.** Por eso la primera
-corrida va con 50 filas y una sola vez al día, y por eso conviene mirar sus
-métricas antes de dejarla sola.
+**La primera corrida real ya pasó** (2026-10-04, bootstrap): 50 filas pedidas,
+50 traídas, **38 empresas**, **12 cocinas domésticas descartadas enteras**, 0
+escrituras en el CRM. Lo que la auditoría del 2026-10-03 había supuesto sobre
+los valores de `permit_status` y `active_permit` resultó ser falso, y los
+fixtures de las pruebas se corrigieron a los valores reales: una prueba que
+corre contra valores que el portal no usa no prueba nada.
+
+**Riesgo que queda.** La señal de cada prospecto dice `active_permit`, no
+`new_business`: el dataset no da fecha de apertura, así que no se puede afirmar
+que un negocio sea nuevo. Quien puntúe estos prospectos no recibirá bonus de
+frescura, y eso es correcto, no una carencia.
 
 ---
 
@@ -231,8 +296,11 @@ Lo que sigue sin hacer, y lo que haría falta para cada cosa:
    diciéndolo.
 2. **Filtro organización/particular** para `APPROVAL_PERMIT_HOLDER`, si se
    quiere sacar a B de research-only.
-3. **Egress hacia `data.sandiegocounty.gov`** en el entorno donde corra: sin
-   él la fuente habilitada pasa la puerta pero la petición no sale.
+3. **Egress hacia `data.sandiegocounty.gov`**: concedido y comprobado el
+   2026-10-04. Ojo con el proxy: el `fetch` de Node no lo usa por defecto, y sin
+   `NODE_USE_ENV_PROXY=1` la petición al CRM llega **sin** el `Authorization`
+   que inyecta el entorno y vuelve con un 403 que parece de permisos. Los
+   scripts de npm ya lo llevan.
 4. Para cada fuente nueva: `enabled: true` a mano en el allowlist, y una
    constancia —importada con hash, o
    `node scripts/verify-sources.js <clave> --terms-ok` desde una red con

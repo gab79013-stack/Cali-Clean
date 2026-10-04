@@ -143,6 +143,18 @@ vivienda del titular, así que su dirección es un domicilio particular.
 
     node scripts/verify-attestation.js    # comprueba la constancia, sin red
     node scripts/dry-run-source.js        # métricas de una corrida, sin red ni CRM
+    npm run sources:preview               # una consulta real → snapshot con hash
+    npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot
+
+El ciclo es de una sola consulta: `preview` pregunta al portal una vez y deja un
+snapshot saneado y con hash; `sync` reutiliza exactamente ese archivo, sin volver
+a consultar ni gastar otra cuota. Lo que se escribiría es lo que se enseñó.
+
+El cursor de avance **no vive en un archivo** —el contenedor de la Routine es
+efímero— sino en el propio CRM: la clave de deduplicación es
+`sdcounty-ffp:<record_id del condado>`, así que el CRM ya sabe hasta dónde se
+llegó y basta un GET para recuperarlo. Si el CRM no se puede leer, la corrida se
+detiene en vez de empezar otra vez por el principio.
 
 Añadir una ciudad es añadir una entrada en `src/prospecting/sources/index.js`
 con su dataset y el mapeo de campos. El resto del pipeline no cambia.

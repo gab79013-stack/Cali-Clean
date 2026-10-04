@@ -45,7 +45,7 @@ const MUESTRA = [
     record_issue_date: '2026-09-25T00:00:00.000',
     record_name: 'Bahía Taquería',
     permit_status: 'Issued',
-    active_permit: 'Y',
+    active_permit: 'A',
     business_type: 'Restaurant Food Facility',
     address: '1450 Harbor Dr',
     city: 'San Diego',
@@ -68,7 +68,7 @@ const MUESTRA = [
     record_issue_date: '2026-09-29T00:00:00.000',
     record_name: 'Gaslamp Coffee House',
     permit_status: 'Issued',
-    active_permit: 'Y',
+    active_permit: 'A',
     business_type: 'Retail Food Facility',
     address: '620 Fifth Ave',
     city: 'San Diego',
@@ -86,7 +86,7 @@ const MUESTRA = [
     record_issue_date: '2026-09-28T00:00:00.000',
     record_name: 'Cocina de Marisol',
     permit_status: 'Issued',
-    active_permit: 'Y',
+    active_permit: 'A',
     business_type: 'Microenterprise Home Kitchen',
     address: '3312 Residencia Way',
     city: 'San Diego',
@@ -218,7 +218,10 @@ test('ningún dato prohibido sobrevive, ni en el prospecto ni en raw', async () 
 
 test('las filas duplicadas se cuentan como tales', async () => {
   const { stateFile, lockFile } = nuevoEstado();
-  const duplicada = [MUESTRA[0], { ...MUESTRA[0], record_id: 'OTRO-ID' }];
+  // El dataset real tiene un record_id repetido en 15 906 filas, así que el
+  // duplicado que importa es el del mismo identificador, no el del mismo
+  // nombre: dos permisos distintos pueden llamarse igual y ser dos negocios.
+  const duplicada = [MUESTRA[0], { ...MUESTRA[0] }];
   const { rows, metrics } = await fetchFromSource(FUENTE, {
     baseOverride: 'https://ejemplo.test',
     fetchImpl: async () => ({
@@ -275,8 +278,8 @@ test('el 429 se refleja en las métricas de la corrida', async () => {
 test('las métricas traen todos los campos y ninguno sobra', () => {
   const esperados = [
     'attempted', 'fetched', 'mapped', 'skipped_sensitive', 'skipped_residential',
-    'skipped_invalid', 'deduped', 'retries', 'http429', 'quota_blocked',
-    'duration_ms', 'crm_writes', 'outbound',
+    'skipped_inactive', 'skipped_unverifiable', 'skipped_invalid', 'deduped',
+    'retries', 'http429', 'quota_blocked', 'duration_ms', 'crm_writes', 'outbound',
   ].sort();
   assert.deepEqual(Object.keys(emptyMetrics()).sort(), esperados);
 });

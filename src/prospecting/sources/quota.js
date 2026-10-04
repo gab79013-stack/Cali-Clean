@@ -175,7 +175,7 @@ export function checkQuota(sourceId, { now = Date.now(), state = readState(), wi
   };
 }
 
-export function recordSuccess(sourceId, { now = Date.now(), rows = 0, file = statePath() } = {}) {
+export function recordSuccess(sourceId, { now = Date.now(), rows = 0, cursor = null, file = statePath() } = {}) {
   const state = readState(file);
   const prev = state.sources[sourceId] || { runs: 0, rowsTotal: 0 };
   state.sources[sourceId] = {
@@ -183,6 +183,10 @@ export function recordSuccess(sourceId, { now = Date.now(), rows = 0, file = sta
     runs: (prev.runs || 0) + 1,
     rowsTotal: (prev.rowsTotal || 0) + rows,
     lastRows: rows,
+    // El cursor viaja aquí por comodidad en el mismo contenedor. NO es su
+    // custodia: este archivo muere con el contenedor y el cursor durable se
+    // deriva del CRM (ver cursor.js). Si falta, no se pierde nada.
+    cursor: cursor ?? prev.cursor ?? null,
   };
   writeStateAtomic(state, file);
   return state.sources[sourceId];
@@ -224,7 +228,9 @@ export async function withQuota(sourceId, fn, {
     const result = await fn({ maxRows });
     const consumed = result?.consumed === true;
     if (consumed) {
-      recordSuccess(sourceId, { now: now(), rows: result?.rows ?? 0, file: stateFile });
+      recordSuccess(sourceId, {
+        now: now(), rows: result?.rows ?? 0, cursor: result?.cursor ?? null, file: stateFile,
+      });
     }
     return { ran: true, blocked: false, consumed, brokeStaleLock: lock.brokeStale === true, result };
   } finally {

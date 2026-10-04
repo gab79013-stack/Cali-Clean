@@ -20,3 +20,7 @@ data/source-runtime-state.json.lock
 
 *.log
 .DS_Store
+
+# Snapshots de fuentes: datos de negocio recogidos de registros públicos, con
+# hash y atados a la sesión que los creó. Son resultados, no código.
+data/snapshots/

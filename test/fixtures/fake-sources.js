@@ -4,10 +4,16 @@ import http from 'node:http';
  * Servidor de pruebas: imita la API SODA del condado de San Diego y las webs
  * públicas de los prospectos, incluido un robots.txt que prohíbe una de ellas.
  *
- * Dos decisiones deliberadas del fixture:
+ * Tres decisiones deliberadas del fixture:
  *
- *   · Las columnas son las reales del dataset c5ez-ufrd, verificadas en la
- *     auditoría del 2026-10-03.
+ *   · Las columnas y los VALORES son los reales del dataset c5ez-ufrd,
+ *     comprobados el 2026-10-04: `permit_status` es 'Issued' o 'Permit Renewed'
+ *     ('Expired' en las inactivas) y `active_permit` es 'A' en todas, también
+ *     en las expiradas. La auditoría del 2026-10-03 había supuesto 'Active'/'Y',
+ *     y una prueba que corre contra valores que el portal no usa no prueba nada.
+ *   · La mayoría de filas NO traen `record_open_date` ni `record_issue_date`,
+ *     porque esas columnas están vacías en las 15 906 filas reales. Una sí las
+ *     trae, para que el camino del permiso recién emitido siga cubierto.
  *   · El servidor IGNORA el $select y devuelve también los campos prohibidos.
  *     Simula un servidor que entrega de más, y así las pruebas comprueban que
  *     el filtrado del cliente es una segunda red real y no decoración.
@@ -20,10 +26,12 @@ export const FOOD_FACILITY_ROWS = [
   {
     record_id: 'FA-2026-1001',
     record_name: 'Harbor View Dental',
+    // La única con fechas: el dataset real las tiene vacías, pero el camino del
+    // permiso recién emitido tiene que seguir cubierto por alguna fila.
     record_open_date: daysAgo(20),
     record_issue_date: daysAgo(18),
-    permit_status: 'Active',
-    active_permit: 'Y',
+    permit_status: 'Issued',
+    active_permit: 'A',
     business_type: 'Dental office cafeteria',
     address: '1200 Harbor Blvd',
     city: 'San Diego',
@@ -40,9 +48,8 @@ export const FOOD_FACILITY_ROWS = [
   {
     record_id: 'FA-2026-1002',
     record_name: 'Gaslamp Property Group',
-    record_open_date: daysAgo(40),
-    permit_status: 'Active',
-    active_permit: 'Y',
+    permit_status: 'Permit Renewed',
+    active_permit: 'A',
     business_type: 'Property management office kitchen',
     address: '88 Fifth Ave',
     city: 'San Diego',
@@ -57,9 +64,8 @@ export const FOOD_FACILITY_ROWS = [
   {
     record_id: 'FA-2026-1003',
     record_name: 'Quiet Books LLC',
-    record_open_date: daysAgo(10),
-    permit_status: 'Active',
-    active_permit: 'Y',
+    permit_status: 'Permit Renewed',
+    active_permit: 'A',
     business_type: 'Other',
     address: '5 Nowhere Rd',
     city: 'Fresno',
@@ -73,9 +79,8 @@ export const FOOD_FACILITY_ROWS = [
   {
     record_id: 'FA-2026-1004',
     record_name: 'Taquería El Faro',
-    record_open_date: daysAgo(15),
-    permit_status: 'Active',
-    active_permit: 'Y',
+    permit_status: 'Permit Renewed',
+    active_permit: 'A',
     business_type: 'Restaurant',
     address: '990 Main St',
     city: 'San Diego',
@@ -90,9 +95,8 @@ export const FOOD_FACILITY_ROWS = [
   {
     record_id: 'FA-2026-1005',
     record_name: 'Bayside Builders',
-    record_open_date: daysAgo(5),
-    permit_status: 'Active',
-    active_permit: 'Y',
+    permit_status: 'Permit Renewed',
+    active_permit: 'A',
     business_type: 'Construction site canteen',
     address: '2100 Harbor Dr',
     city: 'San Diego',
@@ -102,6 +106,35 @@ export const FOOD_FACILITY_ROWS = [
     permit_owner_full: 'Dana Ruiz',
     latitude: 32.7055,
     longitude: -117.1689,
+  },
+  {
+    // Expirada, y con active_permit 'A' igual que las activas: así es el
+    // dataset real. Si el filtro mirara solo la bandera, esta pasaría.
+    record_id: 'FA-2026-1006',
+    record_name: 'Old Harbor Cantina',
+    permit_status: 'Expired',
+    active_permit: 'A',
+    business_type: 'Restaurant Food Facility',
+    address: '7 Closed St',
+    city: 'San Diego',
+    state: 'CA',
+    zip: '92101',
+    last_updated: daysAgo(4),
+    permit_owner_full: 'Titular Expirado',
+  },
+  {
+    // Nombre con forma de persona y sin palabra de negocio: no se puede
+    // afirmar que sea una empresa, así que se omite.
+    record_id: 'FA-2026-1007',
+    record_name: 'Salazar, Ramón',
+    permit_status: 'Issued',
+    active_permit: 'A',
+    business_type: 'Caterer',
+    address: '19 Unknown Ave',
+    city: 'San Diego',
+    state: 'CA',
+    zip: '92103',
+    last_updated: daysAgo(6),
   },
 ];
 
@@ -176,11 +209,34 @@ export function createFakeServer() {
       if (dataset !== 'c5ez-ufrd') return send(404, '{"error":"dataset desconocido"}', 'application/json');
 
       const where = url.searchParams.get('$where') || '';
+      const order = url.searchParams.get('$order') || '';
       const limit = Number(url.searchParams.get('$limit') || 50);
-      let rows = FOOD_FACILITY_ROWS;
+      let rows = FOOD_FACILITY_ROWS.slice();
 
-      const since = where.match(/> '([^']+)'/)?.[1];
-      if (since) rows = rows.filter((r) => r.record_open_date > since);
+      // El servidor aplica el $where de verdad, igual que SODA: si el cliente
+      // pide solo permisos activos, aquí no llegan las expiradas. Así las
+      // pruebas distinguen lo que filtra el servidor de lo que filtra el
+      // cliente, que es la diferencia entre una capa y dos.
+      const activeFlag = where.match(/active_permit\s*=\s*'([^']*)'/)?.[1];
+      if (activeFlag) rows = rows.filter((r) => r.active_permit === activeFlag);
+
+      const statusIn = where.match(/permit_status\s+in\s*\(([^)]*)\)/i)?.[1];
+      if (statusIn) {
+        const allowed = statusIn.split(',').map((v) => v.trim().replace(/^'|'$/g, ''));
+        rows = rows.filter((r) => allowed.includes(r.permit_status));
+      }
+
+      // Cursor: record_id < 'valor'. Es el recorrido incremental.
+      const cursor = where.match(/record_id\s*<\s*'([^']*)'/)?.[1];
+      if (cursor) rows = rows.filter((r) => String(r.record_id) < cursor);
+
+      // Ventana de fecha, para las pruebas que todavía la usan.
+      const since = where.match(/record_open_date\s*>\s*'([^']+)'/)?.[1];
+      if (since) rows = rows.filter((r) => (r.record_open_date || '') > since);
+
+      if (/record_id DESC/i.test(order)) {
+        rows.sort((a, b) => String(b.record_id).localeCompare(String(a.record_id)));
+      }
 
       // A propósito: se ignora el $select y se devuelven TODAS las columnas,
       // campos personales incluidos. El cliente tiene que filtrarlos.

@@ -4,15 +4,24 @@
  *   node scripts/twenty-sync.js schema            # contrasta el esquema vivo
  *   node scripts/twenty-sync.js dry-run           # plan, sin una sola escritura
  *   node scripts/twenty-sync.js dry-run --limit 5
- *   node scripts/twenty-sync.js apply --confirm   # escribe (exige confirmar)
+ *   node scripts/twenty-sync.js apply --confirm   # escribe (exige confirmar
+ *                                                 #  Y TWENTY_WRITE_ENABLED=true)
  *
  * `dry-run` es el modo por defecto a propósito. Escribir en el CRM de un cliente
  * tiene que ser una decisión explícita, no lo que pasa si te equivocas de
  * subcomando.
+ *
+ * Dos límites de la fase actual, y los dos están en el código, no en un aviso:
+ *
+ *   · Solo se planifican **Companies**. Personas y oportunidades cuelgan de una
+ *     empresa que todavía no existe, y planearlas aquí invitaría a crearlas en
+ *     la misma pasada. Cuando haya empresas de verdad en el CRM se replantea.
+ *   · `apply` necesita TWENTY_WRITE_ENABLED=true además de --confirm. Sin esa
+ *     variable, el único camino posible es el dry-run.
  */
 import { config } from '../src/config.js';
 import { db } from '../src/db.js';
-import { createClient, planProspect, upsertCompany, findCompanyByDedupKey } from '../src/services/crm/twenty.js';
+import { createClient, planCompanyUpsert, upsertCompany, findCompanyByDedupKey } from '../src/services/crm/twenty.js';
 import { COMPANY_FIELDS, ENUMS } from '../src/services/crm/twenty-schema.js';
 
 const [command, ...rest] = process.argv.slice(2);
@@ -122,6 +131,11 @@ async function run({ dryRun }) {
     console.error('`apply` exige --confirm. Sin él no se escribe nada.');
     process.exit(1);
   }
+  if (!dryRun && config.twenty.dryRunDefault) {
+    console.error('`apply` exige también TWENTY_WRITE_ENABLED=true en el entorno.');
+    console.error('Mientras no esté, este script solo puede planificar. Es deliberado.');
+    process.exit(1);
+  }
   console.log(dryRun ? '── DRY RUN · ninguna escritura ──\n' : '── APLICANDO CAMBIOS ──\n');
 
   const client = createClient({ baseUrl: config.twenty.baseUrl });
@@ -132,12 +146,13 @@ async function run({ dryRun }) {
     return;
   }
 
-  const tally = { create: 0, update: 0, noop: 0, error: 0, people: 0, opportunities: 0 };
+  const tally = { create: 0, update: 0, noop: 0, error: 0 };
   for (const row of rows) {
     const prospect = toProspect(row);
     try {
+      // Solo empresas. Ni personas ni oportunidades: ver la cabecera.
       const plan = dryRun
-        ? await planProspect(client, prospect)
+        ? { company: await planCompanyUpsert(client, prospect) }
         : { company: await upsertCompany(client, prospect, { dryRun: false }) };
 
       const c = plan.company;
@@ -153,8 +168,6 @@ async function run({ dryRun }) {
           if (c.changes[f] !== undefined) console.log(`      ${f} = ${JSON.stringify(c.changes[f])}`);
         }
       }
-      if (dryRun && plan.person) { tally.people++; console.log('    + persona (contacto publicado en su web)'); }
-      if (dryRun && plan.opportunity) { tally.opportunities++; console.log(`    + oportunidad ${plan.opportunity.amount.amountMicros / 1e6} USD`); }
     } catch (err) {
       tally.error++;
       console.log(`! ERROR  ${prospect.businessName}: ${err.message}`);
@@ -163,8 +176,9 @@ async function run({ dryRun }) {
 
   console.log(`\nResumen: ${tally.create} a crear · ${tally.update} a actualizar · ${tally.noop} sin cambios · ${tally.error} con error`);
   if (dryRun) {
-    console.log(`         ${tally.people} personas y ${tally.opportunities} oportunidades acompañarían a sus empresas`);
-    console.log('\nNo se escribió nada. Para aplicar: node scripts/twenty-sync.js apply --confirm');
+    console.log('         solo Companies: personas y oportunidades no se planifican en esta fase');
+    console.log('\nNo se escribió nada. Para aplicar hacen falta las dos cosas:');
+    console.log('  TWENTY_WRITE_ENABLED=true node scripts/twenty-sync.js apply --confirm');
   }
 }
 

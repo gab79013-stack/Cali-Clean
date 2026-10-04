@@ -39,6 +39,78 @@ const RESIDENTIAL_PATTERNS = [
 /** Campos donde puede aparecer la pista de que es un domicilio. */
 const RESIDENTIAL_SCAN_FIELDS = ['business_type', 'record_name', 'permit_status', 'address'];
 
+/**
+ * Patrones de nombre que delatan a una persona física en lugar de a un negocio.
+ *
+ * En los registros de permisos aparecen titulares individuales escritos como
+ * "Apellido, Nombre" o con sufijos de persona. No se puede verificar que sean
+ * un negocio real, así que se omiten: perder un candidato dudoso cuesta mucho
+ * menos que meter a un particular en una lista de prospección.
+ */
+const PERSON_NAME_PATTERNS = [
+  // "Ortega, José Ramón" — dos bloques separados por coma, sin palabra de
+  // empresa. Es la forma en que los registros guardan a un titular individual.
+  /^[\p{Lu}][\p{L}'’-]+\s*,\s*[\p{Lu}][\p{L}'’-]+(\s+[\p{Lu}][\p{L}'’-]+)?$/u,
+  /\b(jr|sr|iii|iv)\.?$/i,
+  /\bdba\s*:?\s*$/i,
+];
+
+/** Palabras que confirman que el nombre es de un negocio, no de alguien. */
+const BUSINESS_NAME_HINTS = /\b(inc|llc|l\.l\.c|corp|co|company|ltd|group|holdings|enterprises|partners|restaurant|taqueria|taquería|cafe|café|coffee|market|deli|bakery|panaderia|panadería|pizza|grill|bar|kitchen|catering|caterer|foods?|services?|school|hospital|center|centre|store|shop|mart|liquor|hotel|motel|club|association|church|university|college|district|county|city)\b/i;
+
+/**
+ * ¿Se puede afirmar que esta fila describe un negocio real?
+ *
+ * No basta con que no sea residencial: hace falta nombre, dirección, ZIP y
+ * tipo de establecimiento. Sin esos cuatro no hay a quién escribir ni cómo
+ * comprobar que existe, y un prospecto a medias ensucia el CRM para siempre.
+ */
+export function businessEvidence(row) {
+  const val = (k) => String(row?.[k] ?? '').trim();
+  const name = val('record_name');
+  const missing = [];
+  if (!name) missing.push('record_name');
+  if (!val('address')) missing.push('address');
+  if (!/^\d{5}/.test(val('zip'))) missing.push('zip');
+  if (!val('business_type')) missing.push('business_type');
+  if (missing.length) return { ok: false, reason: `faltan ${missing.join(', ')}` };
+
+  // Un nombre con forma de persona solo pasa si además trae una palabra que
+  // lo identifique como negocio ("Ortega, José" no; "Ortega & Sons Inc" sí).
+  if (PERSON_NAME_PATTERNS.some((re) => re.test(name)) && !BUSINESS_NAME_HINTS.test(name)) {
+    return { ok: false, reason: 'el nombre parece de una persona, no de un negocio' };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * ¿El permiso está activo según la política de la fuente?
+ *
+ * En el dataset del condado `active_permit` vale 'A' también en las 351 filas
+ * expiradas, así que se exigen las dos condiciones. Sin política declarada se
+ * devuelve `null`: no se inventa un criterio de actividad.
+ */
+export function isActiveRow(row, policy) {
+  if (!policy) return { active: null, reason: 'sin_politica' };
+  const val = (k) => String(row?.[k] ?? '').trim();
+
+  if (policy.flagField) {
+    const flag = val(policy.flagField);
+    const ok = (policy.flagValues || []).some((v) => v.toLowerCase() === flag.toLowerCase());
+    if (!ok) return { active: false, reason: `${policy.flagField}="${flag || '—'}"` };
+  }
+  if (policy.statusField) {
+    const status = val(policy.statusField);
+    const excluded = (policy.excludedStatuses || []).some((v) => v.toLowerCase() === status.toLowerCase());
+    if (excluded) return { active: false, reason: `${policy.statusField}="${status}"` };
+    const allowed = policy.allowedStatuses || [];
+    if (allowed.length && !allowed.some((v) => v.toLowerCase() === status.toLowerCase())) {
+      return { active: false, reason: `${policy.statusField}="${status || '—'}" no está en la lista de activos` };
+    }
+  }
+  return { active: true, reason: null };
+}
+
 export function isResidentialRow(row) {
   if (!row || typeof row !== 'object') return false;
   for (const field of RESIDENTIAL_SCAN_FIELDS) {
@@ -56,7 +128,7 @@ export function isResidentialRow(row) {
  * Deja la fila con exactamente las claves permitidas por la auditoría.
  * Devuelve `null` si la fila debe descartarse entera.
  */
-export function filterRow(sourceKey, row) {
+export function filterRow(sourceKey, row, { activePolicy = null } = {}) {
   if (!row || typeof row !== 'object') {
     return { row: null, reason: 'invalid' };
   }
@@ -66,6 +138,15 @@ export function filterRow(sourceKey, row) {
   if (isResidentialRow(row)) {
     return { row: null, reason: 'residential' };
   }
+
+  // Igual con el permiso y con la evidencia de que es un negocio: las dos
+  // comprobaciones miran columnas que el recorte podría no conservar.
+  if (activePolicy) {
+    const { active, reason } = isActiveRow(row, activePolicy);
+    if (active === false) return { row: null, reason: 'inactive', detail: reason };
+  }
+  const evidence = businessEvidence(row);
+  if (!evidence.ok) return { row: null, reason: 'unverifiable', detail: evidence.reason };
 
   const allowed = allowedFields(sourceKey);
   if (!allowed.length) {

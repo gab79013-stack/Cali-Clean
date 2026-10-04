@@ -463,12 +463,31 @@ test('una fila sin los campos obligatorios se descarta, no se completa', () => {
     'falta la dirección');
 });
 
-test('la consulta del condado filtra por fecha y ordena por ella', () => {
-  const params = SOURCES.sdcounty_food_facility_permits.query({ sinceDays: 90, limit: 25 });
-  assert.match(params.$where, /record_open_date > '\d{4}-\d{2}-\d{2}T/);
-  assert.equal(params.$order, 'record_open_date DESC');
+test('la consulta del condado filtra por permiso activo, no por fecha', () => {
+  // Por qué no por fecha: record_open_date está vacío en las 15 906 filas del
+  // dataset, así que cualquier ventana devuelve 0. Era la causa del cero de la
+  // Routine del 2026-10-04.
+  const params = SOURCES.sdcounty_food_facility_permits.query({ limit: 25 });
+  assert.ok(!/record_open_date/.test(params.$where),
+    'volvió el filtro por una fecha que el dataset no tiene');
+  assert.match(params.$where, /active_permit = 'A'/);
+  assert.match(params.$where, /permit_status in \('Issued', 'Permit Renewed'\)/);
+  assert.ok(!/Expired/.test(params.$where), 'las expiradas no se piden');
+  assert.equal(params.$order, 'last_updated DESC, record_id DESC');
+  assert.equal(params.$limit, '25');
+
   const url = buildUrl(SOURCES.sdcounty_food_facility_permits, params);
   assert.ok(url.startsWith('https://data.sandiegocounty.gov/resource/c5ez-ufrd.json?'));
+});
+
+test('el cursor entra en el $where escapado y nunca por encima de 50 filas', () => {
+  const conCursor = SOURCES.sdcounty_food_facility_permits.query({ limit: 500, cursor: "DEH'2026" });
+  assert.match(conCursor.$where, /record_id < 'DEH''2026'/,
+    'una comilla en un identificador del portal tiene que quedar escapada');
+  assert.equal(conCursor.$limit, '50', 'el tope de la política interna no se puede pedir más alto');
+
+  const sinCursor = SOURCES.sdcounty_food_facility_permits.query({ limit: 10 });
+  assert.ok(!/record_id </.test(sinCursor.$where), 'sin cursor no se añade cláusula');
 });
 
 test('el filtro de área acepta San Diego y rechaza lo de fuera', () => {
