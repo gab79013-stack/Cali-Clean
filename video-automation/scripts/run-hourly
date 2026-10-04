@@ -9,5 +9,16 @@ if [ "${VIDEO_ROUTINE_ENABLED:-false}" != "true" ]; then
   exit 78
 fi
 
-exec "$PYTHON_BIN" "$ROOT_DIR/src/pipeline.py" hourly
+case "$(printf '%s' "${CALI_CLEAN_VIDEO_KILL:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    echo "Cali Clean video kill switch engaged (CALI_CLEAN_VIDEO_KILL)." >&2
+    exit 78
+    ;;
+esac
 
+if [ -e "$ROOT_DIR/var/state/KILL" ]; then
+  echo "Cali Clean video kill switch engaged (var/state/KILL)." >&2
+  exit 78
+fi
+
+exec "$PYTHON_BIN" "$ROOT_DIR/src/pipeline.py" hourly

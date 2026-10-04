@@ -5,7 +5,10 @@
   "render_enabled": false,
   "publication_enabled": false,
   "meta_connected": false,
-  "planned_destinations": ["facebook_reels", "instagram_reels"],
+  "planned_destinations": [
+    "facebook_reels",
+    "instagram_reels"
+  ],
   "output": {
     "width": 1080,
     "height": 1920,
@@ -18,19 +21,22 @@
   "limits": {
     "max_real_renders_per_day": 1,
     "max_manifests_per_hour": 1,
-    "min_topic_gap_hours": 8
+    "min_topic_gap_hours": 8,
+    "max_render_attempts_per_day": 2
   },
   "retention": {
     "draft_days": 14,
     "manifest_days": 90,
-    "keep_published_days": 0
+    "keep_published_days": 0,
+    "log_days": 30
   },
   "storage": {
     "drafts": "var/drafts",
     "review": "var/review",
     "state": "var/state",
     "directory_mode": "0700",
-    "file_mode": "0600"
+    "file_mode": "0600",
+    "logs": "var/state/logs"
   },
   "renderers": {
     "active": "local_avfoundation",
@@ -48,4 +54,3 @@
     }
   }
 }
-

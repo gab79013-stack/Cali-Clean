@@ -10,6 +10,10 @@ Keep the hourly routine disabled until all items are complete.
 - [x] Private storage permissions are enforced.
 - [x] No Meta endpoint, account, token, or publication action is present.
 - [x] Higgsfield cost is quoted without submitting a job.
+- [x] Swift build uses `xcrun --sdk macosx swiftc` with a private, clean module cache and full diagnostic logs.
+- [x] Kill switch, lock, wall-clock quota ledger, retention and disabled Meta adapter are covered by offline tests.
+- [ ] `src/pipeline.py healthcheck` exits 0 on the Mac runner.
+- [ ] One supervised `render-pilot --supervised` produces a validated 1080x1920, 12–20 s MP4.
 - [ ] Pilot MP4 has been visually reviewed by a human.
 - [ ] Claude Code session/repository is available and the local commit is imported.
 - [ ] Mac Mini runner is selected and remains online for one supervised hourly cycle.

@@ -4,28 +4,67 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from meta_adapter import DisabledMetaAdapter  # noqa: E402  (offline, no network imports)
+
+ROOT = SRC_DIR.parent
 BRAND_PATH = ROOT / "config" / "brand.json"
 TOPICS_PATH = ROOT / "config" / "topics.json"
 RUNTIME_PATH = ROOT / "config" / "runtime.json"
 DISCLOSURE_EN = "Illustrative AI-generated visual — not client work or company personnel."
 DISCLOSURE_ES = "Imagen ilustrativa generada con IA; no representa clientes ni personal."
 
+# Output contract for reviewable Reels-style drafts.
+OUTPUT_WIDTH = 1080
+OUTPUT_HEIGHT = 1920
+MIN_DURATION_SECONDS = 12.0
+MAX_DURATION_SECONDS = 20.0
+DURATION_TOLERANCE_SECONDS = 0.2
+ALLOWED_CODECS = {"avc1", "h264"}
+LOCAL_RENDERER = "local_avfoundation"
+
+# Toolchain. xcrun resolves swiftc and the SDK selected by xcode-select, so the
+# compiler always matches the SDK instead of whatever /usr/bin/swiftc points at.
+XCRUN = "/usr/bin/xcrun"
+XCODE_SELECT = "/usr/bin/xcode-select"
+MACOS_DEPLOYMENT_TARGET = "13.0"
+SWIFT_LANGUAGE_VERSION = "5"
+SUPPORTED_ARCHS = {"arm64", "x86_64"}
+MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024
+
+KILL_ENV = "CALI_CLEAN_VIDEO_KILL"
+KILL_FILE = "KILL"
+LOCK_FILE = "pipeline.lock"
+LEDGER_FILE = "render-ledger.jsonl"
+TRUTHY = {"1", "true", "yes", "on"}
+
+Runner = Callable[..., subprocess.CompletedProcess]
+
 
 class PolicyError(RuntimeError):
+    pass
+
+
+class ToolchainError(PolicyError):
     pass
 
 
@@ -58,6 +97,19 @@ def write_private(path: Path, data: str) -> None:
 
 def write_json_private(path: Path, value: Dict[str, Any]) -> None:
     write_private(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def storage_path(runtime: Dict[str, Any], key: str) -> Path:
+    """Resolve a configured storage directory and refuse anything outside var/."""
+    base = (ROOT / "var").resolve()
+    path = (ROOT / runtime["storage"][key]).resolve()
+    if path != base and base not in path.parents:
+        raise PolicyError(f"Storage path for {key!r} escapes var/: {path}")
+    return path
+
+
+def now_local(runtime: Dict[str, Any]) -> datetime:
+    return datetime.now(ZoneInfo(runtime["timezone"]))
 
 
 def validate_brand(brand: Dict[str, Any], root: Path = ROOT) -> None:
@@ -187,6 +239,30 @@ def build_storyboard(plan: Plan, brand: Dict[str, Any], runtime: Dict[str, Any])
     }
 
 
+def validate_branding(manifest: Dict[str, Any], brand: Dict[str, Any]) -> None:
+    """Every draft must close on the official CTA and carry the AI-visual disclosure."""
+    lang = manifest["language"]
+    scenes = manifest["scenes"]
+    if len(scenes) != 4:
+        raise PolicyError("Storyboard must have exactly four scenes")
+    final = scenes[-1]
+    if final["headline"] != brand["cta"][lang] or "cali-clean.net" not in final["headline"]:
+        raise PolicyError("Final scene must carry the official cali-clean.net CTA")
+    if final["body"] != brand["content_rules"]["required_visual_disclosure"][lang]:
+        raise PolicyError("Final scene must carry the required visual disclosure")
+    if not any(scene["eyebrow"] == "CALI CLEAN" for scene in scenes):
+        raise PolicyError("Storyboard must name the Cali Clean brand")
+    if manifest["asset_id"] not in {asset["id"] for asset in brand["assets"]}:
+        raise PolicyError(f"Unknown brand asset: {manifest['asset_id']}")
+    previous_end = 0.0
+    for scene in scenes:
+        if abs(scene["start"] - previous_end) > 1e-6 or scene["end"] <= scene["start"]:
+            raise PolicyError("Scenes must be contiguous and non-empty")
+        previous_end = scene["end"]
+    if abs(previous_end - float(manifest["output"]["duration_seconds"])) > 1e-6:
+        raise PolicyError("Storyboard must cover the full output duration")
+
+
 def manifest_markdown(manifest: Dict[str, Any]) -> str:
     lines = [
         f"# Cali Clean draft {manifest['draft_id']}",
@@ -212,18 +288,347 @@ def manifest_markdown(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def validate_output_spec(output: Dict[str, Any]) -> None:
+    if int(output["width"]) != OUTPUT_WIDTH or int(output["height"]) != OUTPUT_HEIGHT:
+        raise PolicyError(f"Output must be {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}")
+    duration = float(output["duration_seconds"])
+    if not MIN_DURATION_SECONDS <= duration <= MAX_DURATION_SECONDS:
+        raise PolicyError(f"Output duration must be {MIN_DURATION_SECONDS:g}–{MAX_DURATION_SECONDS:g} s")
+    if output.get("format") != "mp4" or output.get("codec") != "h264":
+        raise PolicyError("Output must be H.264 MP4")
+    if output.get("audio"):
+        raise PolicyError("Pilot audio must remain disabled")
+
+
+def ensure_zero_cost(runtime: Dict[str, Any]) -> None:
+    renderers = runtime.get("renderers", {})
+    if renderers.get("active") != LOCAL_RENDERER:
+        raise PolicyError(f"Only the {LOCAL_RENDERER} renderer is allowed")
+    local = renderers.get(LOCAL_RENDERER, {})
+    if local.get("per_render_provider_cost") != 0:
+        raise PolicyError("The local renderer must have zero provider cost")
+    for name, settings in renderers.items():
+        if name in {"active", LOCAL_RENDERER} or not isinstance(settings, dict):
+            continue
+        if settings.get("enabled"):
+            raise PolicyError(f"Paid provider {name!r} must remain disabled")
+
+
 def ensure_runtime_safe(runtime: Dict[str, Any]) -> None:
     if runtime.get("publication_enabled"):
         raise PolicyError("Publication must remain disabled")
     if runtime.get("meta_connected"):
         raise PolicyError("Meta must remain disconnected")
-    if runtime["output"].get("audio"):
-        raise PolicyError("Pilot audio must remain disabled")
+    validate_output_spec(runtime["output"])
+    ensure_zero_cost(runtime)
+
+
+# --- Kill switch, lock, quota ledger ---------------------------------------------------
+
+
+def kill_switch_reason(runtime: Dict[str, Any], env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    env = os.environ if env is None else env
+    if env.get(KILL_ENV, "").strip().lower() in TRUTHY:
+        return f"environment variable {KILL_ENV}"
+    if (storage_path(runtime, "state") / KILL_FILE).exists():
+        return f"kill file {runtime['storage']['state']}/{KILL_FILE}"
+    return None
+
+
+def ensure_not_killed(runtime: Dict[str, Any], env: Optional[Dict[str, str]] = None) -> None:
+    reason = kill_switch_reason(runtime, env)
+    if reason:
+        raise PolicyError(f"Kill switch engaged ({reason}); refusing to render")
+
+
+@contextmanager
+def exclusive_lock(runtime: Dict[str, Any]) -> Iterator[Path]:
+    path = storage_path(runtime, "state") / LOCK_FILE
+    private_dir(path.parent)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise PolicyError("Another pipeline run holds the lock; refusing to run concurrently")
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        yield path
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def lock_is_free(runtime: Dict[str, Any]) -> bool:
+    try:
+        with exclusive_lock(runtime):
+            return True
+    except PolicyError:
+        return False
+
+
+def read_ledger(runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+    path = storage_path(runtime, "state") / LEDGER_FILE
+    if not path.exists():
+        return []
+    entries = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            raise PolicyError(f"Render ledger line {number} is corrupt; refusing to guess the quota")
+    return entries
+
+
+def append_ledger(runtime: Dict[str, Any], record: Dict[str, Any]) -> None:
+    path = storage_path(runtime, "state") / LEDGER_FILE
+    private_dir(path.parent)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    path.chmod(0o600)
+
+
+def quota_usage(runtime: Dict[str, Any], now: datetime) -> Dict[str, int]:
+    """Count today's renders by wall-clock time, never by the requested slot."""
+    zone = ZoneInfo(runtime["timezone"])
+    today = now.astimezone(zone).date()
+    attempts = completed = 0
+    for entry in read_ledger(runtime):
+        try:
+            stamp = datetime.fromisoformat(entry["at"]).astimezone(zone)
+        except (KeyError, ValueError):
+            raise PolicyError("Render ledger entry without a valid timestamp")
+        if stamp.date() != today:
+            continue
+        if entry.get("event") == "started":
+            attempts += 1
+        elif entry.get("event") == "completed":
+            completed += 1
+    # Manifests are a second source of truth in case the ledger was removed.
+    review = storage_path(runtime, "review")
+    if review.exists():
+        rendered = 0
+        for path in review.glob("*.json"):
+            try:
+                payload = load_json(path)
+                stamp = datetime.fromisoformat(payload["render"]["rendered_at"]).astimezone(zone)
+            except Exception:
+                continue
+            if stamp.date() == today:
+                rendered += 1
+        completed = max(completed, rendered)
+        attempts = max(attempts, completed)
+    return {"attempts": attempts, "completed": completed}
+
+
+def enforce_render_quota(runtime: Dict[str, Any], now: datetime) -> Dict[str, int]:
+    usage = quota_usage(runtime, now)
+    limits = runtime["limits"]
+    max_renders = int(limits["max_real_renders_per_day"])
+    max_attempts = int(limits.get("max_render_attempts_per_day", max_renders))
+    if usage["completed"] >= max_renders:
+        raise PolicyError(f"Daily pilot-render quota reached ({usage['completed']}/{max_renders})")
+    if usage["attempts"] >= max_attempts:
+        raise PolicyError(f"Daily render-attempt quota reached ({usage['attempts']}/{max_attempts})")
+    return usage
+
+
+def prune(runtime: Dict[str, Any], now: datetime, dry_run: bool = False) -> Dict[str, int]:
+    retention = runtime["retention"]
+    days = {
+        "drafts": int(retention["draft_days"]),
+        "review": int(retention["manifest_days"]),
+        "logs": int(retention.get("log_days", retention["manifest_days"])),
+    }
+    counts = {key: 0 for key in days}
+    for key, keep_days in days.items():
+        if key not in runtime["storage"]:
+            continue
+        root = storage_path(runtime, key)
+        if not root.exists():
+            continue
+        cutoff = now - timedelta(days=keep_days)
+        for path in root.iterdir():
+            if path.name == ".gitkeep" or path.is_symlink():
+                continue
+            if key == "review" and path.suffix not in {".json", ".md"}:
+                continue
+            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=now.tzinfo)
+            if modified >= cutoff:
+                continue
+            counts[key] += 1
+            if dry_run:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    return counts
+
+
+# --- Toolchain --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Toolchain:
+    xcrun: str
+    swiftc: str
+    sdk_path: str
+    sdk_version: str
+    target: str
+    swiftc_version: str
+
+    def fingerprint(self) -> str:
+        raw = "|".join([self.swiftc, self.sdk_path, self.sdk_version, self.target, self.swiftc_version, SWIFT_LANGUAGE_VERSION])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def run_diag(command: List[str], timeout: int, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
+    # stdin is closed so nothing can block waiting for a password or a prompt.
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+
+
+def _human_required(stderr: str) -> Optional[str]:
+    lowered = stderr.casefold()
+    if "license" in lowered:
+        return "the Xcode license has not been accepted (a human must run `sudo xcodebuild -license`)"
+    if "no developer tools" in lowered or "xcode-select --install" in lowered or "invalid active developer path" in lowered:
+        return "Command Line Tools are missing (a human must run `xcode-select --install`)"
+    if "password" in lowered or "authoriz" in lowered:
+        return "the system asked for authorization"
+    return None
+
+
+def resolve_toolchain(
+    platform_name: str = sys.platform,
+    machine: Optional[str] = None,
+    runner: Runner = run_diag,
+    exists: Callable[[str], bool] = os.path.exists,
+) -> Toolchain:
+    if platform_name != "darwin":
+        raise ToolchainError(f"Local AVFoundation rendering requires macOS (darwin); this host is {platform_name!r}")
+    for tool in (XCODE_SELECT, XCRUN):
+        if not exists(tool):
+            raise ToolchainError(f"Required tool is missing: {tool}")
+    arch = machine or platform.machine()
+    if arch not in SUPPORTED_ARCHS:
+        raise ToolchainError(f"Unsupported CPU architecture: {arch!r}")
+
+    def query(args: List[str], what: str) -> str:
+        result = runner(args, 60)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            human = _human_required(detail)
+            if human:
+                raise ToolchainError(f"Blocked: {human}. Command: {' '.join(args)}\n{detail}")
+            raise ToolchainError(f"Cannot resolve {what} (exit {result.returncode}): {' '.join(args)}\n{detail}")
+        return result.stdout.strip()
+
+    query([XCODE_SELECT, "-p"], "active developer directory")
+    swiftc = query([XCRUN, "--sdk", "macosx", "--find", "swiftc"], "swiftc")
+    sdk_path = query([XCRUN, "--sdk", "macosx", "--show-sdk-path"], "macOS SDK path")
+    sdk_version = query([XCRUN, "--sdk", "macosx", "--show-sdk-version"], "macOS SDK version")
+    version = query([XCRUN, "--sdk", "macosx", "swiftc", "--version"], "swiftc version")
+    if not swiftc or not exists(swiftc):
+        raise ToolchainError(f"xcrun returned a swiftc that does not exist: {swiftc!r}")
+    if not sdk_path or not os.path.isdir(sdk_path):
+        raise ToolchainError(f"xcrun returned an SDK path that does not exist: {sdk_path!r}")
+    return Toolchain(
+        xcrun=XCRUN,
+        swiftc=swiftc,
+        sdk_path=sdk_path,
+        sdk_version=sdk_version,
+        target=f"{arch}-apple-macos{MACOS_DEPLOYMENT_TARGET}",
+        swiftc_version=version.splitlines()[0] if version else "",
+    )
+
+
+def swiftc_command(toolchain: Toolchain, source: Path, output: Path, module_cache: Path) -> List[str]:
+    return [
+        toolchain.xcrun, "--sdk", "macosx", "swiftc",
+        "-sdk", toolchain.sdk_path,
+        "-target", toolchain.target,
+        "-swift-version", SWIFT_LANGUAGE_VERSION,
+        "-module-cache-path", str(module_cache),
+        "-O",
+        str(source),
+        "-o", str(output),
+    ]
+
+
+def swift_env(module_cache: Path) -> Dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("SWIFT_", "CLANG_MODULE"))}
+    env["CLANG_MODULE_CACHE_PATH"] = str(module_cache)
+    return env
+
+
+def diagnostic_log(command: List[str], result: subprocess.CompletedProcess, extra: Optional[Dict[str, Any]] = None) -> str:
+    lines = [
+        f"command: {' '.join(command)}",
+        f"exit_code: {result.returncode}",
+    ]
+    for key, value in (extra or {}).items():
+        lines.append(f"{key}: {value}")
+    lines.extend(["", "--- stdout ---", result.stdout or "", "--- stderr ---", result.stderr or ""])
+    return "\n".join(lines) + "\n"
+
+
+def compile_swift(
+    toolchain: Toolchain,
+    name: str,
+    source: Path,
+    logs: List[Dict[str, Any]],
+    log_dir: Path,
+    runner: Runner = run_diag,
+) -> Path:
+    build_dir = ROOT / ".build"
+    private_dir(build_dir)
+    binary = build_dir / name
+    stamp = build_dir / f"{name}.stamp"
+    expected = hashlib.sha256((sha256_file(source) + toolchain.fingerprint()).encode()).hexdigest()
+    if binary.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == expected:
+        return binary
+    # A private module cache, wiped before every build, rules out stale or
+    # unwritable shared caches (a common cause of "could not build module").
+    module_cache = build_dir / "module-cache" / name
+    if module_cache.exists():
+        shutil.rmtree(module_cache)
+    private_dir(module_cache)
+    temp = build_dir / f"{name}.tmp"
+    if temp.exists():
+        temp.unlink()
+    command = swiftc_command(toolchain, source, temp, module_cache)
+    result = runner(command, 300, swift_env(module_cache))
+    log_path = log_dir / f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-build-{name}.log"
+    write_private(log_path, diagnostic_log(command, result, {
+        "swiftc": toolchain.swiftc,
+        "swiftc_version": toolchain.swiftc_version,
+        "sdk": f"{toolchain.sdk_path} ({toolchain.sdk_version})",
+        "target": toolchain.target,
+        "module_cache": module_cache,
+    }))
+    logs.append({"step": f"build:{name}", "exit_code": result.returncode, "log": str(log_path)})
+    if result.returncode != 0 or not temp.exists():
+        tail = "\n".join((result.stderr or result.stdout or "").strip().splitlines()[-25:])
+        raise ToolchainError(f"swiftc failed for {source.name} (exit {result.returncode}); full diagnostics: {log_path}\n{tail}")
+    os.replace(temp, binary)
+    binary.chmod(0o700)
+    write_private(stamp, expected + "\n")
+    return binary
+
+
+# --- Rendering --------------------------------------------------------------------------
 
 
 def output_paths(runtime: Dict[str, Any], draft_id: str) -> Dict[str, Path]:
-    review = ROOT / runtime["storage"]["review"]
-    drafts = ROOT / runtime["storage"]["drafts"] / draft_id
+    review = storage_path(runtime, "review")
+    drafts = storage_path(runtime, "drafts") / draft_id
     return {
         "review": review,
         "manifest": review / f"{draft_id}.json",
@@ -241,28 +646,6 @@ def persist_manifest(manifest: Dict[str, Any], runtime: Dict[str, Any]) -> Dict[
     return paths
 
 
-def enforce_render_quota(runtime: Dict[str, Any], slot: datetime) -> None:
-    review = ROOT / runtime["storage"]["review"]
-    limit = int(runtime["limits"]["max_real_renders_per_day"])
-    count = 0
-    if review.exists():
-        for path in review.glob("*.json"):
-            try:
-                payload = load_json(path)
-            except Exception:
-                continue
-            if payload.get("status") != "qa_pending":
-                continue
-            try:
-                stamp = datetime.fromisoformat(payload["slot"]).astimezone(slot.tzinfo)
-            except Exception:
-                continue
-            if stamp.date() == slot.date():
-                count += 1
-    if count >= limit:
-        raise PolicyError(f"Daily pilot-render quota reached ({count}/{limit})")
-
-
 def _fonts():
     from PIL import ImageFont
 
@@ -274,6 +657,18 @@ def _fonts():
         "small": ImageFont.truetype(str(font_path), 25),
         "brand": ImageFont.truetype(str(font_path), 54),
     }
+
+
+def check_card_dependencies() -> str:
+    """Pillow must be importable and able to load the pinned Manrope WOFF2 (needs FreeType+brotli)."""
+    try:
+        import PIL
+        _fonts()
+    except ImportError as exc:
+        raise PolicyError(f"Pillow is not installed for this Python ({sys.executable}): {exc}")
+    except OSError as exc:
+        raise PolicyError(f"Pillow cannot load assets/manrope.woff2 (FreeType without WOFF2/brotli?): {exc}")
+    return f"Pillow {PIL.__version__}"
 
 
 def _hex(value: str):
@@ -352,133 +747,223 @@ def render_cards(manifest: Dict[str, Any], brand: Dict[str, Any], runtime: Dict[
     return cards
 
 
-def render_video(manifest: Dict[str, Any], brand: Dict[str, Any], runtime: Dict[str, Any], paths: Dict[str, Path]) -> Dict[str, Any]:
-    if shutil.which("swift") is None and not Path("/usr/bin/swift").exists():
-        raise PolicyError("macOS Swift/AVFoundation renderer is unavailable")
-    build_dir = ROOT / ".build"
-    private_dir(build_dir)
-    binaries = {
-        "render": (ROOT / "src" / "render_mp4.swift", build_dir / "render_mp4"),
-        "inspect": (ROOT / "src" / "inspect_mp4.swift", build_dir / "inspect_mp4"),
-    }
-    for source, binary in binaries.values():
-        if not binary.exists() or binary.stat().st_mtime < source.stat().st_mtime:
-            temp = binary.with_suffix(".tmp")
-            subprocess.run(
-                ["/usr/bin/swiftc", str(source), "-o", str(temp)],
-                check=True, capture_output=True, text=True, timeout=240,
-            )
-            os.replace(temp, binary)
-            binary.chmod(0o700)
-    enforce_render_quota(runtime, datetime.fromisoformat(manifest["slot"]))
+def validate_video_metadata(metadata: Dict[str, Any], output: Dict[str, Any]) -> None:
+    if round(float(metadata["width"])) != int(output["width"]) or round(float(metadata["height"])) != int(output["height"]):
+        raise PolicyError(f"Rendered dimensions do not match the 9:16 target: {metadata}")
+    duration = float(metadata["duration"])
+    if not MIN_DURATION_SECONDS <= duration <= MAX_DURATION_SECONDS:
+        raise PolicyError(f"Rendered duration {duration:.2f}s is outside {MIN_DURATION_SECONDS:g}–{MAX_DURATION_SECONDS:g}s")
+    if abs(duration - float(output["duration_seconds"])) > DURATION_TOLERANCE_SECONDS:
+        raise PolicyError(f"Rendered duration does not match target: {metadata}")
+    if metadata.get("codec_fourcc") not in ALLOWED_CODECS:
+        raise PolicyError(f"Unexpected video codec: {metadata.get('codec_fourcc')}")
+    if metadata.get("decodable") is not True:
+        raise PolicyError("Rendered MP4 could not be decoded at its first and last frames")
+    if metadata.get("audio_tracks", 0) != 0:
+        raise PolicyError("Rendered MP4 must not contain audio")
+
+
+def _run_logged(command: List[str], timeout: int, step: str, log_dir: Path, logs: List[Dict[str, Any]], runner: Runner) -> subprocess.CompletedProcess:
+    result = runner(command, timeout)
+    log_path = log_dir / f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{step}.log"
+    write_private(log_path, diagnostic_log(command, result))
+    logs.append({"step": step, "exit_code": result.returncode, "log": str(log_path)})
+    if result.returncode != 0:
+        tail = "\n".join((result.stderr or result.stdout or "").strip().splitlines()[-25:])
+        raise PolicyError(f"{step} failed (exit {result.returncode}); full diagnostics: {log_path}\n{tail}")
+    return result
+
+
+def render_video(
+    manifest: Dict[str, Any],
+    brand: Dict[str, Any],
+    runtime: Dict[str, Any],
+    paths: Dict[str, Path],
+    toolchain: Toolchain,
+    runner: Runner = run_diag,
+) -> Dict[str, Any]:
+    log_dir = storage_path(runtime, "logs")
+    private_dir(log_dir)
+    logs: List[Dict[str, Any]] = []
+    render_bin = compile_swift(toolchain, "render_mp4", ROOT / "src" / "render_mp4.swift", logs, log_dir, runner)
+    inspect_bin = compile_swift(toolchain, "inspect_mp4", ROOT / "src" / "inspect_mp4.swift", logs, log_dir, runner)
+    ensure_not_killed(runtime)
     cards = render_cards(manifest, brand, runtime, paths["draft_dir"])
     output = runtime["output"]
     command = [
-        str(binaries["render"][1]), str(paths["video"]),
+        str(render_bin), str(paths["video"]),
         str(output["width"]), str(output["height"]), str(output["fps"]), str(output["duration_seconds"]),
         *[str(path) for path in cards],
     ]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=240)
+    completed = _run_logged(command, 300, "render", log_dir, logs, runner)
     paths["video"].chmod(0o600)
-    inspected = subprocess.run(
-        [str(binaries["inspect"][1]), str(paths["video"])],
-        check=True, capture_output=True, text=True, timeout=120,
-    )
+    inspected = _run_logged([str(inspect_bin), str(paths["video"])], 120, "inspect", log_dir, logs, runner)
     metadata = json.loads(inspected.stdout.strip())
-    if round(metadata["width"]) != output["width"] or round(metadata["height"]) != output["height"]:
-        raise PolicyError(f"Rendered dimensions do not match 9:16 target: {metadata}")
-    if abs(float(metadata["duration"]) - float(output["duration_seconds"])) > 0.2:
-        raise PolicyError(f"Rendered duration does not match target: {metadata}")
-    if metadata["codec_fourcc"] not in {"avc1", "h264"}:
-        raise PolicyError(f"Unexpected video codec: {metadata['codec_fourcc']}")
+    validate_video_metadata(metadata, output)
     return {
         "engine": "macOS AVFoundation",
         "provider_cost": 0,
+        "rendered_at": now_local(runtime).isoformat(),
+        "toolchain": {
+            "swiftc": toolchain.swiftc,
+            "swiftc_version": toolchain.swiftc_version,
+            "sdk": toolchain.sdk_path,
+            "sdk_version": toolchain.sdk_version,
+            "target": toolchain.target,
+        },
         "video": str(paths["video"]),
         "sha256": sha256_file(paths["video"]),
         "bytes": paths["video"].stat().st_size,
         "metadata": metadata,
         "renderer_output": completed.stdout.strip(),
+        "logs": logs,
     }
 
 
-def prune(runtime: Dict[str, Any], now: datetime) -> Dict[str, int]:
-    counts = {"drafts": 0, "review": 0}
-    cutoffs = {
-        "drafts": now - timedelta(days=int(runtime["retention"]["draft_days"])),
-        "review": now - timedelta(days=int(runtime["retention"]["manifest_days"])),
-    }
-    for key in ("drafts", "review"):
-        root = ROOT / runtime["storage"][key]
-        if not root.exists():
-            continue
-        for path in root.iterdir():
-            if path.name == ".gitkeep":
-                continue
-            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=now.tzinfo)
-            if modified < cutoffs[key]:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-                counts[key] += 1
-    return counts
+# --- Healthcheck ------------------------------------------------------------------------
 
 
-def run(command: str, slot_value: str | None) -> Dict[str, Any]:
+def healthcheck(runtime: Dict[str, Any], brand: Dict[str, Any], toolchain_resolver: Callable[[], Toolchain] = resolve_toolchain) -> Dict[str, Any]:
+    """Read-only readiness report; compiles nothing, renders nothing, opens no network."""
+    checks: List[Dict[str, Any]] = []
+
+    def check(name: str, fn: Callable[[], Any]) -> None:
+        try:
+            detail = fn()
+            checks.append({"name": name, "ok": True, "detail": detail if detail is not None else "ok"})
+        except Exception as exc:  # report every failure instead of stopping at the first
+            checks.append({"name": name, "ok": False, "detail": str(exc)})
+
+    def flags() -> str:
+        names = ("render_enabled", "routine_enabled", "publication_enabled", "meta_connected")
+        states = {key: bool(runtime.get(key)) for key in names}
+        if any(states.values()):
+            raise PolicyError(f"Expected all false: {states}")
+        return "render/routine/publication/meta all false"
+
+    def kill() -> str:
+        reason = kill_switch_reason(runtime)
+        if reason:
+            raise PolicyError(f"engaged via {reason}")
+        return "not engaged"
+
+    def lock() -> str:
+        if not lock_is_free(runtime):
+            raise PolicyError("held by another run")
+        return "free"
+
+    def quota() -> Dict[str, int]:
+        usage = enforce_render_quota(runtime, now_local(runtime))
+        return {**usage, "max_renders": int(runtime["limits"]["max_real_renders_per_day"])}
+
+    def disk() -> str:
+        free = shutil.disk_usage(ROOT).free
+        if free < MIN_FREE_BYTES:
+            raise PolicyError(f"only {free // (1024 * 1024)} MiB free")
+        return f"{free // (1024 * 1024)} MiB free"
+
+    def toolchain() -> Dict[str, str]:
+        tc = toolchain_resolver()
+        return {"swiftc": tc.swiftc, "version": tc.swiftc_version, "sdk": tc.sdk_path, "sdk_version": tc.sdk_version, "target": tc.target}
+
+    check("brand_integrity", lambda: validate_brand(brand))
+    check("runtime_safe", lambda: ensure_runtime_safe(runtime))
+    check("zero_cost", lambda: ensure_zero_cost(runtime))
+    check("activation_flags_false", flags)
+    check("kill_switch", kill)
+    check("lock", lock)
+    check("quota", quota)
+    check("retention_due", lambda: prune(runtime, now_local(runtime), dry_run=True))
+    check("disk_space", disk)
+    check("card_dependencies", check_card_dependencies)
+    check("toolchain", toolchain)
+    return {"healthy": all(item["ok"] for item in checks), "checks": checks}
+
+
+# --- Entry point ------------------------------------------------------------------------
+
+
+def run(command: str, slot_value: str | None, supervised: bool = False) -> Dict[str, Any]:
     brand = load_json(BRAND_PATH)
     topics = load_json(TOPICS_PATH)
     runtime = load_json(RUNTIME_PATH)
     validate_brand(brand)
     ensure_runtime_safe(runtime)
+    meta_status = DisabledMetaAdapter(runtime).status()
+
+    if command == "healthcheck":
+        report = healthcheck(runtime, brand)
+        report["meta"] = meta_status
+        return report
+
     slot = parse_slot(slot_value, runtime["timezone"])
+    rendering = command in {"render-pilot", "hourly"}
 
     if command == "hourly":
         if not runtime.get("routine_enabled"):
             raise PolicyError("Hourly routine is disabled in config/runtime.json")
-        prune(runtime, slot)
         if not runtime.get("render_enabled"):
             raise PolicyError("Hourly rendering is disabled in config/runtime.json")
+    if command == "render-pilot" and not supervised:
+        raise PolicyError("render-pilot requires --supervised (a human must be watching this one render)")
+    if rendering:
+        ensure_not_killed(runtime)
 
-    plan = choose_plan(slot, brand, topics)
-    manifest = build_storyboard(plan, brand, runtime)
-    paths = output_paths(runtime, manifest["draft_id"])
+    with exclusive_lock(runtime):
+        if command == "hourly":
+            prune(runtime, now_local(runtime))
 
-    if paths["manifest"].exists():
-        existing = load_json(paths["manifest"])
-        return {"status": "idempotent_existing", "manifest": str(paths["manifest"]), "draft": existing}
+        plan = choose_plan(slot, brand, topics)
+        manifest = build_storyboard(plan, brand, runtime)
+        validate_branding(manifest, brand)
+        paths = output_paths(runtime, manifest["draft_id"])
 
-    if command == "render-pilot":
-        rendering = render_video(manifest, brand, runtime, paths)
-        manifest["status"] = "qa_pending"
-        manifest["render"] = rendering
-    elif command == "hourly":
-        rendering = render_video(manifest, brand, runtime, paths)
-        manifest["status"] = "qa_pending"
-        manifest["render"] = rendering
+        if paths["manifest"].exists():
+            existing = load_json(paths["manifest"])
+            # A dry-run manifest for this slot may be upgraded by one render; anything else is final.
+            if not (rendering and existing.get("status") == "dry_run"):
+                return {"status": "idempotent_existing", "manifest": str(paths["manifest"]), "draft": existing}
 
-    persist_manifest(manifest, runtime)
-    return {
-        "status": manifest["status"],
-        "draft_id": manifest["draft_id"],
-        "manifest": str(paths["manifest"]),
-        "storyboard": str(paths["storyboard"]),
-        "video": str(paths["video"]) if paths["video"].exists() else None,
-        "publication_enabled": False,
-    }
+        if rendering:
+            toolchain = resolve_toolchain()
+            check_card_dependencies()
+            enforce_render_quota(runtime, now_local(runtime))
+            append_ledger(runtime, {"event": "started", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat()})
+            try:
+                manifest["render"] = render_video(manifest, brand, runtime, paths, toolchain)
+            except Exception as exc:
+                append_ledger(runtime, {"event": "failed", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(), "error": str(exc)[:500]})
+                raise
+            manifest["status"] = "qa_pending"
+            append_ledger(runtime, {"event": "completed", "draft_id": manifest["draft_id"], "at": manifest["render"]["rendered_at"], "provider_cost": 0})
+
+        persist_manifest(manifest, runtime)
+        return {
+            "status": manifest["status"],
+            "draft_id": manifest["draft_id"],
+            "manifest": str(paths["manifest"]),
+            "storyboard": str(paths["storyboard"]),
+            "video": str(paths["video"]) if paths["video"].exists() else None,
+            "render": manifest.get("render"),
+            "publication_enabled": False,
+            "meta": meta_status,
+        }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("dry-run", "render-pilot", "hourly"))
+    parser.add_argument("command", choices=("dry-run", "render-pilot", "hourly", "healthcheck"))
     parser.add_argument("--slot", help="ISO timestamp; rounded down to the hour")
+    parser.add_argument("--supervised", action="store_true", help="required for render-pilot")
     args = parser.parse_args()
     try:
-        result = run(args.command, args.slot)
-    except (PolicyError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        result = run(args.command, args.slot, supervised=args.supervised)
+    except (PolicyError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+    if args.command == "healthcheck" and not result["healthy"]:
+        return 3
     return 0
 
 

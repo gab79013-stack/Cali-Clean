@@ -25,13 +25,15 @@ Higgsfield is authenticated and usable. A read-only balance check showed a free 
 - Publication has no implementation and must remain `false`.
 - Official asset hashes must match before a manifest or render is accepted.
 - Copy is rejected for unsupported ratings, guarantees, certifications, discounts, testimonials, before/after claims, prices, phone numbers, email addresses, or personal data.
-- Only one real pilot render per local day is allowed.
+- Only one real pilot render (and two attempts) per local wall-clock day is allowed, tracked in `var/state/render-ledger.jsonl`.
+- A kill switch (`CALI_CLEAN_VIDEO_KILL=1` or `var/state/KILL`) and an exclusive lock stop renders and concurrent runs.
 - Drafts are `qa_pending`; there is no automatic promotion.
 
 ## Retention
 
 - Draft media: 14 days
 - Review manifests/storyboards: 90 days
+- Build/render/inspect diagnostic logs (`var/state/logs`): 30 days
 - No published-media retention policy is active because publication is disabled
 
 Pruning is implemented but runs only from the disabled hourly entry point. Every retained manifest includes the hashes required to reproduce its content decision.
