@@ -21,6 +21,11 @@ export const PII_PROHIBIDA = [
   'BondAmount', 'WorkersCompInsurance', 'PolicyNumber', 'MailingAddress',
   'PROJECT_MANAGER_NAME_TEXT', 'MGMT_CONTACT_FULL_NAME', 'LATITUDE', 'LONGITUDE',
   'ADMINISTRATOR',
+  // Del volcado del directorio de escuelas: administradores, contacto y coordenadas.
+  'Fernandez', 'afernandez@ejemplo.invalid', 'wchen@ejemplo.invalid', 'office@ejemplo.invalid',
+  '(619) 555-0142', '(619) 555-0188', '(619) 555-0101', 'principal.personal@ejemplo.invalid',
+  'AdmFName1', 'AdmLName1', 'AdmEmail1', 'AdmEmail2', 'Latitude', 'Longitude',
+  'MailStreet', 'FaxNumber', '4100 Normal St',
 ];
 
 // ── 1. CSLB · WebForms + CSV ─────────────────────────────────
@@ -87,8 +92,8 @@ const PAGINA_PORTAL = (viewstate) => `<!DOCTYPE html><html><body><form method="p
 <input type="hidden" name="__VIEWSTATE" value="${viewstate}" />
 <input type="hidden" name="__VIEWSTATEGENERATOR" value="A1B2C3D4" />
 <input type="hidden" name="__EVENTVALIDATION" value="EV-${viewstate}" />
-<select name="ddlDataType"><option value="M">License Master</option></select>
-<a id="lbMasterCSV" href="javascript:__doPostBack('lbMasterCSV','')">CSV</a>
+<select name="ctl00$MainContent$ddlStatus"><option value="M">License Master</option></select>
+<a id="MainContent_lbMasterCSV" href="javascript:__doPostBack('ctl00$MainContent$lbMasterCSV','')">CSV</a>
 </form></body></html>`;
 
 /**
@@ -109,7 +114,7 @@ export function createFakeCslbServer({ mode = 'ok', body = null } = {}) {
       method: req.method,
       url: req.url,
       eventTarget: target,
-      dataType: params.get('ddlDataType'),
+      dataType: params.get('ctl00$MainContent$ddlStatus'),
       viewstate: params.get('__VIEWSTATE'),
       eventValidation: params.get('__EVENTVALIDATION'),
       userAgent: req.headers['user-agent'] ?? null,
@@ -131,13 +136,13 @@ export function createFakeCslbServer({ mode = 'ok', body = null } = {}) {
     }
 
     // Postback de selección.
-    if (target === 'ddlDataType') {
+    if (target === 'ctl00$MainContent$ddlStatus') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(PAGINA_PORTAL('VS-2'));
     }
 
     // Postback del CSV.
-    if (target === 'lbMasterCSV') {
+    if (target === 'ctl00$MainContent$lbMasterCSV') {
       csvPedido++;
       if (mode === 'throttled' && csvPedido === 1) {
         res.writeHead(429, { 'Retry-After': '2' });
@@ -302,101 +307,149 @@ export function createFakeArcgisServer({ mode = 'ok', rows = HUD_ROWS, pageSize 
   });
 }
 
-// ── 3. HCAI · CKAN ───────────────────────────────────────────
-export function hcaiRow(partial) {
+// ── 3. CDE · directorio de escuelas (TSV) ────────────────────
+export const CDE_HEADER = [
+  'CDSCode', 'NCESDist', 'NCESSchool', 'StatusType', 'County', 'District', 'School',
+  'Street', 'StreetAbr', 'City', 'Zip', 'State',
+  'MailStreet', 'MailCity', 'MailZip',
+  'Phone', 'Ext', 'FaxNumber', 'Email', 'Website',
+  'OpenDate', 'ClosedDate', 'Charter', 'FundingType', 'DOC', 'DOCType', 'SOC', 'SOCType',
+  'EdOpsCode', 'EILCode', 'EILName', 'GSoffered', 'GSserved', 'Virtual', 'Magnet',
+  'Latitude', 'Longitude',
+  'AdmFName1', 'AdmLName1', 'AdmEmail1', 'AdmFName2', 'AdmLName2', 'AdmEmail2',
+  'LastUpDate',
+];
+
+export function cdeRow(partial) {
   const base = {
-    OSHPD_ID: '', FACILITY_NAME: '', LICENSE_NUM: '080000123',
-    FACILITY_LEVEL_DESC: 'Parent Facility', DBA_ADDRESS1: '555 Medical Center Dr',
-    DBA_CITY: 'San Diego', DBA_ZIP_CODE: '92123', COUNTY_NAME: 'San Diego',
-    FACILITY_STATUS_DESC: 'Open', LICENSE_TYPE_DESC: 'General Acute Care Hospital',
-    LICENSE_CATEGORY_DESC: 'Hospital',
+    CDSCode: '', NCESDist: '0634410', NCESSchool: '12345', StatusType: 'Active',
+    County: 'San Diego', District: 'San Diego Unified', School: '',
+    Street: '1200 Harbor Blvd', StreetAbr: '1200 Harbor Blvd', City: 'San Diego',
+    Zip: '92101-1234', State: 'CA',
+    MailStreet: '4100 Normal St', MailCity: 'San Diego', MailZip: '92103',
+    Phone: '(619) 555-0142', Ext: '203', FaxNumber: '(619) 555-0188',
+    Email: 'office@ejemplo.invalid', Website: 'www.ejemplo-escuela.invalid',
+    OpenDate: '1998-08-15', ClosedDate: '', Charter: 'N', FundingType: 'Directly funded',
+    DOC: '54', DOCType: 'Unified School District', SOC: '60', SOCType: 'Elementary Schools (Public)',
+    EdOpsCode: 'TRAD', EILCode: 'ELEM', EILName: 'Elementary',
+    GSoffered: 'K-5', GSserved: 'K-5', Virtual: 'N', Magnet: 'N',
+    Latitude: '32.715711', Longitude: '-117.161100',
+    AdmFName1: 'Ana', AdmLName1: 'Fernandez', AdmEmail1: 'afernandez@ejemplo.invalid',
+    AdmFName2: 'Wei', AdmLName2: 'Chen', AdmEmail2: 'wchen@ejemplo.invalid',
+    LastUpDate: '2026-09-30',
   };
   return { ...base, ...partial };
 }
 
-export const HCAI_ROWS = [
-  hcaiRow({ OSHPD_ID: '106370001', FACILITY_NAME: 'Harbor General Hospital' }),
-  hcaiRow({ OSHPD_ID: '106370002', FACILITY_NAME: 'Mesa Surgery Center', FACILITY_LEVEL_DESC: 'Consolidated Facility' }),
-  hcaiRow({ OSHPD_ID: '106370003', FACILITY_NAME: 'Coastal Hospice Care Inc' }),
+export const CDE_ROWS = [
+  // ── Aceptables ──
+  cdeRow({ CDSCode: '37683380000001', School: 'Harbor View Elementary' }),
+  cdeRow({
+    CDSCode: '37683380000002', School: 'Mesa Verde "North" Middle School',
+    Street: '620 Fifth Ave', City: 'Chula Vista', Zip: '91910',
+    SOCType: 'Intermediate/Middle Schools (Public)',
+  }),
+  cdeRow({
+    // Nombre con salto de línea dentro de un campo entrecomillado.
+    CDSCode: '37683380000003', School: 'Pacific\nCharter Academy', Charter: 'Y',
+    Website: 'https://pacific-charter.invalid', City: 'Oceanside', Zip: '92054',
+  }),
   // ── Fuera de condado / cerrada ──
-  hcaiRow({ OSHPD_ID: '106370010', FACILITY_NAME: 'Fresno Community Hospital', COUNTY_NAME: 'Fresno' }),
-  hcaiRow({ OSHPD_ID: '106370011', FACILITY_NAME: 'Closed Clinic Inc', FACILITY_STATUS_DESC: 'Closed' }),
-  hcaiRow({ OSHPD_ID: '106370012', FACILITY_NAME: 'Pending Clinic Inc', FACILITY_STATUS_DESC: 'Pending' }),
-  // ── Nivel no institucional ──
-  hcaiRow({ OSHPD_ID: '106370020', FACILITY_NAME: 'Satellite Clinic Inc', FACILITY_LEVEL_DESC: 'Satellite Facility' }),
-  // ── Nombre de persona ──
-  hcaiRow({ OSHPD_ID: '106370030', FACILITY_NAME: 'Patel, Asha' }),
-  // ── Sin licencia / dirección incompleta / residencial ──
-  hcaiRow({ OSHPD_ID: '106370040', FACILITY_NAME: 'Sin Licencia Clinic Inc', LICENSE_NUM: '' }),
-  hcaiRow({ OSHPD_ID: '106370041', FACILITY_NAME: 'Sin Zip Clinic Inc', DBA_ZIP_CODE: '' }),
-  hcaiRow({ OSHPD_ID: '106370042', FACILITY_NAME: 'Home Clinic Inc', DBA_ADDRESS1: '12 Private Way Apt 3' }),
+  cdeRow({ CDSCode: '30664640000010', School: 'Orange Grove Elementary', County: 'Orange' }),
+  cdeRow({ CDSCode: '37683380000011', School: 'Closed Canyon Elementary', StatusType: 'Closed', ClosedDate: '2024-06-30' }),
+  cdeRow({ CDSCode: '37683380000012', School: 'Pending Hills Elementary', StatusType: 'Pending' }),
+  // ── Fila de distrito u oficina, sin centro ──
+  cdeRow({ CDSCode: '37683380000000', School: 'No Data', District: 'San Diego Unified' }),
+  cdeRow({ CDSCode: '37000000000000', School: '', District: 'San Diego County Office of Education' }),
+  // ── Virtual: sin instalaciones ──
+  cdeRow({ CDSCode: '37683380000020', School: 'San Diego Virtual Academy', Virtual: 'Y' }),
+  // ── Domicilio ──
+  cdeRow({ CDSCode: '37683380000030', School: 'Tiny Hands Family Child Care Home' }),
+  cdeRow({ CDSCode: '37683380000031', School: 'Island Preschool', Street: '12 Island Ave Apt 7B' }),
+  // ── Dirección incompleta ──
+  cdeRow({ CDSCode: '37683380000040', School: 'Sin Zip Elementary', Zip: '' }),
+  cdeRow({ CDSCode: '37683380000041', School: 'Sin Calle Elementary', Street: '' }),
+  // ── Duplicado en el mismo volcado ──
+  cdeRow({ CDSCode: '37683380000001', School: 'Harbor View Elementary' }),
 ];
 
+export function cdeTsv(rows = CDE_ROWS, { header = CDE_HEADER } = {}) {
+  const campoTab = (v) => {
+    const t = String(v ?? '');
+    return /["\t\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return `${[header.join('\t'), ...rows.map((r) => header.map((h) => campoTab(r[h])).join('\t'))].join('\n')}\n`;
+}
+
+export const CDE_TSV = cdeTsv();
+export const CDE_TSV_SHA256 = crypto.createHash('sha256').update(CDE_TSV, 'utf8').digest('hex');
+
 /**
- * API CKAN simulada.
- * mode: ok | redirectToS3 | successFalse | badJson | throttled | schemaChanged |
- *       resourceRotated | emptyPage
+ * Servidor del volcado del directorio.
+ * mode: ok | notModified | truncated | oversize | malformed | unknownColumns | empty
  */
-export function createFakeCkanServer({ mode = 'ok', rows = HCAI_ROWS, pageSize = 1000, resourceId = '641c5557-7d65-4379-8fea-6b7dedbda40b' } = {}) {
+export function createFakeCdeServer({ mode = 'ok', body = null, etag = '"cde-1"', lastModified = 'Wed, 30 Sep 2026 10:00:00 GMT' } = {}) {
   const requests = [];
-  let n = 0;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    const sql = url.searchParams.get('sql') || '';
-    n++;
-    requests.push({ method: req.method, path: url.pathname, sql });
-
-    const json = (code, body) => {
-      res.writeHead(code, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(body));
-    };
-
-    if (!url.pathname.startsWith('/api/3/action/datastore_search')) {
-      return json(404, { success: false, error: { message: 'not found' } });
-    }
-    if (mode === 'throttled' && n === 1) {
-      res.writeHead(429, { 'Retry-After': '1' });
-      return res.end();
-    }
-    if (mode === 'redirectToS3') {
-      res.writeHead(302, { Location: 'https://s3.amazonaws.com/ca-open-data/facilities.csv' });
-      return res.end();
-    }
-    if (mode === 'successFalse') return json(200, { success: false, error: { __type: 'Validation Error', message: 'bad sql' } });
-    if (mode === 'badJson') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end('{ roto');
-    }
-
-    const limit = Number((sql.match(/LIMIT (\d+)/) || [])[1] || pageSize);
-    const offset = Number((sql.match(/OFFSET (\d+)/) || [])[1] || 0);
-    if (mode === 'emptyPage') return json(200, { success: true, result: { records: [], fields: [] } });
-
-    const pedidos = [...sql.matchAll(/"([A-Z_0-9]+)"/g)].map((m2) => m2[1])
-      .filter((f) => f !== resourceId);
-    // Se respeta el LIMIT pedido: el DataStore real lo hace, y un fixture que
-    // devuelve menos de lo pedido le dice al cliente "esta era la última página"
-    // cuando no lo era. `pageSize` solo actúa como máximo del servidor.
-    const tope = Math.min(limit, pageSize);
-    const page = rows.slice(offset, offset + tope);
-    const records = page.map((r) => {
-      const o = {};
-      for (const f of pedidos) if (f in r) o[f] = r[f];
-      if (mode === 'schemaChanged') { delete o.LICENSE_NUM; o.LATITUDE = 32.715711; }
-      return o;
+    requests.push({
+      method: req.method,
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
+      ifNoneMatch: req.headers['if-none-match'] ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
     });
-    const fields = (mode === 'schemaChanged'
-      ? pedidos.filter((f) => f !== 'LICENSE_NUM').concat('LATITUDE')
-      : pedidos).map((id) => ({ id }));
 
-    return json(200, { success: true, result: { records, fields } });
+    // Solo el recurso de descarga. Nada de raspar el buscador del directorio.
+    if (url.pathname !== '/schooldirectory/report') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('not found');
+    }
+
+    if (mode === 'notModified' || (mode === 'ok' && req.headers['if-none-match'] === etag)) {
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastModified });
+      return res.end();
+    }
+
+    let payload = body ?? CDE_TSV;
+    if (mode === 'malformed') payload = `${CDE_HEADER.join('\t')}\n123\t"sin cerrar\tActive\n`;
+    if (mode === 'unknownColumns') {
+      // Dos columnas nuevas, con el MISMO número de campos en la cabecera y en la
+      // fila: un volcado con columnas de más es válido como CSV, y eso es
+      // justamente lo que tiene que caerse por la allowlist y no por el parser.
+      const conExtras = {
+        ...cdeRow({ CDSCode: '37683380000050', School: 'Columna Nueva Elementary' }),
+        PrincipalMobile: '(619) 555-0101',
+        PrincipalPersonalEmail: 'principal.personal@ejemplo.invalid',
+      };
+      payload = cdeTsv([conExtras], {
+        header: [...CDE_HEADER, 'PrincipalMobile', 'PrincipalPersonalEmail'],
+      });
+    }
+    if (mode === 'empty') payload = '';
+
+    const headers = { 'Content-Type': 'text/plain; charset=utf-8', ETag: etag, 'Last-Modified': lastModified };
+    if (mode === 'oversize') {
+      headers['Content-Length'] = String(1024 * 1024 * 1024);
+      res.writeHead(200, headers);
+      return res.end(payload);
+    }
+    headers['Content-Length'] = String(Buffer.byteLength(payload));
+    res.writeHead(200, headers);
+    if (mode === 'truncated') {
+      res.write(payload.slice(0, Math.floor(payload.length / 3)));
+      return res.destroy();
+    }
+    return res.end(payload);
   });
 
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => resolve({
       server,
       requests,
-      sqlEndpoint: `http://127.0.0.1:${server.address().port}/api/3/action/datastore_search_sql`,
+      etag,
+      lastModified,
+      downloadUrl: `http://127.0.0.1:${server.address().port}/schooldirectory/report?rid=dl1&tp=txt`,
       close: () => server.close(),
     }));
   });

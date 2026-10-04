@@ -117,9 +117,12 @@ export function assertCsvResponse(res, { expectedAttachment }) {
  */
 export async function downloadMasterCsv({
   portalUrl,
-  control = 'lbMasterCSV',
+  // Nombres reales del formulario, verificados contra el portal el 2026-10-04.
+  // El `__EVENTTARGET` lleva la ruta completa del control de ASP.NET: con el
+  // nombre corto el postback no se reconoce y el portal devuelve otra página.
+  control = 'ctl00$MainContent$lbMasterCSV',
   datasetChoice = 'M',
-  datasetField = 'ddlDataType',
+  datasetField = 'ctl00$MainContent$ddlStatus',
   expectedAttachment = 'MasterLicenseData.csv',
   fetchImpl = fetch,
   sleep,
@@ -131,9 +134,37 @@ export async function downloadMasterCsv({
   dir = tmpRoot(),
 } = {}) {
   const metrics = { requests: 0, bytes: 0, retries: 0, http429: 0 };
+
+  /**
+   * Cookies de la sesión del formulario.
+   *
+   * Hacen falta, y se comprobó por la vía dura: el mismo postback sin la cookie
+   * que entrega el GET lo rechaza la protección del portal con un "Request
+   * Rejected", y con ella responde la página del dataset. Un postback de
+   * WebForms sin su sesión es una petición incompleta, no un truco.
+   *
+   * Se guarda solo `nombre=valor`: ni dominios, ni expiraciones, ni nada que
+   * convierta esto en un almacén de cookies de propósito general.
+   */
+  const cookies = new Map();
+  const recogerCookies = (res) => {
+    const todas = typeof res.headers?.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : [res.headers?.get?.('set-cookie')].filter(Boolean);
+    for (const linea of todas) {
+      const [par] = String(linea).split(';');
+      const i = par.indexOf('=');
+      if (i > 0) cookies.set(par.slice(0, i).trim(), par.slice(i + 1).trim());
+    }
+  };
+  const cabeceraCookie = () => (cookies.size
+    ? { Cookie: [...cookies].map(([k, v]) => `${k}=${v}`).join('; ') }
+    : {});
+
   const cabeceras = (extra = {}) => ({
     Accept: 'text/html,application/xhtml+xml,text/csv',
     ...(userAgent ? { 'User-Agent': userAgent } : {}),
+    ...cabeceraCookie(),
     ...extra,
   });
 
@@ -189,6 +220,7 @@ export async function downloadMasterCsv({
       status: paso1.status, code: 'HTTP_ERROR', step: 'tokens',
     });
   }
+  recogerCookies(paso1);
   const html = await paso1.text();
   metrics.bytes += Buffer.byteLength(html);
   const tokens = extractFormTokens(html);
@@ -205,7 +237,7 @@ export async function downloadMasterCsv({
   // ── Paso 2: seleccionar License Master ──
   const paso2 = await pedir(portalUrl, {
     method: 'POST',
-    headers: cabeceras({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+    headers: cabeceras({ 'Content-Type': 'application/x-www-form-urlencoded', Referer: portalUrl }),
     body: form(datasetField, { [datasetField]: datasetChoice }).toString(),
   }, 'el postback de selección', 'select');
   if (paso2.status >= 300 && paso2.status < 400) {
@@ -218,6 +250,7 @@ export async function downloadMasterCsv({
       status: paso2.status, code: 'HTTP_ERROR', step: 'select',
     });
   }
+  recogerCookies(paso2);
   const html2 = await paso2.text();
   metrics.bytes += Buffer.byteLength(html2);
   // Los tokens se renuevan en cada postback: usar los viejos haría fallar el
@@ -228,7 +261,7 @@ export async function downloadMasterCsv({
   // ── Paso 3: el CSV ──
   const paso3 = await pedir(portalUrl, {
     method: 'POST',
-    headers: cabeceras({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+    headers: cabeceras({ 'Content-Type': 'application/x-www-form-urlencoded', Referer: portalUrl }),
     body: form(control, { [datasetField]: datasetChoice }).toString(),
   }, 'la descarga del CSV', 'csv');
   assertCsvResponse(paso3, { expectedAttachment });

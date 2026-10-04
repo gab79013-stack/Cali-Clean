@@ -22,7 +22,16 @@ import path from 'node:path';
 import { ROOT } from '../../config.js';
 import { attestationFor } from '../sources/attestation.js';
 
-export const SCOUT_IDS = Object.freeze(['cslb_contractors', 'hud_multifamily', 'hcai_facilities']);
+/**
+ * Los scouts activos del catálogo.
+ *
+ * `hcai_facilities` ya no está: se retiró el 2026-10-04 porque el robots.txt de
+ * su publicador prohíbe explícitamente las rutas de API que necesitaba. Su
+ * manifiesto y su evidencia viven en `docs/retired/`, fuera de `config/`, así que
+ * ningún cargador los lee y no hay manera de reactivarla por accidente. El motivo
+ * del rechazo se conserva ahí: es el resultado más valioso de esa auditoría.
+ */
+export const SCOUT_IDS = Object.freeze(['cslb_contractors', 'hud_multifamily', 'cde_schools']);
 
 /** Dónde vive el manifiesto de cada scout. */
 const manifestDir = () => process.env.SCOUT_MANIFEST_DIR || path.join(ROOT, 'config', 'scouts');
@@ -51,8 +60,22 @@ export function manifestFor(scoutId, opts = {}) {
 }
 
 /** Campos que un scout puede conservar, según su manifiesto. */
+/**
+ * Allowlist cerrada de campos del scout.
+ *
+ * Lanza si el manifiesto no declara ninguna, y no devuelve `[]`: una lista vacía
+ * recortaría cada fila a un objeto vacío, `assertOnlyAllowed` no encontraría nada
+ * que prohibir, y el control se volvería decorativo justo donde tiene que morder.
+ */
 export function allowedFields(scoutId) {
-  return manifestFor(scoutId)?.fields?.allowed || [];
+  const lista = manifestFor(scoutId)?.fields?.allowed;
+  if (!Array.isArray(lista) || lista.length === 0) {
+    throw new Error(
+      `El manifiesto de ${scoutId} no declara fields.allowed. Sin allowlist no se recorta nada, `
+      + 'y un recorte vacío no es seguro: es un control que no comprueba.',
+    );
+  }
+  return lista;
 }
 
 /** Campos que no se piden nunca al servidor. */
@@ -90,6 +113,39 @@ export function checkScoutAllowed(scoutId, { now = Date.now(), maxAgeDays = 180 
   const m = manifestFor(scoutId);
   if (!m || m.broken) {
     return { allowed: false, reason: 'sin_manifiesto', detail: m?.error || 'no se pudo leer el manifiesto' };
+  }
+  // El robots del publicador va PRIMERO, y no se puede sortear con un flag.
+  //
+  // Esto está aquí porque pasó: el robots.txt de data.chhs.ca.gov resultó ser
+  // legible y prohibir `/api/` para `User-agent: *`, justo la ruta que el scout
+  // usaría. Si ese "no" viviera solo en `enabled`, bastaría con que alguien
+  // pusiera enabled=true para pasar por encima de lo que el publicador dijo.
+  // Vive aquí para que no se pueda.
+  if (m.robots?.disallowsOurPath === true) {
+    return {
+      allowed: false,
+      reason: 'robots_prohibe',
+      state: m.state,
+      detail: m.robots.disallowReason || 'el robots.txt del publicador prohíbe la ruta que este scout usaría',
+      overridable: false,
+    };
+  }
+  // Y un robots que nadie ha leído tampoco abre la puerta.
+  //
+  // El manifiesto de CDE lo dice con palabras —"desconocer no es permiso"— pero
+  // una frase en un JSON no detiene nada. Mientras `disallowsOurPath` no sea un
+  // `false` comprobado, la puerta se queda cerrada, y tampoco esto se sortea con
+  // un flag: `enabled: true` sobre un robots sin leer no es una decisión, es un
+  // descuido.
+  if (m.robots?.disallowsOurPath !== false) {
+    return {
+      allowed: false,
+      reason: 'robots_sin_leer',
+      state: m.state,
+      detail: m.robots?.interpretation
+        || 'el robots.txt del publicador no se ha leído, y no leerlo no equivale a que permita',
+      overridable: false,
+    };
   }
   if (m.eligible !== true) {
     return { allowed: false, reason: 'no_elegible', state: m.state, detail: m.decision };

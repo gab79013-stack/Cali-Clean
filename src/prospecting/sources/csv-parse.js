@@ -30,7 +30,21 @@ export class CsvFormatError extends Error {
 const QUOTE = '"';
 
 export class CsvParser {
-  constructor({ maxFieldBytes = 1 << 20, maxColumns = 512 } = {}) {
+  /**
+   * `delimiter` existe porque no todos los volcados oficiales usan comas: el
+   * directorio de escuelas de California se publica delimitado por tabuladores.
+   * El resto de las reglas —comillas, saltos de línea dentro de un campo, filas
+   * malformadas— es idéntico, así que el parser es el mismo y lo único que
+   * cambia es qué carácter separa.
+   */
+  constructor({ maxFieldBytes = 1 << 20, maxColumns = 512, delimiter = ',' } = {}) {
+    if (String(delimiter).length !== 1) {
+      throw new CsvFormatError(`el delimitador tiene que ser un solo carácter, y llegó "${delimiter}"`);
+    }
+    if (delimiter === '"' || delimiter === '\n' || delimiter === '\r') {
+      throw new CsvFormatError('la comilla y los saltos de línea no pueden ser delimitador');
+    }
+    this.delimiter = delimiter;
     this.maxFieldBytes = maxFieldBytes;
     this.maxColumns = maxColumns;
     this.field = '';
@@ -68,7 +82,7 @@ export class CsvParser {
       if (this.afterQuote) {
         this.afterQuote = false;
         if (ch === QUOTE) { this.#appendChar(QUOTE); this.inQuotes = true; continue; }
-        if (ch === ',') { this.#endField(); continue; }
+        if (ch === this.delimiter) { this.#endField(); continue; }
         if (ch === '\n') { rows.push(this.#endRow()); continue; }
         if (ch === '\r') { this.pendingCr = true; continue; }
         throw new CsvFormatError(
@@ -87,7 +101,7 @@ export class CsvParser {
         this.inQuotes = true;
         continue;
       }
-      if (ch === ',') { this.#endField(); continue; }
+      if (ch === this.delimiter) { this.#endField(); continue; }
       if (ch === '\n') { rows.push(this.#endRow()); continue; }
       if (ch === '\r') { this.pendingCr = true; continue; }
       this.#appendChar(ch);

@@ -6,6 +6,11 @@
  *   node scripts/routine-daily.js --write      # escribe (exige
  *                                              #  TWENTY_WRITE_ENABLED=true)
  *   node scripts/routine-daily.js --only sdcounty_food_facility_permits
+ *   node scripts/routine-daily.js --skip-phase3   # solo County/City
+ *
+ * Al final, y siempre en plan, los scouts de la fase 3 en secuencia y la capa
+ * central. `--write` NO los alcanza: el apply de la fase 3 tiene sus propios
+ * cerrojos y se lanza a mano.
  *
  * Qué hace por cada fuente, en este orden y sin saltarse nada:
  *
@@ -28,6 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../src/config.js';
 import { SOURCES, sourceStatus } from '../src/prospecting/sources/index.js';
+import { SCOUT_IDS, checkScoutAllowed } from '../src/prospecting/scouts/registry.js';
 import { snapshotDir } from '../src/prospecting/sources/snapshot.js';
 
 const rest = process.argv.slice(2);
@@ -130,6 +136,47 @@ if (escribir) enrichArgs.push('--apply', '--confirm');
 const en = spawnSync(process.execPath, enrichArgs, { encoding: 'utf8', env: process.env, maxBuffer: 32 * 1024 * 1024 });
 process.stdout.write(`${en.stdout || ''}${en.stderr || ''}`);
 if ((en.status ?? 1) !== 0) alertas.push(`[ERROR] enriquecimiento: código ${en.status}`);
+
+// ── Fase 3 · los scouts, en secuencia y sin escribir ─────────
+//
+// Van DESPUÉS de County/City y del enriquecimiento, y nunca escriben desde aquí:
+// `--write` cubre las dos fuentes de la fase anterior, no esta. El apply central
+// de la fase 3 exige sus propios cuatro cerrojos y se lanza a mano, con el hash
+// del staging que se revisó delante.
+if (!rest.includes('--skip-phase3')) {
+  const permitidos = SCOUT_IDS.filter((id) => checkScoutAllowed(id).allowed);
+  banner('FASE 3 · SCOUTS (preview y plan, sin escribir)');
+
+  for (const id of SCOUT_IDS) {
+    const c = checkScoutAllowed(id);
+    if (!c.allowed) {
+      // Una fuente apagada o bloqueada por el publicador NO es una alerta: es la
+      // puerta haciendo su trabajo. Se dice y se sigue con la siguiente.
+      console.log(`  ${id.padEnd(20)} omitida · ${c.reason}`);
+      resumen.push({ key: id, estado: `omitida_${c.reason}` });
+    }
+  }
+
+  if (permitidos.length === 0) {
+    console.log('\n  Ninguna fuente de la fase 3 cruza la puerta hoy: no se consulta nada.');
+  } else {
+    const fase3 = (args) => {
+      const r = spawnSync(process.execPath, [path.join(import.meta.dirname, 'phase3-run.js'), ...args], {
+        encoding: 'utf8', env: process.env, maxBuffer: 32 * 1024 * 1024,
+      });
+      process.stdout.write(`${r.stdout || ''}${r.stderr || ''}`);
+      return r.status ?? 1;
+    };
+    const codigoPreview = fase3(['preview']);
+    if (codigoPreview !== 0) {
+      alertas.push(`[ERROR] fase 3 · preview: código ${codigoPreview}`);
+    } else {
+      const codigoPlan = fase3(['plan']);
+      if (codigoPlan !== 0) alertas.push(`[ERROR] fase 3 · plan central: código ${codigoPlan}`);
+      else resumen.push({ key: 'fase3', estado: 'plan_ok', detalle: `${permitidos.length} scout(s) con permiso` });
+    }
+  }
+}
 
 // ── Resumen ──────────────────────────────────────────────────
 banner('RESUMEN DE LA CORRIDA');

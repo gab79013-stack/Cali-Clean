@@ -31,21 +31,26 @@ import { normalizeForMatch } from '../sources/city-btc-rules.js';
  * Determinista y razonada, no arbitraria. El criterio es **cuánto se puede
  * verificar de la ficha que quedaría**:
  *
- *   1. `hcai_facilities` — instalación con número de licencia, estado Open
- *      explícito y dirección de la instalación. Es la más verificable de las tres.
+ *   1. `cde_schools` — centro educativo con identificador oficial (CDSCode),
+ *      estado activo, dirección del centro y, cuando la fuente lo publica, su
+ *      sitio oficial. Es la ficha más completa de las tres, y la única que trae
+ *      un sitio web que no hay que adivinar.
  *   2. `hud_multifamily` — propiedad institucional con dirección y número de
- *      unidades. Verificable y situable, sin número de licencia.
+ *      unidades. Verificable y situable, sin sitio web.
  *   3. `cslb_contractors` — licencia de contratista. **No conserva dirección a
  *      propósito**, así que una ficha que venga solo de aquí no se puede situar.
  *      Pierde contra cualquiera que sí pueda.
  *
  * Y por encima de las tres, lo que ya está en el CRM: una Company existente
  * nunca se modifica desde aquí. El candidato se omite.
+ *
+ * `hcai_facilities` estuvo aquí y se retiró: su publicador prohíbe por robots las
+ * rutas que necesitaba. Ver docs/retired/.
  */
-export const SOURCE_PRIORITY = Object.freeze(['hcai_facilities', 'hud_multifamily', 'cslb_contractors']);
+export const SOURCE_PRIORITY = Object.freeze(['cde_schools', 'hud_multifamily', 'cslb_contractors']);
 
 export const PRIORITY_RATIONALE = Object.freeze({
-  hcai_facilities: 'licencia + estado Open + dirección de la instalación: la más verificable',
+  cde_schools: 'identificador oficial, dirección del centro y sitio web publicado por la fuente: la más completa',
   hud_multifamily: 'propiedad institucional con dirección y número de unidades: situable',
   cslb_contractors: 'licencia de contratista sin dirección: no se puede situar, así que pierde',
 });

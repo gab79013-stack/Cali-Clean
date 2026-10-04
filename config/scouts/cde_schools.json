@@ -1,0 +1,133 @@
+{
+  "$comment": "Manifiesto del scout de centros educativos. TODO lo que describe la fuente esta DECLARADO, no verificado: www.cde.ca.gov no esta permitido en la politica de red de este entorno (403 del proxy, comprobado el 2026-10-04), asi que no se ha podido leer su robots.txt, sus terminos, su licencia ni su esquema. Por eso la fuente queda fail-closed, y lo seguira estando hasta que esas cuatro cosas se comprueben.",
+  "version": 1,
+  "scoutId": "cde_schools",
+  "displayName": "CaliClean Education & Childcare Facility Scout",
+  "label": "Centros educativos activos · California Department of Education",
+  "state": "UNVERIFIED_DISABLED",
+  "eligible": false,
+  "eligibleReason": "No se afirma elegibilidad sin haber leido la licencia y los terminos de la fuente. Hoy no se han podido leer: el host no esta permitido. 'Probablemente sea dominio publico' no es una base para prospectar.",
+  "enabled": false,
+  "implemented": true,
+  "accessType": "tsv-static",
+  "egressHost": "www.cde.ca.gov",
+  "dedupNamespace": "cde",
+  "serviceArea": "San Diego County, CA",
+  "replaces": "hcai_facilities",
+  "replacesReason": "Sustituye a HCAI, retirada porque el robots.txt de data.chhs.ca.gov prohibe /api/ y /datastore/*. Esta fuente NO reutiliza ni su host ni su codigo.",
+  "portalPage": "https://www.cde.ca.gov/schooldirectory/",
+  "downloadUrl": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
+  "downloadNote": "Volcado publico del directorio de escuelas (pubschls), delimitado por TABULADORES. Es la via de descarga masiva que el propio directorio publica; no se raspea el buscador ni ninguna pagina HTML.",
+  "verification": {
+    "hostAllowed": false,
+    "checkedAt": "2026-10-04T15:40:00.000Z",
+    "observed": "CONNECT tunnel failed, response 403 — la politica de red del entorno no permite este host",
+    "licenseVerified": false,
+    "termsVerified": false,
+    "robotsVerified": false,
+    "schemaVerified": false,
+    "note": "Las cuatro comprobaciones estan pendientes y las cuatro son condicion para encender la fuente. El robots de www.cde.ca.gov NO se ha leido, asi que no se afirma ni que permita ni que prohiba: se desconoce, y desconocer no es permiso."
+  },
+  "license": {
+    "status": "NO_VERIFICADA",
+    "expectedTermsUrl": "https://www.cde.ca.gov/re/di/ws/",
+    "note": "La auditoria no ha podido leer los terminos de uso del CDE. No se asume dominio publico: la informacion estatal de California lo es 'salvo indicacion contraria', y la indicacion contraria es justo lo que hay que ir a leer."
+  },
+  "robots": {
+    "status": "NO_LEIDO",
+    "url": "https://www.cde.ca.gov/robots.txt",
+    "disallowsOurPath": null,
+    "interpretation": "No se ha podido leer. Un robots que no se ha leido NO se interpreta como permiso, igual que un 404 no lo es. Mientras siga sin leerse, la puerta mantiene la fuente cerrada.",
+    "htmlCrawlingAllowed": false,
+    "allowedResources": []
+  },
+  "limits": {
+    "maxAcceptedPerRun": 50,
+    "maxSuccessfulRunsPer24h": 1,
+    "requestsPerRun": 1,
+    "maxBytes": 134217728,
+    "timeoutMs": 180000,
+    "delimiter": "\t",
+    "conditionalGet": [
+      "If-None-Match",
+      "If-Modified-Since"
+    ],
+    "retry": {
+      "maxAttempts": 4,
+      "baseMs": 1000,
+      "capMs": 30000,
+      "jitter": "full",
+      "respectRetryAfter": true
+    }
+  },
+  "filters": {
+    "county": "San Diego",
+    "statusType": "Active",
+    "excludeVirtual": true,
+    "excludeVirtualReason": "Una escuela virtual no tiene instalaciones que limpiar. Se descarta por relevancia, no por privacidad.",
+    "requireSchoolRecord": true,
+    "requireSchoolRecordReason": "El directorio incluye filas de distrito y de oficina de condado, sin centro fisico. Una Company tiene que ser un CENTRO, asi que se exige un nombre de escuela real y se descartan los marcadores del volcado ('No Data', 'No School', vacio).",
+    "excludeFamilyChildCareHomes": true,
+    "excludeFamilyChildCareHomesReason": "Si algun dia se anade una fuente de cuidado infantil, los Family Child Care Homes son DOMICILIOS: quedan fuera por definicion, igual que cualquier tipo ambiguo. Este scout solo acepta centros institucionales.",
+    "requireBusinessAddress": true,
+    "institutionalOnly": true
+  },
+  "fields": {
+    "allowed": [
+      "CDSCode",
+      "StatusType",
+      "County",
+      "District",
+      "School",
+      "Street",
+      "City",
+      "State",
+      "Zip",
+      "Website",
+      "OpenDate",
+      "DOC",
+      "DOCType",
+      "SOC",
+      "SOCType",
+      "EILName",
+      "Charter",
+      "Virtual",
+      "GSoffered",
+      "LastUpDate"
+    ],
+    "allowedVerifiedAgainstSchema": false,
+    "allowedNote": "DECLARADOS, no verificados contra el esquema real: el volcado no se ha podido descargar. Al habilitar la fuente hay que contrastar la cabecera y fallar cerrado si no coincide.",
+    "neverRequested": [
+      "Phone",
+      "Ext",
+      "FaxNumber",
+      "Email",
+      "AdmFName1",
+      "AdmLName1",
+      "AdmEmail1",
+      "AdmFName2",
+      "AdmLName2",
+      "AdmEmail2",
+      "AdmFName3",
+      "AdmLName3",
+      "AdmEmail3",
+      "Latitude",
+      "Longitude",
+      "MailStreet",
+      "MailStrAbr",
+      "MailCity",
+      "MailState",
+      "MailZip"
+    ],
+    "neverRequestedReason": "El volcado del directorio trae el nombre, el apellido y el CORREO de hasta tres administradores, mas telefono, fax y coordenadas. Nada de eso se conserva: ni en el candidato, ni en el staging, ni en un log, ni en el texto de un error. La lista de permitidos es cerrada, asi que una columna nueva se cae sin esperar a que alguien la prohiba.",
+    "websiteNote": "`Website` SI se conserva: es el sitio oficial del centro tal como lo publica la fuente. No se adivina, no se construye y no se visita."
+  },
+  "blockers": [
+    "Egress pendiente: www.cde.ca.gov no esta permitido en la politica de red (403 del proxy).",
+    "Licencia sin verificar: no se han podido leer los terminos de uso del CDE.",
+    "robots.txt sin leer: no se interpreta como permiso.",
+    "Esquema sin verificar: la cabecera del volcado no se ha contrastado.",
+    "Decision operativa pendiente: no hay preview real que revisar."
+  ],
+  "decision": "DESHABILITADA y fail-closed. El codigo, las reglas y las pruebas estan listos, pero las cuatro comprobaciones que justifican usar una fuente ajena —licencia, terminos, robots y esquema— no se han podido hacer porque el host no esta permitido. Se deja preparada: cuando el host se autorice, hay que verificar las cuatro, completar la attestation y poner enabled=true."
+}

@@ -21,11 +21,10 @@ import {
   emptyScoutMetrics, countRejection, allowedFields,
 } from './registry.js';
 import { writeStaging, newRunId } from './staging.js';
-import { evaluateCslbRow, evaluateHudRow, evaluateHcaiRow, crossKey, nameKey } from './rules.js';
+import { evaluateCslbRow, evaluateHudRow, evaluateCdeRow, crossKey, nameKey } from './rules.js';
 import { downloadMasterCsv } from './webforms-client.js';
 import { queryArcgis } from './arcgis-client.js';
-import { queryDatastore } from './ckan-client.js';
-import { streamCsvObjects } from '../sources/csv-client.js';
+import { fetchCsvToTemp, streamCsvObjects } from '../sources/csv-client.js';
 
 /** Recorta una fila a la allowlist cerrada del scout. */
 export function trimToAllowed(scoutId, row) {
@@ -62,6 +61,7 @@ async function runCslb(scoutId, m, metrics, opts) {
   const descarga = await downloadMasterCsv({
     portalUrl: opts.portalUrlOverride || m.portalPage,
     control: m.download.control,
+    datasetField: m.download.datasetField,
     datasetChoice: m.download.datasetChoice,
     expectedAttachment: m.download.expectedAttachment,
     fetchImpl: opts.fetchImpl,
@@ -204,92 +204,102 @@ async function runHud(scoutId, m, metrics, opts) {
   };
 }
 
-// ── 3. CaliClean Commercial Facility Scout · HCAI ────────────
-async function runHcai(scoutId, m, metrics, opts) {
-  const fields = allowedFields(scoutId);
-  const { rows, metrics: q, fields: devueltos } = await queryDatastore({
-    sqlEndpoint: opts.sqlEndpointOverride || m.catalog.sqlEndpoint,
-    resourceId: m.catalog.resourceId,
-    expectedResourceId: m.catalog.resourceId,
-    fields,
-    filters: { COUNTY_NAME: m.filters.county, FACILITY_STATUS_DESC: m.filters.facilityStatus },
-    orderBy: m.limits.stableOrder,
-    pageSize: m.limits.pageSize,
-    maxPages: m.limits.maxPages,
-    timeoutMs: m.limits.timeoutMs,
+// ── 3. CaliClean Education & Childcare Facility Scout · CDE ──
+async function runCde(scoutId, m, metrics, opts) {
+  // El volcado del directorio es un archivo estático delimitado por tabuladores.
+  // Se descarga una vez, se hashea entero y se borra: trae nombre, apellido y
+  // CORREO de hasta tres administradores por centro, y eso no se queda en disco.
+  const url = opts.downloadUrlOverride || m.downloadUrl;
+  const permitidas = m.robots?.allowedResources || [];
+  if (!opts.downloadUrlOverride && !permitidas.includes(url)) {
+    throw new Error(
+      `La URL "${url}" no está en los recursos permitidos de la auditoría de ${scoutId}. `
+      + 'Mientras el robots y los términos no se hayan leído, esa lista está vacía a propósito.',
+    );
+  }
+
+  metrics.requests = 1;
+  const descarga = await fetchCsvToTemp(url, {
     fetchImpl: opts.fetchImpl,
-    sleep: opts.sleep,
-    clock: opts.clock,
-    random: opts.random,
+    etag: opts.etag,
+    lastModified: opts.lastModified,
     userAgent: opts.userAgent,
+    maxBytes: m.limits.maxBytes,
+    timeoutMs: m.limits.timeoutMs,
   });
-  metrics.requests += q.requests;
-  metrics.bytes += q.bytes;
-  metrics.retries += q.retries;
-  metrics.http429 += q.http429;
-
-  // Si el DataStore devuelve un esquema que no contiene lo que pedimos, el
-  // recurso ha cambiado por debajo y la allowlist dejó de significar lo mismo.
-  if (Array.isArray(devueltos) && devueltos.length) {
-    const faltan = fields.filter((f) => !devueltos.includes(f));
-    if (faltan.length) {
-      throw new Error(
-        `el DataStore no devolvió los campos ${faltan.join(', ')}: el esquema cambió y no se continúa`,
-      );
+  try {
+    if (descarga.notModified) {
+      return { rows: 0, consumed: false, aceptados: [], notModified: true, provenance: {} };
     }
-  }
+    metrics.bytes += descarga.bytes;
 
-  const aceptados = [];
-  const vistos = new Set();
-  for (const row of rows) {
-    metrics.fetched++;
-    const v = evaluateHcaiRow(row, m);
-    if (!v.ok) { countRejection(metrics, v.kind); continue; }
+    const aceptados = [];
+    const vistos = new Set();
+    for await (const parsed of streamCsvObjects(descarga.file, { delimiter: m.limits.delimiter || '\t' })) {
+      metrics.fetched++;
+      if (!parsed.ok) { metrics.rejected_malformed++; continue; }
 
-    const dedupKey = `${m.dedupNamespace}:${v.oshpdId}`;
-    if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
-    vistos.add(dedupKey);
+      const v = evaluateCdeRow(parsed.row, m);
+      if (!v.ok) { countRejection(metrics, v.kind); continue; }
 
-    const { row: safe } = trimToAllowed(scoutId, row);
-    assertOnlyAllowed(scoutId, safe, 'fila recortada');
+      const dedupKey = `${m.dedupNamespace}:${v.cdsCode}`;
+      if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
+      vistos.add(dedupKey);
 
-    aceptados.push({
-      dedupKey,
-      sourceId: v.oshpdId,
-      businessName: v.businessName,
-      address: v.address,
-      city: v.city,
-      zip: v.zip,
-      serviceArea: m.serviceArea,
-      sourceUrl: `https://data.chhs.ca.gov/dataset/${m.catalog.packageId}`,
-      evidence: {
-        oshpdId: v.oshpdId,
-        licenseNum: v.licenseNum,
-        facilityLevel: v.facilityLevel,
-        licenseType: v.licenseType,
-        licenseCategory: v.licenseCategory,
+      // Recorte a la allowlist declarada y comprobación de que no quedó nada.
+      const { row: safe } = trimToAllowed(scoutId, parsed.row);
+      assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+      aceptados.push({
+        dedupKey,
+        sourceId: v.cdsCode,
+        businessName: v.businessName,
+        address: v.address,
+        city: v.city,
+        zip: v.zip,
+        serviceArea: m.serviceArea,
+        sourceUrl: m.portalPage,
+        evidence: {
+          cdsCode: v.cdsCode,
+          district: v.district,
+          schoolType: v.socType,
+          districtType: v.docType,
+          level: v.eilName,
+          charter: v.charter,
+          gradesOffered: v.gradesOffered,
+          openDate: v.openDate,
+          // Sitio oficial tal como lo publica la fuente. No se visita.
+          website: v.website,
+        },
+        matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
+      });
+      metrics.accepted++;
+      if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
+    }
+
+    return {
+      rows: aceptados.length,
+      consumed: true,
+      aceptados,
+      provenance: {
+        portalPage: m.portalPage,
+        downloadUrl: m.downloadUrl,
+        license: m.license,
+        fileSha256: descarga.sha256,
+        fileBytes: descarga.bytes,
+        delimiter: 'tab',
       },
-      matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
-    });
-    metrics.accepted++;
-    if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
+    };
+  } finally {
+    // Siempre: el volcado trae correos de administradores.
+    descarga.dispose();
   }
-  return {
-    aceptados,
-    provenance: {
-      packageId: m.catalog.packageId,
-      resourceId: m.catalog.resourceId,
-      sqlEndpoint: m.catalog.sqlEndpoint,
-      license: m.license,
-      attribution: m.license?.attributionRequired === true,
-    },
-  };
 }
 
 const EJECUTORES = {
   cslb_contractors: runCslb,
   hud_multifamily: runHud,
-  hcai_facilities: runHcai,
+  cde_schools: runCde,
 };
 
 /**
@@ -313,7 +323,9 @@ export async function runScout(scoutId, {
   // Solo para pruebas: apuntar un cliente a un servidor simulado.
   portalUrlOverride = null,
   queryUrlOverride = null,
-  sqlEndpointOverride = null,
+  downloadUrlOverride = null,
+  etag = null,
+  lastModified = null,
 } = {}) {
   const started = Date.now();
   const metrics = emptyScoutMetrics();
@@ -342,9 +354,10 @@ export async function runScout(scoutId, {
   const ejecutor = EJECUTORES[scoutId];
   const outcome = await withQuota(scoutId, async () => {
     const r = await ejecutor(scoutId, m, metrics, {
-      fetchImpl, sleep, clock, random, userAgent, cities, zips,
-      portalUrlOverride, queryUrlOverride, sqlEndpointOverride,
+      fetchImpl, sleep, clock, random, userAgent, cities, zips, etag, lastModified,
+      portalUrlOverride, queryUrlOverride, downloadUrlOverride,
     });
+    if (r.notModified) return { rows: 0, consumed: false, ...r };
     return { rows: r.aceptados.length, consumed: true, ...r };
   }, { maxRows: m.limits.maxAcceptedPerRun, ...quotaOptions });
 
@@ -353,6 +366,15 @@ export async function runScout(scoutId, {
   if (outcome.blocked) {
     metrics.quota_blocked = 1;
     return { staging: null, metrics, blocked: { reason: outcome.reason, detail: outcome.detail } };
+  }
+
+  if (outcome.result?.notModified) {
+    // El publicador dice que el archivo no ha cambiado: no hay staging nuevo y
+    // no se gasta la ventana del día.
+    return {
+      staging: null, metrics, notModified: true,
+      blocked: { reason: 'sin_cambios_304', detail: 'el volcado no ha cambiado desde la última corrida.' },
+    };
   }
 
   const staging = writeStaging({

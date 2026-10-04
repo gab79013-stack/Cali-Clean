@@ -2,7 +2,7 @@
  * Orquestador de la fase 3: los tres scouts, en secuencia, y la capa central.
  *
  *   node scripts/phase3-run.js preview                  # los tres, sin escribir
- *   node scripts/phase3-run.js preview --only hcai_facilities
+ *   node scripts/phase3-run.js preview --only cde_schools
  *   node scripts/phase3-run.js plan                     # capa central sobre los staging
  *   node scripts/phase3-run.js apply --confirm \
  *        --expect-hashes <id>=<hash>,... --allow-writes  # exige todo a la vez
@@ -32,6 +32,11 @@ import {
   validateStaging, reconcile, refusalsFor, prioritizedScoutIds, PRIORITY_RATIONALE,
 } from '../src/prospecting/scouts/intake.js';
 import { withPhaseLock } from '../src/prospecting/scouts/lock.js';
+// El CRM se toca SOLO desde aquí, el orquestador. Ni los scouts ni la capa
+// central importan el adaptador: a la capa central el índice le llega como
+// parámetro, y hay una prueba que lo comprueba recorriendo los archivos.
+import { createClient, loadCrmIndex, upsertCompany } from '../src/services/crm/twenty.js';
+import { normalizeForMatch } from '../src/prospecting/sources/city-btc-rules.js';
 
 const [command, ...rest] = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -44,6 +49,65 @@ const soloUno = flag('only', null);
 const esperados = String(flag('expect-hashes', '') || '');
 
 const banner = (t) => console.log(`\n${'═'.repeat(72)}\n${t}\n${'═'.repeat(72)}`);
+
+/** Cliente del CRM con contador de métodos. El informe cita el contador. */
+function countingClient() {
+  const counts = {
+    GET: 0, POST: 0, PATCH: 0, PUT: 0, DELETE: 0, otros: 0,
+  };
+  const client = createClient({
+    baseUrl: config.twenty.baseUrl,
+    fetchImpl: async (url, opts = {}) => {
+      const m = String(opts.method || 'GET').toUpperCase();
+      if (counts[m] === undefined) counts.otros++; else counts[m]++;
+      // Ninguna ruta de esta fase toca otra colección que companies. Si alguna
+      // lo intentara, se para aquí en lugar de descubrirlo en los datos.
+      const ruta = new URL(url).pathname;
+      if (!/^\/rest\/companies(\/|$)/.test(ruta)) {
+        throw new Error(`Esta fase solo habla con /rest/companies, y se intentó ${m} ${ruta}`);
+      }
+      return fetch(url, opts);
+    },
+  });
+  const writes = () => counts.POST + counts.PATCH + counts.PUT + counts.DELETE + counts.otros;
+  return { client, counts, writes };
+}
+
+/**
+ * Índice del CRM, cargado UNA vez.
+ *
+ * Incluye claves, nombre+dirección y nombre a secas, porque una fuente sin
+ * dirección (CSLB) solo puede compararse por nombre, y sin esa tercera clave
+ * duplicaría cada entidad que otra fuente ya hubiera traído.
+ */
+async function cargarIndice(client) {
+  const base = await loadCrmIndex(client, { normalize: normalizeForMatch });
+  const nameKeys = new Set();
+  // `loadCrmIndex` ya normaliza nombre+dirección; de ahí se extrae el nombre.
+  for (const cross of base.crossKeys) nameKeys.add(String(cross).split('|')[0]);
+  return { ...base, nameKeys };
+}
+
+/** Un candidato de staging, en la forma que el adaptador del CRM espera. */
+function prospectoDesdeCandidato(candidate, verifiedAt) {
+  return {
+    dedupKey: candidate.dedupKey,
+    businessName: candidate.businessName,
+    sourceUrl: candidate.sourceUrl,
+    serviceArea: candidate.serviceArea,
+    address: candidate.address || undefined,
+    city: candidate.city || undefined,
+    zip: candidate.zip || undefined,
+    state: candidate.address ? 'CA' : undefined,
+    country: candidate.address ? 'US' : undefined,
+    stage: 'discovered',
+    // Registro público oficial → BUSINESS_DIRECTORY, que ya existe en el enum.
+    channel: 'public_record',
+    // La marca del staging, no la hora de ahora: es cuando se comprobó el dato
+    // contra la fuente, y es lo que hace la operación idempotente.
+    lastVerified: verifiedAt,
+  };
+}
 const title = (t) => console.log(`\n${t}\n${'─'.repeat(t.length)}`);
 const die = (msg, code = 1) => { console.error(`\n✗ ${msg}`); process.exit(code); };
 
@@ -198,15 +262,17 @@ async function plan() {
   }
   if (!Object.keys(stagings).length) die('ningún staging válido: no se planifica nada.', 3);
 
-  // El índice del CRM lo carga la capa central, una sola vez. En esta fase no se
-  // lee el CRM, así que se trabaja con un índice vacío y se dice en voz alta: el
-  // plan que sale es "qué se crearía si el CRM estuviera vacío", no un plan
-  // aplicable.
+  // El índice del CRM, una sola lectura. Si queda incompleto no se continúa: con
+  // un índice a medias se crearían duplicados.
   title('Índice del CRM');
-  console.log('  NO se lee el CRM en esta fase (orden explícita). Se usa un índice vacío,');
-  console.log('  así que el plan de abajo es hipotético: dice qué se crearía si el CRM');
-  console.log('  no tuviera nada. Antes de aplicar hay que cargar el índice de verdad.');
-  const crmIndex = { dedupKeys: new Set(), crossKeys: new Set(), nameKeys: new Set(), complete: true };
+  if (!config.twenty.baseUrl) die('TWENTY_BASE_URL no está configurada: sin índice no se planifica.');
+  const { client, counts } = countingClient();
+  const crmIndex = await cargarIndice(client);
+  console.log(`  empresas indexadas: ${crmIndex.total} en ${crmIndex.pages} página(s)`);
+  console.log(`  claves: ${crmIndex.dedupKeys.size} · nombre+dirección: ${crmIndex.crossKeys.size}`
+    + ` · nombre: ${crmIndex.nameKeys.size}`);
+  if (!crmIndex.complete) die('el índice del CRM quedó incompleto: no se planifica con uno a medias.');
+  console.log(`  peticiones al CRM: ${JSON.stringify(counts)}`);
 
   const resultado = reconcile({ stagings, crmIndex });
 
@@ -264,19 +330,133 @@ async function apply() {
   if (config.twenty.dryRunDefault) faltan.push('TWENTY_WRITE_ENABLED=true');
   if (faltan.length) die(`faltan: ${faltan.join(', ')}`);
 
-  console.log('Todos los cerrojos están puestos, y aun así no se escribe.');
-  console.log('');
-  console.log('Esta fase es de implementación: los tres scouts están deshabilitados, su');
-  console.log('evidencia está marcada como pendiente porque no hay egress a sus hosts, y');
-  console.log('ninguna preview real se ha revisado. Escribir ahora sería crear Companies');
-  console.log('a partir de datos que nadie ha visto llegar de la fuente oficial.');
-  console.log('');
-  console.log('Lo que falta, en orden:');
-  console.log(`  1. permitir egress a: ${requiredEgressHosts().join(', ')}`);
-  console.log('  2. completar la evidencia de cada scout (hoy: evidencePending)');
-  console.log('  3. poner enabled=true en el manifiesto del scout concreto');
-  console.log('  4. una preview real revisada');
-  die('apply no disponible en la fase de implementación.', 4);
+  // Los hashes autorizados, uno por scout: `<scoutId>=<sha256:...>`. Sin esto se
+  // aplicaría "el último staging que haya", que no es lo mismo que el que una
+  // persona revisó.
+  const autorizados = new Map(
+    String(esperados).split(',').map((par) => par.trim()).filter(Boolean)
+      .map((par) => { const i = par.indexOf('='); return [par.slice(0, i), par.slice(i + 1)]; }),
+  );
+  if (!autorizados.size) die('--expect-hashes no trae ningún par <scoutId>=<hash>.');
+
+  // Cerrojo de integración: mientras un scout del catálogo no tenga su preview
+  // revisada, el apply central no corre. Se añadió al sustituir HCAI por
+  // cde_schools: aplicar con una fuente del catálogo sin previsualizar sería
+  // escribir con el reemplazo a medio integrar.
+  const sinPreview = scoutStatus()
+    .filter((s2) => s2.enabled === true && !latestStagingPerScout({ scoutIds: [s2.scoutId] })[s2.scoutId])
+    .map((s2) => s2.scoutId);
+  if (sinPreview.length) {
+    die(`estas fuentes están habilitadas y no tienen preview: ${sinPreview.join(', ')}. `
+      + 'El apply central espera a que todo el catálogo habilitado se haya previsualizado.');
+  }
+
+  const archivos = latestStagingPerScout({ scoutIds: SCOUT_IDS });
+  title('Staging autorizados');
+  const stagings = {};
+  const invalidos = [];
+  for (const [scoutId, hash] of autorizados) {
+    if (!SCOUT_IDS.includes(scoutId)) die(`"${scoutId}" no es un scout conocido.`);
+    const file = archivos[scoutId];
+    if (!file) die(`no hay staging de ${scoutId}.`);
+
+    const v = validateStaging(scoutId, file);
+    if (!v.ok) {
+      invalidos.push(scoutId);
+      console.error(`  ${scoutId}: ✗ NO válida`);
+      for (const p of v.problems) console.error(`      · ${p}`);
+      continue;
+    }
+    if (v.doc.sha256 !== hash) {
+      console.error(`  ${scoutId}: el hash no es el autorizado`);
+      console.error(`      autorizado: ${hash}`);
+      console.error(`      del archivo: ${v.doc.sha256}`);
+      die('se aplica el staging que se revisó, no otro.');
+    }
+    const estado = scoutStatus().find((x) => x.scoutId === scoutId);
+    if (!estado?.allowed) die(`${scoutId} no está permitida (${estado?.reason}): no se aplica su staging.`);
+
+    stagings[scoutId] = v.doc;
+    console.log(`  ${scoutId}: ✓ válida · ${v.doc.candidateCount} candidatos · runId ${v.doc.runId}`);
+    console.log(`      ${v.doc.sha256}`);
+  }
+  if (invalidos.length) die(`staging no válidos: ${invalidos.join(', ')}`);
+  if (!Object.keys(stagings).length) die('ningún staging autorizado y válido.', 3);
+
+  const { client, counts, writes } = countingClient();
+  title('Índice del CRM');
+  const crmIndex = await cargarIndice(client);
+  console.log(`  empresas indexadas: ${crmIndex.total} en ${crmIndex.pages} página(s)`);
+  if (!crmIndex.complete) die('el índice del CRM quedó incompleto: no se escribe con uno a medias.');
+
+  const plan = reconcile({ stagings, crmIndex });
+  title('Plan');
+  for (const [id, t] of Object.entries(plan.bySource)) {
+    if (!stagings[id]) continue;
+    console.log(`  ${id.padEnd(18)} crear ${t.create} · omitidos por existir ${t.omitted_existing}`
+      + ` · por otra fuente ${t.omitted_cross_source}`);
+  }
+  console.log(`  TOTAL: crear ${plan.totals.create} · actualizar 0 · borrar 0`);
+
+  const rechazos = refusalsFor({
+    config,
+    objects: ['companies'],
+    operations: ['create'],
+    perSource: Object.fromEntries(Object.entries(plan.bySource).map(([k, v]) => [k, v.create])),
+    disabledSources: Object.keys(stagings).filter(
+      (id) => !scoutStatus().find((x) => x.scoutId === id)?.allowed,
+    ),
+    staleSources: [],
+    invalidStagings: invalidos,
+  });
+  if (rechazos.length) {
+    for (const r of rechazos) console.error(`  ✗ ${r.code}: ${r.why}`);
+    die('la capa central rechaza este plan.');
+  }
+
+  // ── Escritura: solo Companies, solo create, tope por fuente ──
+  title('Creando Companies');
+  const hechas = { create: 0, update: 0, noop: 0 };
+  const errores = [];
+  const porFuente = {};
+  for (const { scoutId, candidate } of plan.create) {
+    porFuente[scoutId] = (porFuente[scoutId] || 0) + 1;
+    if (porFuente[scoutId] > maxCreates) {
+      errores.push({ name: candidate.businessName, error: `tope de ${maxCreates} por fuente alcanzado` });
+      break;
+    }
+    try {
+      const res = await upsertCompany(
+        client,
+        prospectoDesdeCandidato(candidate, stagings[scoutId].createdAt),
+        { dryRun: false },
+      );
+      hechas[res.action] = (hechas[res.action] || 0) + 1;
+      if (res.action !== 'create') {
+        // Un update aquí sería modificar algo que ya existía, y esta fase no lo
+        // hace: se para en lugar de seguir.
+        errores.push({ name: res.name, error: `el upsert resolvió "${res.action}" y solo se permite create` });
+        break;
+      }
+      console.log(`  + ${res.name}  ${res.id || res.record?.id || ''}`);
+    } catch (err) {
+      errores.push({ name: candidate.businessName, error: err.message });
+      console.error(`  ! ERROR ${candidate.businessName}: ${err.message}`);
+      break;
+    }
+  }
+
+  title('Resultado');
+  console.log(`  creadas: ${hechas.create} · actualizadas: ${hechas.update} · sin cambios: ${hechas.noop}`);
+  console.log(`  errores: ${errores.length}`);
+  console.log(`  crm_writes: ${writes()} · peticiones: ${JSON.stringify(counts)}`);
+  console.log(`  outbound: 0 · OUTBOUND_ENABLED: ${config.outbound.enabled}`);
+  if (counts.PATCH || counts.DELETE || counts.PUT) die('hubo un método de mutación que esta fase prohíbe.');
+  if (errores.length) {
+    for (const e of errores) console.error(`    · ${e.name}: ${e.error}`);
+    die(`carga incompleta: ${hechas.create} creadas antes de parar. No se reintenta.`);
+  }
+  console.log(`\n✓ ${hechas.create} Companies creadas. Ni personas, ni oportunidades, ni notas, ni un mensaje.`);
 }
 
 const commands = { preview, plan, apply };

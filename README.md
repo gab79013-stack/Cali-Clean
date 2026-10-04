@@ -158,10 +158,12 @@ ningún sitio; el CSV descargado se borra al terminar.
     npm run phase3:plan                   # capa central: valida, deduplica, planifica
 
 La **fase 3** añade tres scouts más —licencias de contratista de CSLB, propiedades
-multifamiliares de HUD e instalaciones sanitarias de HCAI— y una capa central que
-valida sus staging, deduplica contra lo que ya hay y planifica. Los tres están
-**deshabilitados y fail-closed**: no hay egress a sus hosts y su evidencia está
-marcada como pendiente. Detalle en
+multifamiliares de HUD y centros educativos del CDE— y una capa central que valida
+sus staging, deduplica contra lo que ya hay y planifica Companies. De las tres,
+**solo HUD cruzó la puerta**: CSLB queda bloqueada por el WAF de su propio portal
+y CDE sin verificar porque su host no está permitido, así que no se puede leer ni
+su licencia ni su robots. Ningún scout habla con el CRM: el único que escribe es
+el orquestador, y solo crea Companies. Detalle en
 [`docs/phase3-scouts.md`](docs/phase3-scouts.md).
     npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot
 

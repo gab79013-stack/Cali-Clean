@@ -192,8 +192,9 @@ export async function fetchCsvToTemp(url, {
  */
 export async function* streamCsvObjects(file, {
   chunkBytes = CSV_DEFAULTS.readChunkBytes,
+  delimiter = ',',
 } = {}) {
-  const parser = new CsvParser();
+  const parser = new CsvParser({ delimiter });
   const fd = fs.openSync(file, 'r');
   const buf = Buffer.alloc(chunkBytes);
   let header = null;

@@ -4,9 +4,9 @@
   "scoutId": "hud_multifamily",
   "displayName": "CaliClean Property & Manager Scout",
   "label": "Propiedades multifamiliares FHA/assisted · HUD",
-  "state": "ELIGIBLE_BUT_DISABLED",
+  "state": "ENABLED",
   "eligible": true,
-  "enabled": false,
+  "enabled": true,
   "implemented": true,
   "accessType": "arcgis-query",
   "egressHost": "egis.hud.gov",
@@ -21,9 +21,19 @@
     "redistribution": "permitida"
   },
   "robots": {
-    "observed": "404 / sin politica",
-    "interpretation": "Un robots inexistente NO es permiso. Lo que autoriza es que el endpoint sea una API REST publica de HUD Open Data. Solo se pide ese endpoint de consulta.",
-    "htmlCrawlingAllowed": false
+    "observed": "HTTP 404 — sin politica",
+    "observedAt": "2026-10-04T15:25:00.000Z",
+    "url": "https://egis.hud.gov/robots.txt",
+    "bodyIsErrorPage": true,
+    "bodyNote": "El cuerpo del 404 es la pagina de error de IIS, no una politica vacia: no hay robots.",
+    "sha256": "dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f",
+    "disallowsOurPath": false,
+    "interpretation": "Un robots inexistente NO se interpreta como permiso. Lo que autoriza es que el endpoint sea una API REST publica de HUD Open Data, publicada bajo la OPEN Government Data Act, y que la capa declare capabilities 'Map,Query,Data'. El permiso es sobre ese endpoint de consulta, no sobre el dominio.",
+    "htmlCrawlingAllowed": false,
+    "allowedResources": [
+      "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query",
+      "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0"
+    ]
   },
   "limits": {
     "maxAcceptedPerRun": 50,
@@ -38,19 +48,75 @@
       "capMs": 30000,
       "jitter": "full",
       "respectRetryAfter": true
-    }
+    },
+    "serverMaxRecordCount": 1000
   },
   "filters": {
     "minUnits": 5,
     "state": "CA",
-    "countyScope": "ciudades y ZIP del condado de San Diego, validados explicitamente",
     "excludeCategories": [
       "single family",
       "vacant land",
       "land"
     ],
     "requireInstitutionalProperty": true,
-    "entityNote": "La Company representa la PROPIEDAD institucional (PROPERTY_NAME_TEXT), no a una persona. MGMT_AGENT_ORG_NAME solo sobrevive si es una entidad empresarial inequivoca Y existe un campo seguro donde ponerla; si no, se omite sin inventar esquema."
+    "entityNote": "La Company representa la PROPIEDAD institucional (PROPERTY_NAME_TEXT), no a una persona. MGMT_AGENT_ORG_NAME solo sobrevive si es una entidad empresarial inequivoca Y existe un campo seguro donde ponerla; si no, se omite sin inventar esquema.",
+    "cities": [
+      "San Diego",
+      "Chula Vista",
+      "Oceanside",
+      "Escondido",
+      "Carlsbad",
+      "El Cajon",
+      "Vista",
+      "San Marcos",
+      "Encinitas",
+      "National City",
+      "La Mesa",
+      "Santee",
+      "Poway",
+      "Imperial Beach",
+      "Lemon Grove",
+      "Coronado",
+      "Del Mar",
+      "Solana Beach",
+      "Spring Valley",
+      "Lakeside",
+      "Ramona",
+      "Fallbrook",
+      "Alpine",
+      "Bonita",
+      "Jamul",
+      "Valley Center",
+      "Borrego Springs",
+      "Julian",
+      "Rancho Santa Fe",
+      "Bonsall",
+      "Pauma Valley",
+      "Campo",
+      "Descanso",
+      "Pine Valley",
+      "Boulevard",
+      "Dulzura",
+      "Potrero",
+      "Jacumba",
+      "Warner Springs",
+      "Santa Ysabel",
+      "San Ysidro",
+      "Lincoln Acres",
+      "Rancho San Diego"
+    ],
+    "zipRanges": [
+      [
+        91901,
+        91987
+      ],
+      [
+        92003,
+        92199
+      ]
+    ],
+    "scopeNote": "Ambito explicito y versionado, no heredado de una variable de entorno: SERVICE_ZIPS contiene ZIPs de Los Angeles de una fase anterior y usarlo aqui habria aceptado propiedades de otro condado. Las dos listas son del condado de San Diego: las 18 ciudades incorporadas mas las comunidades no incorporadas que aparecen en datos federales, y los dos rangos de ZIP del condado (91901-91987 y 92003-92199). Basta con que coincida la ciudad O el ZIP, para tolerar variantes de escritura del nombre."
   },
   "fields": {
     "allowed": [
@@ -66,19 +132,50 @@
     ],
     "neverRequested": [
       "PROJECT_MANAGER_NAME_TEXT",
+      "PROPERTY_ON_SITE_PHONE_NUMBER",
       "MGMT_CONTACT_FULL_NAME",
-      "PHONE",
-      "EMAIL",
-      "OWNER",
-      "LATITUDE",
-      "LONGITUDE",
+      "MGMT_CONTACT_MAIN_PHN_NBR",
+      "MGMT_CONTACT_EMAIL_TEXT",
       "geometry"
     ],
     "forbiddenReason": "Los campos de contacto y de persona no se piden al servidor: no se filtran despues, es que no se solicitan. returnGeometry=false por el mismo motivo."
   },
-  "blockers": [
-    "Egress pendiente: egis.hud.gov no esta permitido en la red de Cloud.",
-    "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real."
-  ],
-  "decision": "Elegible: activo de HUD Open Data bajo la OPEN Government Data Act, API publica y campos institucionales. DESACTIVADA."
+  "blockers": [],
+  "decision": "HABILITADA el 2026-10-04. Activo de HUD Open Data bajo la OPEN Government Data Act, API REST publica con capabilities Map,Query,Data, robots inexistente (404, que no es permiso pero tampoco prohibicion), y los 9 campos de la allowlist verificados contra el esquema vivo. Sujeta a 50 candidatos por corrida, 1 corrida con exito cada 24 h, returnGeometry=false y los cinco campos de contacto que el esquema tiene y nunca se piden.",
+  "enabledAt": "2026-10-04",
+  "enabledBy": "operador, tras conceder egress y verificar robots, esquema y campos desde esta sesion",
+  "schemaVerification": {
+    "verifiedAt": "2026-10-04T15:25:46.000Z",
+    "metadataUrl": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0?f=json",
+    "httpStatus": 200,
+    "bytes": 5394,
+    "sha256": "14cd4a7f5c50ce61fc066e311dc0f0ea9390cd5de61fedf4aa5522de1dc50869",
+    "layerName": "Multifamily Properties",
+    "geometryType": "esriGeometryPoint",
+    "capabilities": "Map,Query,Data",
+    "maxRecordCount": 1000,
+    "fieldsTotal": 18,
+    "allowlistFieldsAllExist": true,
+    "contactFieldsPresentInSchema": [
+      "PROJECT_MANAGER_NAME_TEXT",
+      "PROPERTY_ON_SITE_PHONE_NUMBER",
+      "MGMT_CONTACT_FULL_NAME",
+      "MGMT_CONTACT_MAIN_PHN_NBR",
+      "MGMT_CONTACT_EMAIL_TEXT"
+    ],
+    "contactFieldsNote": "Esos cinco campos EXISTEN en el esquema y es exactamente por eso que no se piden: el nombre del gestor, su telefono, su correo y el telefono de la propiedad estan ahi y bastaria pedir '*' para traerlos. `outFields` se construye con la allowlist, asi que no llegan.",
+    "coordinateFieldsNote": "No hay campos LATITUDE/LONGITUDE: la ubicacion viaja en la geometria del punto. Lo que protege la ubicacion exacta es returnGeometry=false, no una exclusion de campos."
+  },
+  "resolvedBlockers": [
+    {
+      "blocker": "Egress pendiente: egis.hud.gov no esta permitido en la red de Cloud.",
+      "resolvedBy": "Network=Custom con los tres hosts. Metadata de la capa comprobada: HTTP 200, 5394 bytes.",
+      "testedBy": "schemaVerification de este manifiesto"
+    },
+    {
+      "blocker": "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real.",
+      "resolvedBy": "El operador autorizo la fase 3 completa el 2026-10-04.",
+      "testedBy": "test/scouts.test.js + preview real de esta sesion"
+    }
+  ]
 }

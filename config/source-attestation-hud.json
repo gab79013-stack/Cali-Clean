@@ -2,12 +2,12 @@
   "$comment": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio.",
   "version": 1,
   "kind": "hash-based-attestation",
-  "generatedAt": "2026-10-04T09:00:00.000Z",
-  "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
+  "generatedAt": "2026-10-04T15:30:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T15:25:46.000Z",
   "collectedFrom": {
-    "method": "auditoria manual desde la red local autorizada del operador",
-    "liveVerifiedFromCloud": false,
-    "note": "Evidencia de auditoria de un scout de la fase 3, recogida desde la red local del operador. Claude Cloud NO ha hecho ninguna peticion a este host: no esta permitido en su politica de red. Por eso liveVerifiedFromCloud es false y no se marca la verificacion en vivo como completa: mientras no haya egress, lo que hay es evidencia importada, y el digest solo demuestra que este documento no ha cambiado desde que se escribio."
+    "method": "verificacion en vivo desde Claude Cloud, con Network=Custom y egis.hud.gov autorizado",
+    "liveVerifiedFromCloud": true,
+    "note": "Esta evidencia la obtuvo esta sesion, no esta importada: se pidio el robots.txt del host y la metadata de la capa, y los SHA256 de abajo son de los cuerpos que llegaron. Lo que sigue sin comprobarse es el contenido de los datos antes de la primera corrida, que es para lo que esta la preview."
   },
   "sources": {
     "hud_multifamily": {
@@ -26,7 +26,12 @@
       "robots": {
         "observedStatus": 404,
         "observedAs": "sin politica",
-        "interpretation": "NO se interpreta como permiso. Lo que autoriza es que sea una API REST publica de HUD Open Data.",
+        "observedAt": "2026-10-04T15:25:00.000Z",
+        "url": "https://egis.hud.gov/robots.txt",
+        "bodySha256": "dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f",
+        "bodyIsErrorPage": true,
+        "disallowsOurPath": false,
+        "interpretation": "Un robots inexistente NO se interpreta como permiso. Lo que autoriza es que el endpoint sea una API REST publica de HUD Open Data bajo la OPEN Government Data Act. El permiso es sobre el endpoint de consulta, no sobre el dominio, y el crawling de HTML queda prohibido en el codigo.",
         "htmlCrawlingAllowed": false,
         "allowedResources": [
           "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query",
@@ -43,9 +48,16 @@
           "maxAttempts": 4,
           "baseMs": 1000,
           "capMs": 30000
-        }
+        },
+        "serverMaxRecordCount": 1000
       },
       "schema": {
+        "verifiedAgainstLiveLayer": true,
+        "layerName": "Multifamily Properties",
+        "geometryType": "esriGeometryPoint",
+        "capabilities": "Map,Query,Data",
+        "maxRecordCount": 1000,
+        "fieldsTotal": 18,
         "fieldAllowlist": [
           "PROPERTY_ID",
           "PROPERTY_NAME_TEXT",
@@ -57,28 +69,42 @@
           "STD_ZIP5",
           "MGMT_AGENT_ORG_NAME"
         ],
+        "allowlistFieldsAllExist": true,
         "neverRequested": [
           "PROJECT_MANAGER_NAME_TEXT",
+          "PROPERTY_ON_SITE_PHONE_NUMBER",
           "MGMT_CONTACT_FULL_NAME",
-          "PHONE",
-          "EMAIL",
-          "OWNER",
-          "LATITUDE",
-          "LONGITUDE",
+          "MGMT_CONTACT_MAIN_PHN_NBR",
+          "MGMT_CONTACT_EMAIL_TEXT",
           "geometry"
-        ]
+        ],
+        "neverRequestedNote": "Los cinco campos de contacto EXISTEN en el esquema vivo. No se piden, y por eso no llegan: bastaria un outFields='*' para traer el nombre del gestor, su telefono, su correo y el telefono de la propiedad.",
+        "noCoordinateFields": "La capa no tiene LATITUDE/LONGITUDE: la ubicacion va en la geometria del punto, y lo que la protege es returnGeometry=false."
       },
       "artifacts": {
         "layerMetadata": {
-          "url": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0",
+          "url": "https://egis.hud.gov/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0?f=json",
+          "method": "GET",
           "httpStatus": 200,
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "sha256Scope": "PLACEHOLDER declarado: sin egress no hay descarga que hashear. El verificador lo trata como evidencia AUSENTE y falla cerrado.",
-          "evidencePending": true
+          "observedAt": "2026-10-04T15:25:46.000Z",
+          "bytes": 5394,
+          "sha256": "14cd4a7f5c50ce61fc066e311dc0f0ea9390cd5de61fedf4aa5522de1dc50869",
+          "sha256Scope": "SHA256 del cuerpo que esta sesion descargo el 2026-10-04. Es la huella de UNA respuesta, no una constante: HUD puede republicar la capa y el hash cambiara. Cada corrida registra lo que vio."
+        },
+        "robotsTxt": {
+          "url": "https://egis.hud.gov/robots.txt",
+          "method": "GET",
+          "httpStatus": 404,
+          "observedAt": "2026-10-04T15:25:00.000Z",
+          "bytes": 1245,
+          "sha256": "dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f",
+          "sha256Scope": "Cuerpo del 404 (pagina de error de IIS). Se registra para que conste que se miro y que no habia politica, no para afirmar un permiso.",
+          "httpStatusIsEvidence": true,
+          "note": "El 404 ES el hallazgo: este host no publica robots.txt. Se registra para que conste que se miro, no para afirmar un permiso. Un robots inexistente no autoriza nada; lo que autoriza es que el endpoint sea una API publica de HUD Open Data."
         }
       },
-      "decision": "Elegible y DESACTIVADA. Falta egress a egis.hud.gov y la decision operativa."
+      "decision": "HABILITADA el 2026-10-04. Robots inexistente (404, comprobado), API REST publica con capabilities Map,Query,Data, y los 9 campos de la allowlist verificados contra el esquema vivo de 18 campos."
     }
   },
-  "digest": "sha256:6aab1a83eb5a4093ee590f23e7d3abe7d870fb91c771996eb594e33e418e1063"
+  "digest": "sha256:38ed8862444492f783e88068bd40ced61dda8eecb8c2872e0356b4bc348697b5"
 }

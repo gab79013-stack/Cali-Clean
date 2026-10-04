@@ -49,6 +49,15 @@ export function isOrganizationName(name) {
   return { ok: false, reason: 'el nombre no identifica una organización de forma inequívoca' };
 }
 
+const AMBIGUOUS_RESIDENTIAL_ADDRESS = [
+  /\bp\.?\s?o\.?\s*box\b/i,
+  /\bpmb\b/i,
+  /\bapt\b|\bapartment\s+\d/i,
+  /\bunit\s*[0-9a-z]*\b/i,
+  /\b#\s*\d+\b/,
+  /\bspc\b|\bspace\b/i,
+];
+
 // ── 1. CaliClean State License Scout · CSLB ──────────────────
 
 /**
@@ -117,18 +126,21 @@ export function evaluateCslbRow(row, manifest) {
 // ── 2. CaliClean Property & Manager Scout · HUD ──────────────
 
 const NON_INSTITUTIONAL_CATEGORY = /single\s*family|vacant|land|mobile\s*home|duplex|triplex/i;
-const AMBIGUOUS_RESIDENTIAL_ADDRESS = [
-  /\bp\.?\s?o\.?\s*box\b/i,
-  /\bpmb\b/i,
-  /\bapt\b|\bapartment\s+\d/i,
-  /\bunit\s*[0-9a-z]*\b/i,
-  /\b#\s*\d+\b/,
-  /\bspc\b|\bspace\b/i,
-];
+
+/** ¿Un ZIP cae en alguno de los rangos declarados del condado? */
+export function zipInRanges(zip, ranges = []) {
+  const n = Number(String(zip ?? '').slice(0, 5));
+  if (!Number.isFinite(n)) return false;
+  return ranges.some(([lo, hi]) => n >= lo && n <= hi);
+}
 
 export function evaluateHudRow(row, manifest, { cities, zips } = {}) {
   const val = (k) => clean(row?.[k]);
   const f = manifest.filters;
+  // El ámbito sale del manifiesto, que está versionado y auditado. Los
+  // parámetros solo sirven para que una prueba pueda acotarlo.
+  const ciudadesOk = cities?.length ? cities : (f.cities || []);
+  const rangos = f.zipRanges || [];
 
   if (val('STD_ST').toUpperCase() !== String(f.state).toUpperCase()) {
     return { ok: false, kind: 'out_of_area', reason: `STD_ST="${val('STD_ST') || '—'}"` };
@@ -151,8 +163,8 @@ export function evaluateHudRow(row, manifest, { cities, zips } = {}) {
 
   const ciudad = val('STD_CITY');
   const zip = val('STD_ZIP5').slice(0, 5);
-  const ciudadOk = (cities || []).some((c) => c.toLowerCase() === ciudad.toLowerCase());
-  const zipOk = (zips || []).includes(zip);
+  const ciudadOk = ciudadesOk.some((c) => c.toLowerCase() === ciudad.toLowerCase());
+  const zipOk = zips?.length ? zips.includes(zip) : zipInRanges(zip, rangos);
   if (!ciudadOk && !zipOk) {
     // El condado no viene en la allowlist de campos, así que el ámbito se
     // comprueba contra listas explícitas de ciudades y ZIP validados. Sin una de
@@ -199,56 +211,111 @@ export function evaluateHudRow(row, manifest, { cities, zips } = {}) {
   };
 }
 
-// ── 3. CaliClean Commercial Facility Scout · HCAI ────────────
+// ── 3. CaliClean Education & Childcare Facility Scout · CDE ──
 
-export function evaluateHcaiRow(row, manifest) {
+/**
+ * Marcadores que el volcado del directorio usa cuando una fila NO es un centro.
+ *
+ * El directorio incluye filas de distrito y de oficina de condado: no tienen
+ * instalaciones propias y no son un cliente. Se reconocen por estos valores en el
+ * nombre de la escuela, y una fila así se descarta.
+ */
+const CDE_NON_SCHOOL_MARKERS = [
+  /^no\s*data$/i,
+  /^no\s*school$/i,
+  /^n\/?a$/i,
+  /^none$/i,
+  /^\s*$/,
+];
+
+/**
+ * Tipos que son un DOMICILIO, no un centro.
+ *
+ * Están aquí porque el encargo lo pide explícitamente: si algún día se añade una
+ * fuente de cuidado infantil, los Family Child Care Homes operan desde la
+ * vivienda del titular. Quedan fuera por definición, igual que cualquier tipo
+ * que no se pueda afirmar institucional.
+ */
+const CDE_HOME_BASED = [
+  /family\s+child\s+care\s+home/i,
+  /\bfcch\b/i,
+  /child\s+care\s+home/i,
+  /home[-\s]?based/i,
+  /in[-\s]?home/i,
+  /\bresiden(ce|tial)\b/i,
+];
+
+export function evaluateCdeRow(row, manifest) {
   const val = (k) => clean(row?.[k]);
   const f = manifest.filters;
 
-  if (val('COUNTY_NAME').toLowerCase() !== String(f.county).toLowerCase()) {
-    return { ok: false, kind: 'out_of_area', reason: `COUNTY_NAME="${val('COUNTY_NAME') || '—'}"` };
+  if (val('County').toLowerCase() !== String(f.county).toLowerCase()) {
+    return { ok: false, kind: 'out_of_area', reason: `County="${val('County') || '—'}"` };
   }
-  if (val('FACILITY_STATUS_DESC').toLowerCase() !== String(f.facilityStatus).toLowerCase()) {
-    return { ok: false, kind: 'inactive', reason: `FACILITY_STATUS_DESC="${val('FACILITY_STATUS_DESC') || '—'}"` };
-  }
-
-  const nivel = val('FACILITY_LEVEL_DESC');
-  if (!f.facilityLevelAllowed.some((n) => n.toLowerCase() === nivel.toLowerCase())) {
-    // Un nivel que no se reconoce se descarta. Admitir "otra categoría
-    // institucional" exige documentarla y traer un fixture primero.
-    return { ok: false, kind: 'unverifiable', reason: `FACILITY_LEVEL_DESC="${nivel || '—'}" no está en la lista` };
+  if (val('StatusType').toLowerCase() !== String(f.statusType).toLowerCase()) {
+    return { ok: false, kind: 'inactive', reason: `StatusType="${val('StatusType') || '—'}"` };
   }
 
-  if (f.requireLicense && !val('LICENSE_NUM')) {
-    return { ok: false, kind: 'unverifiable', reason: 'sin LICENSE_NUM' };
+  // ── Tiene que ser un centro, no un distrito ──
+  const escuela = val('School');
+  if (f.requireSchoolRecord && CDE_NON_SCHOOL_MARKERS.some((re) => re.test(escuela))) {
+    return { ok: false, kind: 'unverifiable', reason: 'la fila es de distrito u oficina, no de un centro' };
   }
 
-  const direccion = val('DBA_ADDRESS1');
-  const ciudad = val('DBA_CITY');
-  const zip = val('DBA_ZIP_CODE').slice(0, 5);
-  if (f.requireBusinessAddress && (!direccion || !ciudad || !/^\d{5}$/.test(zip))) {
-    return { ok: false, kind: 'unverifiable', reason: 'dirección de la instalación incompleta' };
-  }
-  if (AMBIGUOUS_RESIDENTIAL_ADDRESS.some((re) => re.test(direccion))) {
-    return { ok: false, kind: 'residential', reason: 'la dirección señala una vivienda, no una instalación' };
+  // ── Nada domiciliario, mire donde mire ──
+  const paraDomicilio = [escuela, val('SOCType'), val('DOCType'), val('EILName'), val('Street')].join(' ');
+  if (CDE_HOME_BASED.some((re) => re.test(paraDomicilio))) {
+    return { ok: false, kind: 'residential', reason: 'el tipo o la dirección indican un domicilio' };
   }
 
-  const oshpd = val('OSHPD_ID');
-  if (!oshpd) return { ok: false, kind: 'unverifiable', reason: 'sin OSHPD_ID' };
+  // ── Virtual: sin instalaciones que limpiar ──
+  if (f.excludeVirtual && /^y(es)?$/i.test(val('Virtual'))) {
+    return { ok: false, kind: 'unverifiable', reason: 'centro virtual: no hay instalaciones' };
+  }
 
-  const nombre = val('FACILITY_NAME');
-  const org = isOrganizationName(nombre);
-  if (!org.ok) return { ok: false, kind: 'personal', reason: `FACILITY_NAME: ${org.reason}` };
+  // ── Dirección comercial completa ──
+  const calle = val('Street');
+  const ciudad = val('City');
+  const zip = val('Zip').slice(0, 5);
+  const faltan = [];
+  if (!calle) faltan.push('Street');
+  if (!ciudad) faltan.push('City');
+  if (!/^\d{5}$/.test(zip)) faltan.push('Zip');
+  if (f.requireBusinessAddress && faltan.length) {
+    return { ok: false, kind: 'unverifiable', reason: `dirección incompleta: faltan ${faltan.join(', ')}` };
+  }
+  if (AMBIGUOUS_RESIDENTIAL_ADDRESS.some((re) => re.test(calle))) {
+    return { ok: false, kind: 'residential', reason: 'la dirección señala una vivienda, no un centro' };
+  }
+
+  const cds = val('CDSCode');
+  if (!cds) return { ok: false, kind: 'unverifiable', reason: 'sin CDSCode' };
+
+  // El nombre de un centro educativo es institucional por naturaleza, pero se
+  // comprueba igual: un volcado puede traer cualquier cosa en ese campo.
+  const org = isOrganizationName(escuela);
+  const esCentro = org.ok || /school|academy|elementary|middle|high|college|institute|center|centre|preschool|kinder|campus|charter|education/i.test(escuela);
+  if (!esCentro) {
+    return { ok: false, kind: 'personal', reason: `School: ${org.reason}` };
+  }
+
+  // El sitio oficial solo si viene de la fuente. No se adivina ni se construye.
+  const web = val('Website');
+  const website = /^https?:\/\//i.test(web) ? web : (web ? `https://${web.replace(/^\/+/, '')}` : null);
 
   return {
     ok: true, kind: null, reason: null,
-    oshpdId: oshpd,
-    businessName: nombre,
-    licenseNum: val('LICENSE_NUM'),
-    facilityLevel: nivel,
-    licenseType: val('LICENSE_TYPE_DESC') || null,
-    licenseCategory: val('LICENSE_CATEGORY_DESC') || null,
-    address: direccion,
+    cdsCode: cds,
+    businessName: escuela,
+    district: val('District') || null,
+    socType: val('SOCType') || null,
+    docType: val('DOCType') || null,
+    eilName: val('EILName') || null,
+    charter: val('Charter') || null,
+    gradesOffered: val('GSoffered') || null,
+    openDate: val('OpenDate') || null,
+    website,
+    address: calle,
     city: ciudad,
     zip,
   };
@@ -267,4 +334,4 @@ export function nameKey(name) {
   return n || null;
 }
 
-export default { evaluateCslbRow, evaluateHudRow, evaluateHcaiRow };
+export default { evaluateCslbRow, evaluateHudRow, evaluateCdeRow };

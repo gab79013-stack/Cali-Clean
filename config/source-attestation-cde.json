@@ -1,0 +1,57 @@
+{
+  "$comment": "Evidencia del scout de centros educativos. Esta VACIA a proposito: el host no esta permitido en la politica de red, asi que no hay nada que esta sesion haya podido observar. El marcador de artefacto ausente mantiene la fuente cerrada.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T15:40:00.000Z",
+  "evidenceCollectedAt": "2026-10-04T15:40:00.000Z",
+  "collectedFrom": {
+    "method": "ninguno: el host no esta permitido en la politica de red de este entorno",
+    "liveVerifiedFromCloud": false,
+    "note": "Se intento UNA comprobacion y el proxy respondio 403 (CONNECT tunnel failed). No se ha leido el robots, ni los terminos, ni la licencia, ni el esquema. Nada de lo que el manifiesto describe esta verificado."
+  },
+  "sources": {
+    "cde_schools": {
+      "sourceId": "cde_schools",
+      "displayName": "CaliClean Education & Childcare Facility Scout",
+      "publisher": "California Department of Education",
+      "portalPage": "https://www.cde.ca.gov/schooldirectory/",
+      "downloadUrl": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
+      "egressHost": "www.cde.ca.gov",
+      "license": {
+        "status": "NO_VERIFICADA",
+        "expectedTermsUrl": "https://www.cde.ca.gov/re/di/ws/",
+        "note": "Sin leer. No se asume dominio publico."
+      },
+      "robots": {
+        "status": "NO_LEIDO",
+        "url": "https://www.cde.ca.gov/robots.txt",
+        "disallowsOurPath": null,
+        "htmlCrawlingAllowed": false,
+        "interpretation": "No leido no es permitido.",
+        "allowedResources": []
+      },
+      "limits": {
+        "maxAcceptedPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "requestsPerRun": 1
+      },
+      "schema": {
+        "verifiedAgainstLiveSource": false,
+        "fieldAllowlistDeclared": true,
+        "note": "La cabecera del volcado no se ha contrastado."
+      },
+      "artifacts": {
+        "directoryDownload": {
+          "url": "https://www.cde.ca.gov/schooldirectory/report?rid=dl1&tp=txt",
+          "httpStatus": 0,
+          "httpStatusIsEvidence": true,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "evidencePending": true,
+          "note": "No se pudo pedir: el proxy del entorno rechaza el host con 403. httpStatus 0 significa que no hubo respuesta, y el sha256 de ceros es el marcador de evidencia AUSENTE, no una huella."
+        }
+      },
+      "decision": "DESHABILITADA. Falta egress, licencia, terminos, robots y esquema."
+    }
+  },
+  "digest": "sha256:9edb2a79250cab0cce038539b3a2247248a93255ac2048997528c08f16b45435"
+}

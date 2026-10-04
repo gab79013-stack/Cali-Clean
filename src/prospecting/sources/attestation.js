@@ -163,8 +163,22 @@ export function verifyAttestation(attestation, { now = Date.now(), maxAgeDays = 
       if (/^0{64}$/.test(String(art?.sha256 ?? ''))) {
         problems.push(`${key}/${name}: el sha256 es un marcador de evidencia ausente, no una huella`);
       }
-      if (art?.httpStatus !== undefined && art.httpStatus !== 200) {
+      // Un artefacto tiene que haberse descargado bien... salvo cuando el propio
+      // estado ES el hallazgo.
+      //
+      // El caso que obliga a esto: un `robots.txt` que devuelve 404 es evidencia
+      // legítima y de las importantes — dice que el publicador no tiene política.
+      // Exigir 200 a todo artefacto dejaba dos salidas, las dos malas: registrar
+      // un 404 como si fuera un 200, u omitir el robots de la evidencia. Así que
+      // se admite un estado distinto cuando el documento lo declara como
+      // observación esperada, y solo entonces.
+      const estadoEsEvidencia = art?.httpStatusIsEvidence === true;
+      if (art?.httpStatus !== undefined && art.httpStatus !== 200 && !estadoEsEvidencia) {
         problems.push(`${key}/${name}: httpStatus ${art.httpStatus}, se esperaba 200`);
+      }
+      if (estadoEsEvidencia && !art?.sha256Scope && !art?.note) {
+        // Si el estado es el hallazgo, hay que decir cuál es el hallazgo.
+        problems.push(`${key}/${name}: declara httpStatusIsEvidence sin explicar qué significa`);
       }
     }
   }

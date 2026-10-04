@@ -4,7 +4,7 @@
   "scoutId": "cslb_contractors",
   "displayName": "CaliClean State License Scout",
   "label": "Licencias de contratista · CSLB (California)",
-  "state": "ELIGIBLE_BUT_DISABLED",
+  "state": "BLOCKED_BY_PUBLISHER",
   "eligible": true,
   "enabled": false,
   "implemented": true,
@@ -15,18 +15,27 @@
   "portalPage": "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList",
   "download": {
     "method": "WebForms postback",
+    "sessionCookieRequired": true,
+    "sessionCookieNote": "Sin la cookie de sesion que entrega el GET, el WAF del portal rechaza el postback con 'Request Rejected'. Comprobado: el mismo POST sin cookie da 200 con una pagina de rechazo de 269 bytes, y con cookie da la pagina del dataset. No es evasion: un postback de WebForms sin su sesion es una peticion incompleta.",
     "steps": [
-      "GET de la pagina del portal para obtener los tokens del formulario",
-      "postback seleccionando M (License Master)",
-      "postback sobre el control lbMasterCSV"
+      "GET de la pagina del portal: tokens + cookie de sesion",
+      "POST con __EVENTTARGET=ctl00$MainContent$ddlStatus y ctl00$MainContent$ddlStatus=M",
+      "POST con __EVENTTARGET=ctl00$MainContent$lbMasterCSV"
     ],
+    "datasetField": "ctl00$MainContent$ddlStatus",
+    "datasetChoice": "M",
+    "datasetChoicesObserved": {
+      "M": "License Master",
+      "W": "Workers' Compensation",
+      "P": "Personnel"
+    },
+    "control": "ctl00$MainContent$lbMasterCSV",
+    "controlVerifiedAt": "2026-10-04T15:26:00.000Z",
     "expectedContentType": "text/csv",
     "expectedAttachment": "MasterLicenseData.csv",
-    "control": "lbMasterCSV",
-    "datasetChoice": "M",
     "followRedirects": false,
-    "redirectPolicy": "Un redirect se RECHAZA. La descarga verificada responde el CSV directamente; seguir un redirect seria ir a un recurso que nadie audito.",
-    "noScraping": "Prohibido navegar o raspear los buscadores individuales de licencias. Solo esta descarga bulk, oficial y determinista."
+    "redirectPolicy": "Un redirect se RECHAZA: la descarga verificada entrega el CSV directamente.",
+    "noScraping": "Prohibido navegar o raspear los buscadores individuales. Solo esta descarga bulk."
   },
   "license": {
     "name": "California Conditions of Use — informacion estatal en dominio publico salvo indicacion contraria",
@@ -35,7 +44,15 @@
     "redistribution": "permitida"
   },
   "robots": {
-    "observed": "404 / sin politica",
+    "status": "LEIDO",
+    "url": "https://web.cslb.ca.gov/robots.txt",
+    "observedAt": "2026-10-04T16:05:00.000Z",
+    "httpStatus": 404,
+    "bytes": 1245,
+    "sha256": "dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f",
+    "observed": "404 / sin politica — pagina de error de IIS, leida desde este contenedor",
+    "disallowsOurPath": false,
+    "disallowsOurPathBasis": "No hay politica que prohiba nada porque no hay robots.txt. Eso es lo unico que este campo afirma.",
     "interpretation": "Un robots inexistente NO se interpreta como permiso. La autorizacion que se usa es otra y es explicita: el portal publica esta descarga CSV como su via oficial de datos masivos. El permiso es sobre ESE recurso, no sobre el dominio.",
     "htmlCrawlingAllowed": false
   },
@@ -90,8 +107,42 @@
     "addressNote": "Esta fuente NO conserva direccion a proposito. Eso la hace la mas debil de las tres cuando dos fuentes describen la misma entidad: una ficha sin direccion no se puede situar."
   },
   "blockers": [
-    "Egress pendiente: web.cslb.ca.gov no esta permitido en la red de Cloud.",
-    "Decision operativa pendiente: enabled sigue en false hasta revisar una preview real."
+    "El WAF del portal rechaza el postback de descarga con HTTP 403 'Request Rejected' desde este entorno (support IDs registrados). La secuencia esta verificada; la descarga no se completa.",
+    "Decision operativa pendiente: no se puede revisar una preview real mientras la descarga este bloqueada."
   ],
-  "decision": "Elegible: informacion de licencia publicamente divulgable, descarga CSV oficial y determinista, y pagina que declara 'Updated as of 10/3/2026'. DESACTIVADA."
+  "decision": "Elegible por licencia y por via oficial de descarga, y con la secuencia de postbacks verificada control por control el 2026-10-04. DESACTIVADA porque la proteccion del portal rechaza la descarga desde este entorno con un 403. Se deja implementada y apagada: el dia que el acceso se resuelva (permiso de CSLB, otra via oficial, u otro origen autorizado) solo hay que poner enabled=true.",
+  "cloudVerification": {
+    "verifiedAt": "2026-10-04T15:26:00.000Z",
+    "portalPage": {
+      "url": "https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList",
+      "httpStatus": 200,
+      "bytes": 14829,
+      "contentType": "text/html; charset=utf-8",
+      "sha256": "579d411cb883daf1c98af86f76a702c0d6fe57a086115fd7710616011d62d027",
+      "sha256Note": "Huella puntual, NO reproducible: ASP.NET regenera __VIEWSTATE y __EVENTVALIDATION en cada peticion, asi que el mismo recurso da otro sha256 en cada descarga (comprobado: 14829 bytes las dos veces, hash distinto). La evidencia reproducible de esta pagina es el 200, el tamano y la presencia de los controles nombrados, no el hash."
+    },
+    "step2Selection": {
+      "httpStatus": 200,
+      "bytes": 16248,
+      "result": "La pagina del dataset se renderiza y aparecen los controles de descarga: MainContent_lbMasterCSV y MainContent_lbMasterExcel.",
+      "controlsObserved": [
+        "MainContent_lbMasterCSV",
+        "MainContent_lbMasterExcel",
+        "MainContent_lblMasterFile"
+      ]
+    },
+    "step3Csv": {
+      "httpStatus": 403,
+      "bytes": 312,
+      "contentType": "text/html; charset=UTF-8",
+      "body": "Request Rejected — The requested URL was rejected. Please consult with your administrator.",
+      "supportIds": [
+        "62fca6cc-97e3-411d-9157-f2390f21ccd5",
+        "a84ed006-6cbb-451a-843c-b5109044f13a"
+      ],
+      "conclusion": "El WAF del portal rechaza el postback de descarga desde este entorno. La secuencia documentada EXISTE y se verifico control por control, pero la descarga no se completa. No se intenta sortear la proteccion: el remedio es preguntar a CSLB con el support ID, no cambiar la huella del cliente.",
+      "attemptsMade": 2,
+      "evasionAttempted": false
+    }
+  }
 }

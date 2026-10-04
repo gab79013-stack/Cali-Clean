@@ -1,26 +1,46 @@
 # Fase 3 · Los tres scouts
 
-**Estado: los tres DESHABILITADOS y fail-closed.** No hay preview real, no hay
-egress a sus hosts y su evidencia está marcada como pendiente. Nada de esto
-escribe en el CRM, y `apply` está cerrado por diseño en esta fase.
+**Estado, fuente a fuente.** De tres candidatas, una pasó:
+
+| Scout | Estado | Por qué |
+|---|---|---|
+| CaliClean Property & Manager Scout (HUD) | **ENABLED** | robots inexistente, API pública, esquema verificado en vivo desde Cloud |
+| CaliClean State License Scout (CSLB) | `BLOCKED_BY_PUBLISHER` | la secuencia de descarga existe y se verificó control por control, pero el WAF del portal la rechaza con 403 |
+| CaliClean Education & Childcare Facility Scout (CDE) | `UNVERIFIED_DISABLED` | su host no está permitido: no se han podido leer licencia, términos, robots ni esquema |
+
+`CaliClean Commercial Facility Scout` (HCAI/CDPH) fue **retirada** y sustituida
+por la de centros educativos. El expediente está en `docs/retired/`.
 
 County y City no se tocaron: siguen habilitadas, con su Routine y su comando.
 
 ---
 
-## Lo que hacen falta tres hosts para hacer
+## Hosts y recursos exactos
 
 | Scout | Host | Recurso exacto |
 |---|---|---|
 | CaliClean State License Scout | `web.cslb.ca.gov` | `/onlineservices/dataportal/ContractorList` (descarga WebForms) |
 | CaliClean Property & Manager Scout | `egis.hud.gov` | `/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query` |
-| CaliClean Commercial Facility Scout | `data.chhs.ca.gov` | `/api/3/action/datastore_search_sql` |
+| CaliClean Education & Childcare Facility Scout | `www.cde.ca.gov` | `/schooldirectory/report?rid=dl1&tp=txt` (volcado TSV) |
 
-Ninguno está permitido hoy. Mientras no lo estén, la evidencia de los tres
-declara `evidencePending: true` y `liveVerifiedFromCloud: false`, y **eso
-invalida la attestation a propósito**: una fuente cuya evidencia nadie ha podido
-comprobar no cruza la puerta. Un `sha256` de ceros se trata como evidencia
-AUSENTE, no como una huella débil.
+Los dos primeros están permitidos y verificados desde este contenedor. El
+tercero **no**: `www.cde.ca.gov` da `CONNECT tunnel failed, response 403`. Hasta
+que lo esté, su evidencia declara `evidencePending: true` y
+`liveVerifiedFromCloud: false`, y **eso invalida la attestation a propósito**:
+una fuente cuya evidencia nadie ha podido comprobar no cruza la puerta. Un
+`sha256` de ceros se trata como evidencia AUSENTE, no como una huella débil.
+
+### Dos cerrojos que ningún flag abre
+
+La puerta mira el robots del publicador **antes** de mirar `enabled`, y lo hace
+en dos direcciones:
+
+- un robots que **prohíbe** la ruta bloquea aunque alguien ponga `enabled: true`
+  (`robots_prohibe`). Esto está aquí porque pasó: el de `data.chhs.ca.gov`
+  resultó legible y prohibía justo `/api/`, y por eso HCAI se retiró;
+- un robots que **nadie ha leído** bloquea igual (`robots_sin_leer`). Es el caso
+  de CDE hoy. "Desconocer no es permiso" estaba escrito en su manifiesto, y una
+  frase en un JSON no detiene nada; ahora es un cerrojo.
 
 ---
 
@@ -69,7 +89,7 @@ que quedaría**:
 
 | Orden | Scout | Por qué |
 |---|---|---|
-| 1 | `hcai_facilities` | licencia + estado Open + dirección de la instalación: la más verificable |
+| 1 | `cde_schools` | identificador oficial (CDSCode), dirección del centro y sitio web publicado por la fuente: la más completa |
 | 2 | `hud_multifamily` | propiedad institucional con dirección y número de unidades: situable |
 | 3 | `cslb_contractors` | licencia de contratista **sin dirección**: no se puede situar, así que pierde |
 
@@ -79,8 +99,8 @@ modifica** desde aquí. El candidato se omite.
 Un detalle que costó un bug: se comparan **las dos** claves de cada candidato
 —nombre y nombre+dirección— no "la más específica que tenga". CSLB no conserva
 dirección, así que su única firma es el nombre; comparando solo la clave más
-específica de cada uno, `harborgeneralhospital` nunca coincidiría con
-`harborgeneralhospital|555medicalcenterdr`, y CSLB habría duplicado cada entidad
+específica de cada uno, `harborviewelementary` nunca coincidiría con
+`harborviewelementary|1200harborblvd`, y CSLB habría duplicado cada entidad
 que otra fuente ya hubiera traído.
 
 ---
@@ -147,30 +167,45 @@ para un gestor y añadirlo sería cambiar el esquema del cliente.
 
 **Clave:** `hud-mf:<PROPERTY_ID>` + dedupe por nombre+dirección normalizados.
 
-### 3 · CaliClean Commercial Facility Scout (HCAI/CDPH)
+### 3 · CaliClean Education & Childcare Facility Scout (CDE)
 
-**Consulta.** Solo la API CKAN en el host exacto. **Un redirect a S3 se rechaza**:
-ese recurso no es el que se auditó y no lleva el esquema que aquí se valida.
-`success: false` llega dentro de un 200 y es un error. El SQL se construye con
-identificadores validados y literales escapados.
+**Fuente.** El volcado público del directorio de escuelas del California
+Department of Education (`pubschls`), delimitado por **tabuladores**. Es la vía de
+descarga masiva que el propio directorio publica: no se raspa el buscador ni
+ninguna página HTML. **Una sola petición GET por corrida**, con `If-None-Match` e
+`If-Modified-Since`; un 304 no gasta la ventana del día.
 
-**Dos comprobaciones de rotación**, porque un DataStore cambia de recurso cuando el
-publicador lo reemplaza:
+El archivo se hashea entero, se lee en streaming desde un temporal y **se borra
+siempre** (`finally`): trae nombre, apellido y **correo** de hasta tres
+administradores por centro, más teléfono, fax y coordenadas. Nada de eso se
+conserva en ningún sitio.
 
-- si el `resource_id` no es el atestiguado, **no se consulta**;
-- si el esquema devuelto pierde un campo pedido, **se para**: la allowlist dejaría
-  de significar lo mismo.
+**Filtros.** `County == San Diego` · `StatusType == Active` · tiene que ser un
+**centro**, no un distrito ni una oficina de condado (se descartan los
+marcadores del volcado: `No Data`, `No School`, vacío) · no virtual (una escuela
+virtual no tiene instalaciones que limpiar) · dirección comercial completa, con
+ZIP de cinco dígitos y sin `Apt`/`Unit`/`PO Box`/`PMB`.
 
-**Filtros.** `COUNTY_NAME == San Diego` y `FACILITY_STATUS_DESC == Open`
-server-side, orden estable por `OSHPD_ID` · nivel `Parent Facility` o
-`Consolidated Facility` · licencia presente · dirección de instalación completa y
-no residencial.
+**Nada domiciliario, mire donde mire.** `Family Child Care Home`, `FCCH`,
+`home-based`, `in-home` y `residence/residential` se buscan en el nombre, en
+`SOCType`, en `DOCType`, en `EILName` **y** en la calle. Si algún día se añade una
+fuente de cuidado infantil del CDSS, los Family Child Care Homes operan desde la
+vivienda del titular: quedan fuera por definición, igual que cualquier tipo que no
+se pueda afirmar institucional. Este scout solo acepta **centros**.
 
-**Nunca** `LATITUDE`/`LONGITUDE`, ni contacto, ni dato de paciente o de personal,
-ni la fila cruda. La licencia es CC-BY y la atribución queda registrada en la
-procedencia del staging.
+**Nunca** `Phone`, `Ext`, `FaxNumber`, `Email`, `AdmFName*`, `AdmLName*`,
+`AdmEmail*`, `Latitude`, `Longitude` ni los campos `Mail*`. La allowlist es
+cerrada, así que una columna nueva con datos de una persona se cae **sin esperar a
+que alguien la prohíba**.
 
-**Clave:** `hcai:<OSHPD_ID>` + dedupe por nombre+dirección normalizados.
+`Website` **sí** se conserva: es el sitio oficial del centro tal como lo publica
+la fuente. No se adivina, no se construye y no se visita.
+
+**Clave:** `cde:<CDSCode>` + dedupe por nombre+dirección normalizados.
+
+**Licencia: NO verificada.** No se asume dominio público. La información estatal
+de California lo es "salvo indicación contraria", y la indicación contraria es
+justo lo que hay que ir a leer — y para leerla hace falta el host.
 
 ---
 
@@ -182,7 +217,7 @@ Cada scout tiene lo suyo y no estorba a los demás ni a County/City:
   filas leídas, así que se deja de paginar al alcanzarlo;
 - **una corrida con éxito cada 24 h**, cuota local con lock crash-safe;
 - **guard durable derivado del CRM** por prefijo de clave (`cslb:`, `hud-mf:`,
-  `hcai:`), con tolerancia de desfase de reloj: sin ella, un CRM dos segundos
+  `cde:`), con tolerancia de desfase de reloj: sin ella, un CRM dos segundos
   adelantado leería su propia marca como "fechada en el futuro" y bloquearía cada
   corrida para siempre;
 - **lock global de fase**, porque dos orquestaciones a la vez leerían el mismo
@@ -217,8 +252,16 @@ funcionando. Nada de email ni Slack: el push, si llega, será configuración de 
 `--expect-hashes` y `TWENTY_WRITE_ENABLED=true`, y aun con los cuatro se detiene
 explicando qué falta (egress, evidencia, `enabled`, preview revisada).
 
-## Para la preview real, exactamente estos tres hosts
+## Hosts
+
+Permitidos y verificados desde este contenedor:
 
     web.cslb.ca.gov
     egis.hud.gov
-    data.chhs.ca.gov
+
+Pendiente, y es el único que falta para poder auditar CDE de verdad:
+
+    www.cde.ca.gov
+
+Mientras no esté, CDE se queda `UNVERIFIED_DISABLED`. No se ha editado la
+política de red: ese cambio es del usuario.
