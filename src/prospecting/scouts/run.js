@@ -21,8 +21,7 @@ import {
   emptyScoutMetrics, countRejection, allowedFields,
 } from './registry.js';
 import { writeStaging, newRunId } from './staging.js';
-import { evaluateCslbRow, evaluateHudRow, evaluateCdeRow, crossKey, nameKey } from './rules.js';
-import { downloadMasterCsv } from './webforms-client.js';
+import { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow, crossKey, nameKey } from './rules.js';
 import { queryArcgis } from './arcgis-client.js';
 import { fetchCsvToTemp, streamCsvObjects } from '../sources/csv-client.js';
 
@@ -56,87 +55,7 @@ export function assertOnlyAllowed(scoutId, obj, where = 'objeto') {
   return true;
 }
 
-// ── 1. CaliClean State License Scout · CSLB ──────────────────
-async function runCslb(scoutId, m, metrics, opts) {
-  const descarga = await downloadMasterCsv({
-    portalUrl: opts.portalUrlOverride || m.portalPage,
-    control: m.download.control,
-    datasetField: m.download.datasetField,
-    datasetChoice: m.download.datasetChoice,
-    expectedAttachment: m.download.expectedAttachment,
-    fetchImpl: opts.fetchImpl,
-    sleep: opts.sleep,
-    clock: opts.clock,
-    random: opts.random,
-    userAgent: opts.userAgent,
-    maxBytes: m.limits.maxBytes,
-    timeoutMs: m.limits.timeoutMs,
-  });
-  metrics.requests += descarga.metrics.requests;
-  metrics.retries += descarga.metrics.retries;
-  metrics.http429 += descarga.metrics.http429;
-  metrics.bytes += descarga.bytes;
-
-  try {
-    const aceptados = [];
-    const vistos = new Set();
-    for await (const parsed of streamCsvObjects(descarga.file)) {
-      metrics.fetched++;
-      if (!parsed.ok) { metrics.rejected_malformed++; continue; }
-
-      // Las reglas se evalúan sobre la fila CRUDA, porque algunas miran columnas
-      // que el recorte no conserva (County, SecondaryStatus).
-      const v = evaluateCslbRow(parsed.row, m);
-      if (!v.ok) { countRejection(metrics, v.kind); continue; }
-
-      const dedupKey = `${m.dedupNamespace}:${v.licenseNo}`;
-      if (vistos.has(dedupKey)) { metrics.deduped++; continue; }
-      vistos.add(dedupKey);
-
-      // El recorte, y la comprobación de que no quedó nada de más.
-      const { row: safe } = trimToAllowed(scoutId, parsed.row);
-      assertOnlyAllowed(scoutId, safe, 'fila recortada');
-
-      aceptados.push({
-        dedupKey,
-        sourceId: v.licenseNo,
-        businessName: v.businessName,
-        // Esta fuente NO conserva dirección a propósito.
-        address: null,
-        city: null,
-        zip: null,
-        serviceArea: m.serviceArea,
-        sourceUrl: m.portalPage,
-        evidence: {
-          licenseNo: v.licenseNo,
-          businessType: v.businessType,
-          primaryStatus: v.primaryStatus,
-          secondaryStatus: v.secondaryStatus,
-          classifications: v.classifications,
-          lastUpdate: v.lastUpdate,
-        },
-        matchKeys: { name: nameKey(v.businessName), cross: null },
-      });
-      metrics.accepted++;
-      if (aceptados.length >= m.limits.maxAcceptedPerRun) break;
-    }
-    return {
-      aceptados,
-      provenance: {
-        portalPage: m.portalPage,
-        license: m.license,
-        csvSha256: descarga.sha256,
-        csvBytes: descarga.bytes,
-        downloadSteps: m.download.steps,
-      },
-    };
-  } finally {
-    // El volcado trae direcciones, teléfonos y personas. No se queda en disco.
-    descarga.dispose();
-  }
-}
-
-// ── 2. CaliClean Property & Manager Scout · HUD ──────────────
+// ── 1. CaliClean Property & Manager Scout · HUD ──────────────
 async function runHud(scoutId, m, metrics, opts) {
   const fields = allowedFields(scoutId);
   const where = `STD_ST = '${String(m.filters.state).replace(/'/g, "''")}'`
@@ -204,7 +123,7 @@ async function runHud(scoutId, m, metrics, opts) {
   };
 }
 
-// ── 3. CaliClean Education & Childcare Facility Scout · CDE ──
+// ── 2. CaliClean Education & Childcare Facility Scout · CDE ──
 async function runCde(scoutId, m, metrics, opts) {
   // El volcado del directorio es un archivo estático delimitado por tabuladores.
   // Se descarga una vez, se hashea entero y se borra: trae el nombre y el
@@ -324,10 +243,158 @@ async function runCde(scoutId, m, metrics, opts) {
   }
 }
 
+// ── 3. CaliClean Commercial Development Permit Scout · City ──
+async function runCityDev(scoutId, m, metrics, opts) {
+  // Una sola descarga del CSV de aprobaciones emitidas del año en curso. El
+  // archivo trae APN, latitud, longitud, número de cuenta fiduciaria y número de
+  // plano, así que se lee en streaming desde un temporal y se borra siempre.
+  const url = opts.downloadUrlOverride || m.downloadUrl;
+  const permitidas = m.robots?.allowedResources || [];
+  if (!opts.downloadUrlOverride && !permitidas.includes(url)) {
+    throw new Error(
+      `La URL "${url}" no está en los recursos permitidos de la auditoría de ${scoutId}.`,
+    );
+  }
+
+  metrics.requests = 1;
+  const descarga = await fetchCsvToTemp(url, {
+    fetchImpl: opts.fetchImpl,
+    etag: opts.etag,
+    lastModified: opts.lastModified,
+    userAgent: opts.userAgent,
+    maxBytes: m.limits.maxBytes,
+    timeoutMs: m.limits.timeoutMs,
+  });
+  try {
+    if (descarga.notModified) {
+      return { rows: 0, consumed: false, aceptados: [], notModified: true, provenance: {} };
+    }
+    metrics.bytes += descarga.bytes;
+
+    const esperados = allowedFields(scoutId);
+    let cabecera = null;
+    const comprobarCabecera = (cols) => {
+      cabecera = cols;
+      const faltan = esperados.filter((c) => !cols.includes(c));
+      if (faltan.length) {
+        throw new Error(
+          `El esquema del CSV de ${scoutId} cambió: faltan ${faltan.join(', ')}. `
+          + 'La allowlist atestiguada ya no describe este archivo, así que no se procesa.',
+        );
+      }
+    };
+
+    // El archivo NO viene ordenado por fecha de emisión: en una muestra de la
+    // cola había permisos de enero junto a otros de octubre. Así que no se puede
+    // cortar en el candidato 50 y llamarlo "los más recientes" — habría que
+    // llamarlo "los primeros del archivo". Se recorre entero y se conservan los
+    // 50 más recientes, con el id como desempate para que dos corridas sobre el
+    // mismo archivo den exactamente la misma lista.
+    const porNombre = new Map();
+    const ahora = opts.clock ? opts.clock() : Date.now();
+
+    for await (const parsed of streamCsvObjects(descarga.file, {
+      delimiter: m.limits.delimiter || ',',
+      onHeader: comprobarCabecera,
+    })) {
+      metrics.fetched++;
+      if (!parsed.ok) { metrics.rejected_malformed++; continue; }
+
+      const v = evaluateCityDevRow(parsed.row, m, { now: ahora });
+      if (!v.ok) { countRejection(metrics, v.kind); continue; }
+
+      // Recorte a la allowlist cerrada antes de construir nada.
+      const { row: safe } = trimToAllowed(scoutId, parsed.row);
+      assertOnlyAllowed(scoutId, safe, 'fila recortada');
+
+      // Una empresa, una Company: el mismo titular puede tener diez permisos.
+      // Gana el más reciente, y con fecha igual, el id más bajo.
+      const clave = nameKey(v.businessName);
+      if (!clave) { metrics.rejected_personal++; continue; }
+      const previo = porNombre.get(clave);
+      if (previo) {
+        metrics.deduped++;
+        const mejor = v.issueDate > previo.issueDate
+          || (v.issueDate === previo.issueDate && Number(v.approvalId) < Number(previo.approvalId));
+        if (!mejor) continue;
+      }
+      porNombre.set(clave, v);
+      metrics.accepted = porNombre.size;
+    }
+
+    const elegidos = [...porNombre.values()]
+      .sort((a, b) => (b.issueDate.localeCompare(a.issueDate))
+        || (Number(a.approvalId) - Number(b.approvalId)))
+      .slice(0, m.limits.maxAcceptedPerRun);
+    metrics.over_cap = Math.max(0, porNombre.size - elegidos.length);
+    metrics.accepted = elegidos.length;
+
+    const verificadoEn = new Date(ahora).toISOString();
+    const aceptados = elegidos.map((v) => ({
+      dedupKey: `${m.dedupNamespace}:${v.approvalId}`,
+      sourceId: v.approvalId,
+      businessName: v.businessName,
+      address: v.address,
+      // La ciudad no sale de una columna —el archivo no la trae— sino del alcance
+      // del conjunto de datos, y la procedencia lo dice con esas palabras.
+      city: 'San Diego',
+      zip: null,
+      serviceArea: m.serviceArea,
+      sourceUrl: m.portalPage,
+      lastVerified: verificadoEn,
+      evidence: {
+        approvalId: v.approvalId,
+        approvalType: v.approvalType,
+        buildingClass: v.buildingClass,
+        buildingClassCode: v.buildingClassCode,
+        issueDate: v.issueDate,
+        issuedDaysAgo: v.issuedDaysAgo,
+        projectId: v.projectId,
+        projectType: v.projectType,
+        valuation: v.valuation,
+        // Con qué regla entró. "Lo aceptó una heurística" no es auditable.
+        acceptanceRule: v.holderTier === 1
+          ? 'titular con sufijo de forma jurídica (nivel 1)'
+          : 'titular con designador de actividad empresarial y sin forma de persona (nivel 2)',
+        holderTier: v.holderTier,
+      },
+      matchKeys: { name: nameKey(v.businessName), cross: crossKey(v.businessName, v.address) },
+    }));
+
+    return {
+      rows: aceptados.length,
+      consumed: true,
+      aceptados,
+      provenance: {
+        dataset: m.datasetTitle,
+        portalPage: m.portalPage,
+        downloadUrl: m.downloadUrl,
+        downloadLabel: m.downloadLabelObserved,
+        license: m.license,
+        publisher: 'City of San Diego · Development Services',
+        fileSha256: descarga.sha256,
+        fileBytes: descarga.bytes,
+        fileEtag: descarga.headers?.etag ?? null,
+        fileLastModified: descarga.headers?.lastModified ?? null,
+        verifiedAt: verificadoEn,
+        issuedWithinDays: m.filters.issuedWithinDays,
+        acceptanceRule: m.filters.holderRule,
+        cityFrom: 'alcance del conjunto de datos (permisos de la Ciudad de San Diego), no una columna del archivo',
+        headerColumns: cabecera ? cabecera.length : null,
+        headerUnexpectedCount: cabecera ? cabecera.filter((c) => !esperados.includes(c)
+          && !(m.fields?.neverRequested || []).includes(c)).length : null,
+      },
+    };
+  } finally {
+    // Siempre: el archivo trae APN, coordenadas y cuentas fiduciarias.
+    descarga.dispose();
+  }
+}
+
 const EJECUTORES = {
-  cslb_contractors: runCslb,
   hud_multifamily: runHud,
   cde_schools: runCde,
+  city_development_permits: runCityDev,
 };
 
 /**
@@ -349,7 +416,6 @@ export async function runScout(scoutId, {
   ttlMs,
   now = () => Date.now(),
   // Solo para pruebas: apuntar un cliente a un servidor simulado.
-  portalUrlOverride = null,
   queryUrlOverride = null,
   downloadUrlOverride = null,
   etag = null,
@@ -383,7 +449,7 @@ export async function runScout(scoutId, {
   const outcome = await withQuota(scoutId, async () => {
     const r = await ejecutor(scoutId, m, metrics, {
       fetchImpl, sleep, clock, random, userAgent, cities, zips, etag, lastModified,
-      portalUrlOverride, queryUrlOverride, downloadUrlOverride,
+      queryUrlOverride, downloadUrlOverride,
     });
     if (r.notModified) return { rows: 0, consumed: false, ...r };
     return { rows: r.aceptados.length, consumed: true, ...r };

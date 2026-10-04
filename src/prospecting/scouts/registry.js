@@ -26,12 +26,12 @@ import { attestationFor } from '../sources/attestation.js';
  * Los scouts activos del catálogo.
  *
  * `hcai_facilities` ya no está: se retiró el 2026-10-04 porque el robots.txt de
- * su publicador prohíbe explícitamente las rutas de API que necesitaba. Su
- * manifiesto y su evidencia viven en `docs/retired/`, fuera de `config/`, así que
- * ningún cargador los lee y no hay manera de reactivarla por accidente. El motivo
- * del rechazo se conserva ahí: es el resultado más valioso de esa auditoría.
+ * data.chhs.ca.gov prohíbe las rutas que su scout necesitaba. `cslb_contractors`
+ * tampoco: su portal rechaza la descarga con un 403 del WAF y no se intenta
+ * sortear, así que dejó de ser una opción activa y la sustituye
+ * `city_development_permits`. Las dos tienen su expediente en docs/retired/.
  */
-export const SCOUT_IDS = Object.freeze(['cslb_contractors', 'hud_multifamily', 'cde_schools']);
+export const SCOUT_IDS = Object.freeze(['hud_multifamily', 'cde_schools', 'city_development_permits']);
 
 /** Dónde vive el manifiesto de cada scout. */
 const manifestDir = () => process.env.SCOUT_MANIFEST_DIR || path.join(ROOT, 'config', 'scouts');
@@ -234,7 +234,17 @@ export const emptyScoutMetrics = () => ({
   rejected_out_of_area: 0,
   rejected_unverifiable: 0,
   rejected_malformed: 0,
+  // Razones que trajo la fuente de permisos: un permiso viejo, una obra que no es
+  // comercial, una clasificación que no distingue vivienda de local, y un tipo de
+  // permiso que no es obra que haya que limpiar. Cada una tiene su contador porque
+  // "rechazado" sin más no deja revisar si el filtro está bien calibrado.
+  rejected_stale: 0,
+  rejected_not_commercial: 0,
+  rejected_mixed_use_ambiguous: 0,
+  rejected_not_relevant: 0,
   deduped: 0,
+  // Candidatos válidos que quedaron fuera por el tope de la corrida.
+  over_cap: 0,
   retries: 0,
   http429: 0,
   quota_blocked: 0,
@@ -245,7 +255,14 @@ export const emptyScoutMetrics = () => ({
   outbound: 0,
 });
 
-/** Suma un rechazo a la métrica que le corresponde por su `kind`. */
+/**
+ * Suma un rechazo a la métrica que le corresponde por su `kind`.
+ *
+ * Un `kind` que no tenga contador cae en `rejected_unverifiable` en lugar de
+ * crear un campo nuevo: así la suma de los contadores sigue cuadrando con las
+ * filas leídas, y una regla que devuelva un `kind` mal escrito se nota en que
+ * los no-verificables suben sin motivo, no en que una fila desaparezca.
+ */
 export function countRejection(metrics, kind) {
   const campo = `rejected_${kind || 'unverifiable'}`;
   if (metrics[campo] === undefined) metrics.rejected_unverifiable++;

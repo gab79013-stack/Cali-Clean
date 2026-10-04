@@ -33,32 +33,38 @@ import { normalizeForMatch } from '../sources/city-btc-rules.js';
  *
  *   1. `cde_schools` — centro educativo con identificador oficial (CDSCode),
  *      estado activo, dirección del centro y, cuando la fuente lo publica, su
- *      sitio oficial. Es la ficha más completa de las tres, y la única que trae
- *      un sitio web que no hay que adivinar.
- *   2. `hud_multifamily` — propiedad institucional con dirección y número de
- *      unidades. Verificable y situable, sin sitio web.
- *   3. `cslb_contractors` — licencia de contratista. **No conserva dirección a
- *      propósito**, así que una ficha que venga solo de aquí no se puede situar.
- *      Pierde contra cualquiera que sí pueda.
+ *      sitio oficial. Es la ficha más completa, y la única que trae un sitio web
+ *      que no hay que adivinar.
+ *   2. `city_development_permits` — permiso de obra comercial emitido, con fecha
+ *      de emisión, clasificación de edificación y dirección de la obra. Pierde
+ *      contra CDE porque no trae sitio web, pero gana a HUD porque dice **cuándo**
+ *      pasó algo: para limpieza post-obra, la fecha es la mitad del dato.
+ *   3. `hud_multifamily` — propiedad institucional con dirección y número de
+ *      unidades. Verificable y situable, pero sin fecha de actividad.
  *
  * Y por encima de las tres, lo que ya está en el CRM: una Company existente
  * nunca se modifica desde aquí. El candidato se omite.
  *
- * `hcai_facilities` estuvo aquí y se retiró: su publicador prohíbe por robots las
- * rutas que necesitaba. Ver docs/retired/.
+ * Dos fuentes estuvieron aquí y se retiraron: `hcai_facilities`, porque su
+ * publicador prohíbe por robots las rutas que necesitaba, y `cslb_contractors`,
+ * porque el WAF de su portal rechaza la descarga con un 403 y no se intenta
+ * sortear. Las dos tienen su expediente en docs/retired/.
  */
-export const SOURCE_PRIORITY = Object.freeze(['cde_schools', 'hud_multifamily', 'cslb_contractors']);
+export const SOURCE_PRIORITY = Object.freeze(['cde_schools', 'city_development_permits', 'hud_multifamily']);
 
 export const PRIORITY_RATIONALE = Object.freeze({
   cde_schools: 'identificador oficial, dirección del centro y sitio web publicado por la fuente: la más completa',
-  hud_multifamily: 'propiedad institucional con dirección y número de unidades: situable',
-  cslb_contractors: 'licencia de contratista sin dirección: no se puede situar, así que pierde',
+  city_development_permits: 'permiso emitido con fecha, clasificación de edificación comercial y dirección de la obra: fechable y situable',
+  hud_multifamily: 'propiedad institucional con dirección y número de unidades: situable, pero sin fecha de actividad',
 });
 
 /** Claves que un candidato puede traer. Lista cerrada. */
 const CANDIDATE_KEYS = new Set([
   'dedupKey', 'sourceId', 'businessName', 'address', 'city', 'zip',
   'serviceArea', 'sourceUrl', 'evidence', 'matchKeys',
+  // Cuándo se comprobó el dato contra la fuente. Es una fecha, no un dato de
+  // nadie, y sin ella una ficha no dice de cuándo es lo que afirma.
+  'lastVerified',
 ]);
 
 /**

@@ -157,13 +157,17 @@ ningún sitio; el CSV descargado se borra al terminar.
     npm run phase3:preview                # los tres scouts de la fase 3 (deshabilitados)
     npm run phase3:plan                   # capa central: valida, deduplica, planifica
 
-La **fase 3** añade tres scouts más —licencias de contratista de CSLB, propiedades
-multifamiliares de HUD y centros educativos del CDE— y una capa central que valida
-sus staging, deduplica contra lo que ya hay y planifica Companies. De las tres,
-**solo HUD cruzó la puerta**: CSLB queda bloqueada por el WAF de su propio portal,
-y CDE pasó cuatro de las cinco comprobaciones de su auditoría en vivo —robots,
-esquema, archivo oficial y términos— pero su declaración de copyright no es
-legible desde aquí, así que no se afirma la licencia y se queda apagada. Ningún scout habla con el CRM: el único que escribe es
+La **fase 3** añade tres scouts más —propiedades multifamiliares de HUD, centros
+educativos del CDE y permisos de desarrollo comercial de la Ciudad de San Diego— y
+una capa central que valida sus staging, deduplica contra lo que ya hay y
+planifica Companies. **HUD y los permisos de desarrollo cruzaron la puerta**; CDE
+pasó cuatro de las cinco comprobaciones de su auditoría en vivo —robots, esquema,
+archivo oficial y términos— pero su declaración de copyright no es legible desde
+aquí, así que no se afirma la licencia y se queda apagada. Dos candidatas se
+retiraron: HCAI, porque su robots prohíbe las rutas que necesitaba, y CSLB, porque
+el WAF de su portal rechaza la descarga con un 403 y no se intenta sortear.
+Ningún scout habla con el CRM: el único que escribe es el orquestador, y solo crea
+Companies. Ningún scout habla con el CRM: el único que escribe es
 el orquestador, y solo crea Companies. Detalle en
 [`docs/phase3-scouts.md`](docs/phase3-scouts.md).
     npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot

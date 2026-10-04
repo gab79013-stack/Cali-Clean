@@ -5,11 +5,15 @@
 | Scout | Estado | Por qué |
 |---|---|---|
 | CaliClean Property & Manager Scout (HUD) | **ENABLED** | robots inexistente, API pública, esquema verificado en vivo desde Cloud |
-| CaliClean State License Scout (CSLB) | `BLOCKED_BY_PUBLISHER` | la secuencia de descarga existe y se verificó control por control, pero el WAF del portal la rechaza con 403 |
+| CaliClean Commercial Development Permit Scout (City) | **ENABLED** | la única con licencia **explícita**: el portal declara ODC PDDL 1.0 para el conjunto de datos |
 | CaliClean Education & Childcare Facility Scout (CDE) | `PENDING_LICENSE_REVIEW` | auditada en vivo y bien en todo menos una cosa: la declaración de copyright del sitio no es legible |
 
-`CaliClean Commercial Facility Scout` (HCAI/CDPH) fue **retirada** y sustituida
-por la de centros educativos. El expediente está en `docs/retired/`.
+Dos candidatas se **retiraron**, con su expediente en `docs/retired/`:
+`CaliClean Commercial Facility Scout` (HCAI/CDPH), porque su robots prohíbe las
+rutas que necesitaba, y `CaliClean State License Scout` (CSLB), porque el WAF de
+su portal rechaza la descarga con un 403 y no se intenta sortear. **CSLB no
+cuenta entre los scouts utilizables**; la sustituye la de permisos de
+desarrollo.
 
 County y City no se tocaron: siguen habilitadas, con su Routine y su comando.
 
@@ -19,14 +23,59 @@ County y City no se tocaron: siguen habilitadas, con su Routine y su comando.
 
 | Scout | Host | Recurso exacto |
 |---|---|---|
-| CaliClean State License Scout | `web.cslb.ca.gov` | `/onlineservices/dataportal/ContractorList` (descarga WebForms) |
 | CaliClean Property & Manager Scout | `egis.hud.gov` | `/arcgis/rest/services/gotit/MultifamilyProperties/MapServer/0/query` |
 | CaliClean Education & Childcare Facility Scout | `www.cde.ca.gov` | `/schooldirectory/report?rid=dl1&tp=txt` (volcado TSV) |
+| CaliClean Commercial Development Permit Scout | `seshat.datasd.org` | `/development_permits/approvals_issued_2026_datasd.csv` (ficha en `data.sandiego.gov`) |
 
 Los tres están permitidos y los tres se han comprobado desde este contenedor.
 CDE tiene cuatro artefactos con huella real y uno ausente, y ese uno le invalida
 la attestation **a propósito**: un `sha256` de ceros se trata como evidencia
 AUSENTE, no como una huella débil, así que la fuente no cruza la puerta.
+
+## Auditoría de los permisos de desarrollo: la licencia primero
+
+Seis comprobaciones, las seis en verde, y en este orden porque una depende de la
+anterior:
+
+| Qué | Resultado |
+|---|---|
+| ficha del portal | **200**, 45 856 B, `sha256:a7b04755…a624e`. Publisher: Development Services |
+| enlace exacto | la ficha enlaza "Issued approvals (2026)" → `…/approvals_issued_2026_datasd.csv`. **Copiado, no deducido** |
+| **licencia** | **ODC PDDL 1.0**, declarada por el publicador en el campo *License* del conjunto de datos |
+| robots, dos hosts | `data.sandiego.gov` → **404** (`sha256:40695cb6…1fbbd`) · `seshat.datasd.org` → **403** (`sha256:a824bc77…0d938`) |
+| esquema | GET con `Range 0-8191`: **54 columnas**. Las 14 de la allowlist existen las 14 |
+| tamaño y cadencia | HEAD 200, `Content-Length: 21 386 385`, ETag `"dbbd27a5…515e"`, `Last-Modified` Oct 2. Cadencia **diaria** declarada |
+
+**La licencia es lo que enciende esta fuente, y no el robots.** Un 404 y un 403
+sobre `robots.txt` son hallazgos: significan que no hay política publicada, no
+que haya permiso. Lo que concede es la PDDL, que es una dedicación al dominio
+público y está escrita y enlazada por el publicador en la ficha del propio
+conjunto de datos. El pie del portal lleva además un `© 2002–2026 City of San
+Diego. All rights reserved.` genérico: una concesión específica y escrita vence a
+un aviso de plantilla.
+
+El *texto* de la PDDL vive en `opendefinition.org`, que no está permitido en la
+política de red, y no se ha pedido. Lo que se leyó es la declaración del
+publicador, y eso es lo que se afirma — ni una palabra más.
+
+### La discrepancia de tamaño, explicada y no ignorada
+
+El portal declara 9.57 MB y el archivo mide 20.4 MB. No es otro archivo: la cifra
+del portal está cacheada para los ficheros del año en curso, que crecen a diario.
+Los tres de 2026 están desviados por el mismo factor (~2.12×) y **el de 2025, que
+ya es definitivo, coincide** (27.86 declarados / 27.88 reales). Ese caso de
+control es lo que convierte una discrepancia en una explicación. Lo que se valida
+del archivo es su ETag y su `Content-Length` observados, nunca la cifra
+renderizada.
+
+### El diccionario no describe este fichero
+
+El diccionario descargable nombra **21 campos en minúsculas y con otros nombres**
+—`address_job`, `job_apn`, `lat_job`, `date_approval_issue`— mientras el archivo
+trae 54 en mayúsculas. Se registra como hallazgo. La semántica se toma del
+diccionario que el portal renderiza, con la correspondencia escrita en el
+manifiesto, y el esquema del que depende el código es **la cabecera real**, que se
+contrasta en cada descarga.
 
 ### Auditoría de CDE: qué se leyó y qué no
 
@@ -127,60 +176,98 @@ que quedaría**:
 | Orden | Scout | Por qué |
 |---|---|---|
 | 1 | `cde_schools` | identificador oficial (CDSCode), dirección del centro y sitio web publicado por la fuente: la más completa |
-| 2 | `hud_multifamily` | propiedad institucional con dirección y número de unidades: situable |
-| 3 | `cslb_contractors` | licencia de contratista **sin dirección**: no se puede situar, así que pierde |
+| 2 | `city_development_permits` | permiso emitido con fecha, clasificación de edificación comercial y dirección de la obra: fechable y situable |
+| 3 | `hud_multifamily` | propiedad institucional con dirección y número de unidades: situable, pero sin fecha de actividad |
 
 Por encima de las tres, lo que ya está en el CRM: una Company existente **nunca se
 modifica** desde aquí. El candidato se omite.
 
 Un detalle que costó un bug: se comparan **las dos** claves de cada candidato
-—nombre y nombre+dirección— no "la más específica que tenga". CSLB no conserva
-dirección, así que su única firma es el nombre; comparando solo la clave más
+—nombre y nombre+dirección— no "la más específica que tenga". Una fuente que no
+conserve dirección tiene como única firma el nombre; comparando solo la clave más
 específica de cada uno, `harborviewelementary` nunca coincidiría con
-`harborviewelementary|1200harborblvd`, y CSLB habría duplicado cada entidad
-que otra fuente ya hubiera traído.
+`harborviewelementary|1200harborblvd`, y esa fuente habría duplicado cada entidad
+que otra ya hubiera traído.
 
 ---
 
 ## Reglas y filtros, scout a scout
 
-### 1 · CaliClean State License Scout (CSLB)
+### 1 · CaliClean Commercial Development Permit Scout (City of San Diego)
 
-**Descarga.** No hay URL estable: hay un formulario con estado, y **la secuencia
-es la autorización**. GET de la página para leer sus tokens → postback
-seleccionando `M` (License Master) → postback sobre `lbMasterCSV` → `text/csv`
-con adjunto `MasterLicenseData.csv`. Los tokens se renuevan en cada postback;
-reutilizar los viejos hace que el portal responda una página de error en lugar
-del CSV.
+**Fuente.** El CSV de aprobaciones **emitidas** del año en curso del conjunto
+"Approvals for development projects" de Development Services. Una sola petición
+GET por corrida, con `If-None-Match` e `If-Modified-Since`; un 304 no gasta la
+ventana del día. El archivo (20.4 MB) se hashea entero, se lee en streaming desde
+un temporal y **se borra siempre**: trae APN, latitud, longitud, número de cuenta
+fiduciaria y número de plano.
 
-Cuatro negativas, cada una comprobada por una prueba:
+**Seis condiciones, y las seis tienen que cumplirse:**
 
-- **un redirect se rechaza** — la descarga verificada entrega el CSV
-  directamente, así que un 302 lleva a un recurso que nadie auditó;
-- **HTML en vez de CSV se rechaza** — parsear una página de error como datos
-  sería inventar filas;
-- **un adjunto que no es el esperado se rechaza**;
-- **no se raspea nada** — ni buscadores de licencias individuales, ni otras
-  páginas del portal.
+1. `APPROVAL_STATUS == 'Issued'` exacto. El fichero se llama "issued" porque las
+   filas tienen fecha de emisión, pero el estado actual varía: en la corrida real
+   había 17 228 filas en otros estados. Solo `Issued` significa "la ciudad dio
+   permiso y la obra está viva".
+2. **Emitido en los últimos 90 días**, medido contra `APPROVAL_ISSUE_DATE`. Para
+   limpieza post-obra, un permiso de hace seis meses probablemente ya está
+   terminado.
+3. **Señal comercial explícita** en `JOB_BC_CODE_DESCRIPTION`, que es la
+   clasificación de edificación del propio permiso — el campo que distingue una
+   obra comercial de una vivienda, y no una adivinanza sobre el texto libre del
+   alcance. `Add/Alt Tenant Improvements` (acondicionamiento de local) es el caso
+   típico. **Una clasificación que no esté en la lista se rechaza, incluida la
+   vacía:** sin señal no hay candidato, y en la corrida real eso descartó 8 738
+   filas sin clasificación.
+4. **Nada residencial ni ambiguo.** `residential`, `single-family`, `multifamily`,
+   `apartment`, `condo`, `townhome`, `dwelling`, `SDU`, `ADU`, `JADU` y
+   `companion unit` se buscan en la clasificación, en el alcance de la aprobación
+   y del proyecto, en el título y en los tipos. Las dos clases que dicen
+   "3+ Fam **or** NonRes" se rechazan como **uso mixto ambiguo**: el propio código
+   no sabe cuál es, y no se interpreta a nuestro favor. Los permisos de rótulo se
+   descartan por relevancia.
+5. **Dirección completa.** `GIS_ADDRESS` llega a veces con el sufijo `[Pending]`,
+   que significa que aún no está asignada; eso no es una dirección. Y se conserva
+   **solo después** de la señal comercial.
+6. **Titular inequívocamente empresarial.** Ver abajo: es la parte difícil.
 
-**Filtros.** `County == San Diego` · `PrimaryStatus == CLEAR` · `BusinessType` solo
-`Corporation` o `Limited Liability` (valores exactos observados; una variante
-exige fixture y documentación) · `Classifications(s)` contiene **`B` como token
-exacto**.
+**El titular es el campo peligroso.** El diccionario oficial lo define como
+*"Contact name whom the Approval is issued to"* — un nombre de **contacto**, y en
+el archivo real hay personas físicas. Así que no basta con que un nombre no
+parezca una persona: hace falta una señal **positiva** de entidad, en dos niveles,
+y el nivel por el que entró queda escrito en la evidencia del candidato:
 
-> El guion **no** separa. `B` es General Building y `B-2` es Residential
-> Remodeling: otra clase, y además apunta a vivienda. Partir por cualquier
-> carácter no alfanumérico convertía `B-2` en `["B","2"]` y aceptaba como clase B
-> a un contratista que no la tiene.
+- **nivel 1** — sufijo de forma jurídica (`LLC`, `Inc`, `Corp`, `Co`, `Ltd`, `LP`,
+  `LLP`, `PC`, `Partnership`);
+- **nivel 2** — designador de actividad empresarial inequívoco **y** ninguna forma
+  de nombre de persona.
 
-**Lo que se conserva:** `LicenseNo`, nombre comercial no personal, `BusinessType`,
-`PrimaryStatus`, `SecondaryStatus`, `Classifications(s)`, `LastUpdate`, `sourceUrl`
-y `verifiedAt`. **Nunca** dirección, teléfono, personas, bonds, workers comp,
-pólizas ni la fila cruda — ni en el staging, ni en un log, ni en el texto de un
-error. El volcado se borra al terminar en un `finally`.
+Y una tercera regla que **salió de la preview real**: si el nombre mezcla una
+persona con una empresa —`Persona - Empresa`, `Empresa / Persona`,
+`Persona/Empresa`— se rechaza entero. La primera versión de la regla no lo hacía,
+y entre 50 candidatos aceptados había tres así: tenían sufijo legal o palabra de
+actividad, pasaban, y habrían metido el nombre de alguien en el CRM como si fuera
+el de una empresa. Esa preview se descartó por eso.
 
-**Clave:** `cslb:<LicenseNo>`. Dedupe cruzado adicional por nombre normalizado,
-porque esta fuente **no conserva dirección a propósito**.
+**Una empresa, una Company.** El mismo titular puede tener diez permisos; gana el
+más reciente, y con fecha igual, el id más bajo. En la corrida real eso colapsó
+131 filas.
+
+**El archivo no viene ordenado por fecha**, así que no se puede cortar en el
+candidato 50 leyendo de arriba: eso daría "los primeros del archivo", no "los más
+recientes". Se recorre entero y se conservan los 50 más recientes, con el id como
+desempate para que dos corridas sobre el mismo archivo den exactamente la misma
+lista.
+
+**Nunca** `GIS_APN`, `GIS_LATITUDE`, `GIS_LONGITUDE`, `PROJECT_TRUST_ACCOUNT_NO`
+ni `JOB_DRAWING_NUMBER`. **Y ningún motivo de rechazo lleva dentro el valor de la
+fila**: rechazar una fila y después escribir su contenido en el motivo es
+registrarla.
+
+**Clave:** `city-dev:<APPROVAL_ID>` + dedupe por nombre y por nombre+dirección.
+
+**La ciudad no sale de una columna** —el archivo no la trae— sino del alcance del
+conjunto de datos, que son los permisos de la Ciudad de San Diego, y la
+procedencia lo dice con esas palabras.
 
 ### 2 · CaliClean Property & Manager Scout (HUD Multifamily)
 
@@ -257,7 +344,7 @@ Cada scout tiene lo suyo y no estorba a los demás ni a County/City:
 - **tope de 50 candidatos válidos** por corrida — de candidatos aceptados, no de
   filas leídas, así que se deja de paginar al alcanzarlo;
 - **una corrida con éxito cada 24 h**, cuota local con lock crash-safe;
-- **guard durable derivado del CRM** por prefijo de clave (`cslb:`, `hud-mf:`,
+- **guard durable derivado del CRM** por prefijo de clave (`city-dev:`, `hud-mf:`,
   `cde:`), con tolerancia de desfase de reloj: sin ella, un CRM dos segundos
   adelantado leería su propia marca como "fechada en el futuro" y bloquearía cada
   corrida para siempre;
@@ -297,8 +384,8 @@ explicando qué falta (egress, evidencia, `enabled`, preview revisada).
 
 Permitidos y verificados desde este contenedor:
 
-    web.cslb.ca.gov
     egis.hud.gov
+    seshat.datasd.org · data.sandiego.gov
 
     www.cde.ca.gov
 

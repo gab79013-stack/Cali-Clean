@@ -45,3 +45,40 @@ abierto, licencia presente, dirección institucional y no residencial— viven a
 en `evaluateCdeRow`, aplicadas a centros educativos. Hay una prueba que comprueba
 que nada del árbol activo importa el cliente ni llama a la regla retirada: borrar
 código no sirve de nada si queda un `import` que lo resucite.
+
+---
+
+# `cslb_contractors` · CaliClean State License Scout
+
+**Fuente:** descarga masiva de licencias de contratista del CSLB,
+`https://web.cslb.ca.gov/onlineservices/dataportal/ContractorList`.
+
+**Retirada como opción activa el 2026-10-04.** No por licencia ni por robots —los
+dos estaban a favor— sino porque **el publicador no deja descargar**:
+
+- La secuencia de postbacks de WebForms se verificó control por control: el GET
+  entrega los tokens y la cookie de sesión, el primer postback
+  (`__EVENTTARGET=ctl00$MainContent$ddlStatus`, valor `M`) renderiza la página del
+  dataset con `MainContent_lbMasterCSV` presente, y el segundo
+  (`__EVENTTARGET=ctl00$MainContent$lbMasterCSV`) debería entregar el CSV.
+- Ese tercer paso devuelve **HTTP 403 "Request Rejected"** del WAF del portal.
+  Support IDs registrados: `62fca6cc-97e3-411d-9157-f2390f21ccd5` y
+  `a84ed006-6cbb-451a-843c-b5109044f13a`. Dos intentos, `evasionAttempted: false`.
+- `robots.txt` de `web.cslb.ca.gov`: **404**, 1245 B,
+  `sha256:dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f`. Sin
+  política, lo que no es permiso; el permiso venía de que el portal publica esa
+  descarga como su vía oficial de datos masivos.
+
+**No se intenta sortear el WAF.** El remedio de un 403 con support ID es
+preguntarle a CSLB, no cambiar la huella del cliente. Mientras no haya respuesta
+o otra vía oficial, esta fuente no cuenta entre las utilizables.
+
+| Archivo aquí | Qué era |
+|---|---|
+| `cslb_contractors.manifest.json` | el manifiesto, con la secuencia verificada y el 403 documentado |
+| `cslb.attestation.json` | la constancia, con su evidencia tal como quedó |
+| `webforms-client.js.retired` | el cliente de WebForms. Era su único consumidor; sale del árbol activo con la extensión cambiada para que no se importe por descuido |
+
+Se eliminaron de `rules.js` `evaluateCslbRow` y `hasClassification`. La sustituye
+`city_development_permits` (**CaliClean Commercial Development Permit Scout**),
+que no comparte host, ni código de acceso, ni dato con ella.

@@ -31,8 +31,8 @@ const attDir = path.join(tmpDir, 'att');
 fs.mkdirSync(manifestDir, { recursive: true });
 fs.mkdirSync(attDir, { recursive: true });
 
-const SCOUTS = ['cslb_contractors', 'hud_multifamily', 'cde_schools'];
-const SLUG = { cslb_contractors: 'cslb', hud_multifamily: 'hud', cde_schools: 'cde' };
+const SCOUTS = ['hud_multifamily', 'cde_schools', 'city_development_permits'];
+const SLUG = { hud_multifamily: 'hud', cde_schools: 'cde', city_development_permits: 'city-dev' };
 
 // Manifiestos: copia del real con enabled=true.
 for (const id of SCOUTS) {
@@ -80,7 +80,6 @@ const staging = await import('../src/prospecting/scouts/staging.js');
 const intake = await import('../src/prospecting/scouts/intake.js');
 const rules = await import('../src/prospecting/scouts/rules.js');
 const { queryArcgis, ArcgisError } = await import('../src/prospecting/scouts/arcgis-client.js');
-const { downloadMasterCsv, extractFormTokens, WebFormsError } = await import('../src/prospecting/scouts/webforms-client.js');
 const quota = await import('../src/prospecting/sources/quota.js');
 const { checkDurableQuota } = await import('../src/prospecting/sources/durable-quota.js');
 const fx = await import('./fixtures/fake-scouts.js');
@@ -97,7 +96,7 @@ const ZIPS = ['92101', '92103', '92111', '92123', '91910'];
 /** Corre un scout contra su portal simulado y devuelve el resultado. */
 async function corre(scoutId, servidor, extra = {}) {
   const override = {
-    cslb_contractors: { portalUrlOverride: servidor.portalUrl },
+    city_development_permits: { downloadUrlOverride: servidor.downloadUrl },
     hud_multifamily: { queryUrlOverride: servidor.queryUrl },
     cde_schools: { downloadUrlOverride: servidor.downloadUrl },
   }[scoutId];
@@ -124,20 +123,47 @@ test('el estado versionado de cada scout es el que la verificación real encontr
   assert.equal(hud.schemaVerification.allowlistFieldsAllExist, true);
   assert.equal(hud.robots.disallowsOurPath, false);
 
-  // CSLB: la secuencia existe y se verificó, pero el portal rechaza la descarga.
-  const cslb = leer('cslb_contractors');
-  assert.equal(cslb.enabled, false);
-  assert.equal(cslb.state, 'BLOCKED_BY_PUBLISHER');
-  assert.equal(cslb.cloudVerification.step3Csv.httpStatus, 403);
-  assert.equal(cslb.cloudVerification.step3Csv.evasionAttempted, false,
-    'no se intenta sortear la protección de un portal');
-  assert.ok(cslb.blockers.some((b) => /403|WAF|rechaza/i.test(b)));
+  // La City: la única con licencia EXPLÍCITA, y es lo que la enciende.
+  const city = leer('city_development_permits');
+  assert.equal(city.enabled, true);
+  assert.equal(city.state, 'ENABLED');
+  assert.deepEqual(city.blockers, []);
+  assert.equal(city.license.name, 'ODC PDDL 1.0');
+  assert.equal(city.license.status, 'VERIFICADA');
+  assert.equal(city.replaces, 'cslb_contractors');
+  for (const k of ['portalVerified', 'exactLinkVerified', 'licenseVerified',
+    'robotsVerified', 'schemaVerified', 'sizeAndCadenceVerified']) {
+    assert.equal(city.verification[k], true, `${k} se dio por hecho`);
+  }
 
-  // Y su robots SÍ se leyó: 404, sin política. Eso es lo único que afirma.
-  assert.equal(cslb.robots.status, 'LEIDO');
-  assert.equal(cslb.robots.httpStatus, 404);
-  assert.equal(cslb.robots.disallowsOurPath, false);
-  assert.match(cslb.robots.interpretation, /NO se interpreta como permiso/);
+  // Los robots de los dos hosts se leyeron, y los dos son hallazgos, no permiso.
+  assert.equal(city.robots.portalRobots.httpStatus, 404);
+  assert.equal(city.robots.downloadRobots.httpStatus, 403);
+  assert.equal(city.robots.disallowsOurPath, false);
+  assert.match(city.robots.disallowsOurPathBasis, /NO permiso|NO es permiso|hallazgos, NO/i);
+  assert.match(city.robots.interpretation, /licencia gobierna la reutilizacion|licencia/i);
+  // El texto de la PDDL vive en un host no permitido y no se finge haberlo leído.
+  assert.equal(city.license.licenseUrlReadable, false);
+  assert.match(city.license.footerCopyrightNote, /licencia EXPLICITA|concesion escrita/i);
+
+  // La discrepancia de tamaño del portal está explicada, no ignorada: el fichero
+  // de 2025, que ya es definitivo, coincide; los de 2026 crecen a diario.
+  assert.equal(city.downloadVerification.sizeDiscrepancy.resolved, true);
+  assert.match(city.downloadVerification.sizeDiscrepancy.evidence, /2025/);
+  assert.match(city.downloadVerification.sizeDiscrepancy.whatWeValidate, /ETag|Content-Length/);
+  assert.equal(city.downloadVerification.contentLength, 21386385);
+  assert.match(city.downloadVerification.updateCadence, /Diaria/);
+
+  // Y las columnas peligrosas que el archivo SÍ trae están prohibidas.
+  assert.equal(city.schemaVerification.observedFieldCount, 54);
+  assert.deepEqual(
+    [...city.fields.allowed, ...city.fields.neverRequested].sort(),
+    [...city.schemaVerification.observedFields].sort(),
+  );
+  for (const prohibido of ['GIS_APN', 'GIS_LATITUDE', 'GIS_LONGITUDE',
+    'PROJECT_TRUST_ACCOUNT_NO', 'JOB_DRAWING_NUMBER']) {
+    assert.ok(city.fields.neverRequested.includes(prohibido), `${prohibido} tiene que estar prohibida`);
+  }
 
   // CDE: auditada en vivo. Cuatro de cinco comprobaciones pasaron; la licencia
   // no, porque la declaración de copyright del sitio no es legible desde aquí.
@@ -197,6 +223,32 @@ test('el estado versionado de cada scout es el que la verificación real encontr
   assert.notEqual(cde.egressHost, 'data.chhs.ca.gov', 'no se reutiliza el host retirado');
 });
 
+test('CSLB está retirada: ni manifiesto, ni cliente, ni regla en el árbol activo', () => {
+  // Se retiró porque su portal rechaza la descarga con un 403 del WAF. Lo que
+  // queda es el expediente, no código que alguien pueda volver a enchufar.
+  assert.equal(fs.existsSync(new URL('../config/scouts/cslb_contractors.json', import.meta.url).pathname), false);
+  assert.equal(fs.existsSync(new URL('../config/source-attestation-cslb.json', import.meta.url).pathname), false);
+  assert.equal(fs.existsSync(new URL('../src/prospecting/scouts/webforms-client.js', import.meta.url).pathname), false);
+  assert.ok(!registry.SCOUT_IDS.includes('cslb_contractors'));
+  assert.equal(rules.evaluateCslbRow, undefined, 'la regla retirada sigue exportada');
+  assert.equal(rules.hasClassification, undefined);
+  assert.equal(intake.SOURCE_PRIORITY.includes('cslb_contractors'), false,
+    'una fuente retirada no puede seguir en la prioridad de la capa central');
+
+  for (const dir of ['../src/prospecting/scouts/', '../src/prospecting/sources/']) {
+    const base = new URL(dir, import.meta.url);
+    for (const f of fs.readdirSync(base)) {
+      if (!f.endsWith('.js')) continue;
+      const src = fs.readFileSync(new URL(f, base), 'utf8');
+      assert.ok(!/webforms-client|downloadMasterCsv/.test(src), `${f} sigue importando el cliente retirado`);
+      assert.ok(!/evaluateCslbRow/.test(src), `${f} sigue llamando a la regla retirada`);
+    }
+  }
+  const readme = fs.readFileSync(new URL('../docs/retired/README.md', import.meta.url), 'utf8');
+  assert.match(readme, /Request Rejected|403/);
+  assert.match(readme, /62fca6cc-97e3-411d-9157-f2390f21ccd5/, 'sin el support ID no se puede reclamar');
+});
+
 test('HCAI está retirada: ni manifiesto, ni cliente, ni regla en el árbol activo', () => {
   // Se retiró porque su robots.txt prohíbe /api/. Lo que queda es el expediente
   // en docs/retired/, no código que alguien pueda volver a enchufar.
@@ -236,7 +288,7 @@ test('el robots del publicador bloquea aunque alguien ponga enabled=true', async
     disallowReason: 'Disallow: /schooldirectory/ para User-agent: *',
   };
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(m, null, 2));
-  for (const otro of ['cslb_contractors', 'hud_multifamily']) {
+  for (const otro of ['hud_multifamily', 'city_development_permits']) {
     fs.copyFileSync(new URL(`../config/scouts/${otro}.json`, import.meta.url), path.join(dir, `${otro}.json`));
   }
 
@@ -269,7 +321,7 @@ test('un robots que no se ha leído tampoco abre la puerta', async () => {
   // tiene que seguir mordiendo.
   m.robots = { status: 'NO_LEIDO', disallowsOurPath: null, interpretation: 'no se ha leído' };
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(m, null, 2));
-  for (const otro of ['cslb_contractors', 'hud_multifamily']) {
+  for (const otro of ['hud_multifamily', 'city_development_permits']) {
     fs.copyFileSync(new URL(`../config/scouts/${otro}.json`, import.meta.url), path.join(dir, `${otro}.json`));
   }
 
@@ -281,8 +333,8 @@ test('un robots que no se ha leído tampoco abre la puerta', async () => {
     assert.equal(c.allowed, false, 'un robots sin leer se tomó como permiso');
     assert.equal(c.reason, 'robots_sin_leer');
     assert.equal(c.overridable, false);
-    // Y la fuente que sí lo leyó —404, sin política— no queda atrapada por esto.
-    assert.equal(registry.checkScoutAllowed('cslb_contractors').reason, 'no_habilitada');
+    // Y las que sí lo leyeron no quedan atrapadas por esto.
+    assert.equal(registry.checkScoutAllowed('city_development_permits').allowed, true);
   } finally {
     process.env.SCOUT_MANIFEST_DIR = original;
     registry.loadManifests({ reload: true, dir: manifestDir });
@@ -301,7 +353,7 @@ test('la evidencia de HUD está verificada en vivo; la de los otros dos, no', as
   assert.equal(hud.entry.artifacts.robotsTxt.httpStatus, 404);
   assert.equal(hud.entry.artifacts.robotsTxt.httpStatusIsEvidence, true);
 
-  for (const id of ['cslb_contractors', 'cde_schools']) {
+  for (const id of ['cde_schools']) {
     const r = attestationFor(id, {
       file: path.join(process.cwd(), 'config', `source-attestation-${SLUG[id]}.json`),
     });
@@ -310,7 +362,7 @@ test('la evidencia de HUD está verificada en vivo; la de los otros dos, no', as
 });
 
 test('los hosts que harían falta para una preview real son exactamente tres', () => {
-  assert.deepEqual(registry.requiredEgressHosts(), ['web.cslb.ca.gov', 'egis.hud.gov', 'www.cde.ca.gov']);
+  assert.deepEqual(registry.requiredEgressHosts(), ['egis.hud.gov', 'www.cde.ca.gov', 'seshat.datasd.org']);
 });
 
 // ══ Guard duro del outbound ═══════════════════════════════════
@@ -321,167 +373,7 @@ test('el guard del outbound lanza, no devuelve un valor que se pueda ignorar', (
   }
 });
 
-// ══ 1. CSLB · WebForms ════════════════════════════════════════
-test('la secuencia de WebForms es exactamente la auditada', async () => {
-  const s = await fx.createFakeCslbServer();
-  try {
-    const r = await corre('cslb_contractors', s);
-    assert.equal(r.blocked, null);
-    // GET de tokens, postback de selección, postback del CSV. Tres, en ese orden.
-    assert.equal(s.requests.length, 3, `hubo ${s.requests.length} peticiones`);
-    assert.equal(s.requests[0].method, 'GET');
-    // Nombre REAL del control, verificado contra el portal: el `__EVENTTARGET`
-    // lleva la ruta completa de ASP.NET. Con el nombre corto el postback no se
-    // reconoce y el portal devuelve otra página.
-    assert.equal(s.requests[1].eventTarget, 'ctl00$MainContent$ddlStatus');
-    assert.equal(s.requests[1].dataType, 'M');
-    assert.equal(s.requests[2].eventTarget, 'ctl00$MainContent$lbMasterCSV');
-    // Los tokens se renuevan: el segundo postback usa los del primero.
-    assert.equal(s.requests[2].viewstate, 'VS-2', 'se reutilizó un __VIEWSTATE caducado');
-    assert.ok(s.requests.every((q) => q.userAgent), 'sin User-Agent no se identifica quién pide');
-  } finally { s.close(); }
-});
-
-test('un redirect en la descarga se rechaza en lugar de seguirse', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'redirect' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), (err) => {
-      assert.equal(err.name, 'WebFormsError');
-      assert.equal(err.code, 'REDIRECT_REJECTED');
-      return true;
-    });
-  } finally { s.close(); }
-});
-
-test('si el portal responde HTML en vez de CSV, no se parsea como datos', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'htmlInsteadOfCsv' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), (err) => {
-      assert.equal(err.code, 'NOT_CSV');
-      assert.match(err.message, /página de error/);
-      return true;
-    });
-  } finally { s.close(); }
-});
-
-test('un adjunto que no es el esperado se rechaza', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'wrongAttachment' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), /WRONG_ATTACHMENT|adjunto no es/);
-  } finally { s.close(); }
-});
-
-test('sin __VIEWSTATE el formulario no es el auditado y se para', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'noViewstate' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), /NO_VIEWSTATE|__VIEWSTATE/);
-  } finally { s.close(); }
-});
-
-test('un CSV que anuncia más del tope se rechaza antes de leerlo', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'oversize' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), /TOO_LARGE|tope/i);
-  } finally { s.close(); }
-});
-
-test('una descarga cortada no deja ni filas a medias ni el archivo en disco', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'truncated' });
-  try {
-    await assert.rejects(() => corre('cslb_contractors', s), (err) => {
-      assert.equal(err.name, 'WebFormsError');
-      for (const aguja of fx.PII_PROHIBIDA) {
-        assert.ok(!err.message.includes(aguja), `el error filtró "${aguja}"`);
-      }
-      return true;
-    });
-    assert.deepEqual(
-      fs.readdirSync(process.env.SOURCE_CSV_TMP_DIR).filter((f) => f.startsWith('cc-csv-')), [],
-      'quedó un volcado con direcciones y personas en disco',
-    );
-  } finally { s.close(); }
-});
-
-test('un CSV vacío o malformado es un error, no media verdad', async () => {
-  for (const mode of ['empty', 'malformedCsv']) {
-    const s = await fx.createFakeCslbServer({ mode });
-    try {
-      await assert.rejects(() => corre('cslb_contractors', s));
-    } finally { s.close(); }
-  }
-});
-
-test('un 429 se obedece y la corrida sigue', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'throttled' });
-  try {
-    const r = await corre('cslb_contractors', s);
-    assert.equal(r.blocked, null);
-    assert.equal(r.metrics.http429, 1);
-    assert.equal(r.metrics.retries, 1);
-    assert.ok(r.metrics.accepted > 0);
-  } finally { s.close(); }
-});
-
-test('CSLB acepta solo lo demostrable, y cuenta cada rechazo por su razón', async () => {
-  const s = await fx.createFakeCslbServer();
-  try {
-    const r = await corre('cslb_contractors', s);
-    const nombres = r.staging.doc.candidates.map((c) => c.businessName).sort();
-    assert.deepEqual(nombres, [
-      'Gaslamp Construction, "The Original" LLC',
-      'Harbor Builders Incorporated',
-      'Mesa\nRoofing Company',
-    ].sort());
-
-    assert.equal(r.metrics.accepted, 3);
-    assert.equal(r.metrics.rejected_out_of_area, 1, 'Riverside');
-    assert.equal(r.metrics.rejected_inactive, 2, 'EXPIRED y SUSPENDED');
-    assert.equal(r.metrics.rejected_personal, 3, 'Sole Owner, Partnership y un nombre de persona');
-    assert.equal(r.metrics.rejected_unverifiable, 2, 'sin clase B: C-36 y B-2');
-    assert.equal(r.metrics.deduped, 1, 'la licencia repetida');
-    assert.equal(r.metrics.crm_writes, 0);
-    assert.equal(r.metrics.outbound, 0);
-  } finally { s.close(); }
-});
-
-test('CSLB no conserva dirección, teléfono, bonds ni personas', async () => {
-  const s = await fx.createFakeCslbServer();
-  try {
-    const r = await corre('cslb_contractors', s);
-    const texto = fs.readFileSync(r.staging.file, 'utf8');
-    for (const aguja of fx.PII_PROHIBIDA) {
-      assert.ok(!texto.includes(aguja), `"${aguja}" entró en el staging`);
-    }
-    for (const c of r.staging.doc.candidates) {
-      assert.equal(c.address, null, 'esta fuente no conserva dirección a propósito');
-      assert.equal(c.city, null);
-      assert.equal(c.zip, null);
-      assert.match(c.dedupKey, /^cslb:/);
-    }
-  } finally { s.close(); }
-});
-
-test('una columna nueva con datos personales se cae sin que nadie la prohíba', async () => {
-  const s = await fx.createFakeCslbServer({ mode: 'unknownColumns' });
-  try {
-    const r = await corre('cslb_contractors', s);
-    const texto = fs.readFileSync(r.staging.file, 'utf8');
-    assert.ok(!texto.includes('+16195550101'));
-    assert.ok(!texto.includes('privado@ejemplo.invalid'));
-    assert.ok(!texto.includes('OwnerMobile'));
-  } finally { s.close(); }
-});
-
-test('extractFormTokens lee tokens, no contenido', () => {
-  const html = '<input name="__VIEWSTATE" value="abc" /><input value="gen" name="__VIEWSTATEGENERATOR" />'
-    + '<input name="__EVENTVALIDATION" value="ev" /><p>Jose Ramon Ortega, 619-555-0101</p>';
-  const t = extractFormTokens(html);
-  assert.deepEqual(t, { __VIEWSTATE: 'abc', __VIEWSTATEGENERATOR: 'gen', __EVENTVALIDATION: 'ev' });
-  assert.ok(!JSON.stringify(t).includes('Ortega'));
-  assert.throws(() => extractFormTokens('<html></html>'), WebFormsError);
-});
-
-// ══ 2. HUD · ArcGIS ═══════════════════════════════════════════
+// ══ 1. HUD · ArcGIS ═══════════════════════════════════════════
 test('ArcGIS se consulta sin geometría y solo con los campos de la allowlist', async () => {
   const s = await fx.createFakeArcgisServer();
   try {
@@ -603,7 +495,7 @@ test('si el servidor devuelve contacto y coordenadas de más, se caen igual', as
   } finally { s.close(); }
 });
 
-// ══ 3. CDE · volcado TSV del directorio ═══════════════════════
+// ══ 2. CDE · volcado TSV del directorio ═══════════════════════
 test('el volcado se descarga una sola vez, del recurso exacto y nada más', async () => {
   const s = await fx.createFakeCdeServer();
   try {
@@ -634,7 +526,7 @@ test('solo se descarga el recurso exacto que la auditoría permite', async () =>
   const otro = JSON.parse(JSON.stringify(m));
   otro.downloadUrl = 'https://www.cde.ca.gov/schooldirectory/report?rid=dl2&tp=txt';
   fs.writeFileSync(path.join(dir, 'cde_schools.json'), JSON.stringify(otro, null, 2));
-  for (const id of ['cslb_contractors', 'hud_multifamily']) {
+  for (const id of ['hud_multifamily', 'city_development_permits']) {
     fs.copyFileSync(path.join(manifestDir, `${id}.json`), path.join(dir, `${id}.json`));
   }
 
@@ -880,10 +772,332 @@ test('la procedencia del volcado trae su huella, y no afirma una licencia que no
   } finally { s.close(); }
 });
 
+// ══ 3. City · aprobaciones de desarrollo (CSV) ════════════════
+test('el CSV se descarga una sola vez, del recurso exacto y nada más', async () => {
+  const s = await fx.createFakeCityDevServer();
+  try {
+    const r = await corre('city_development_permits', s);
+    assert.equal(r.blocked, null);
+    assert.equal(s.requests.length, 1, `hubo ${s.requests.length} peticiones`);
+    assert.equal(s.requests[0].method, 'GET');
+    assert.equal(s.requests[0].path, '/development_permits/approvals_issued_2026_datasd.csv');
+    assert.equal(s.requests[0].range, null, 'el scout descarga el archivo, no trozos');
+    assert.ok(s.requests[0].userAgent, 'sin User-Agent no se identifica quién pide');
+    assert.equal(r.metrics.requests, 1);
+  } finally { s.close(); }
+});
+
+test('solo se descarga el recurso que la auditoría permite', async () => {
+  const m = registry.manifestFor('city_development_permits');
+  assert.deepEqual(m.robots.allowedResources, [m.downloadUrl]);
+  assert.equal(m.downloadUrl,
+    'https://seshat.datasd.org/development_permits/approvals_issued_2026_datasd.csv');
+  assert.equal(m.downloadLabelObserved, 'Issued approvals (2026)');
+
+  const dir = path.join(tmpDir, 'scouts-otro-csv');
+  fs.mkdirSync(dir, { recursive: true });
+  const otro = JSON.parse(JSON.stringify(m));
+  // El hermano "created" existe en el mismo portal y NO es el que se auditó.
+  otro.downloadUrl = 'https://seshat.datasd.org/development_permits/approvals_created_2026_datasd.csv';
+  fs.writeFileSync(path.join(dir, 'city_development_permits.json'), JSON.stringify(otro, null, 2));
+  for (const id of ['hud_multifamily', 'cde_schools']) {
+    fs.copyFileSync(path.join(manifestDir, `${id}.json`), path.join(dir, `${id}.json`));
+  }
+  const original = process.env.SCOUT_MANIFEST_DIR;
+  process.env.SCOUT_MANIFEST_DIR = dir;
+  try {
+    registry.loadManifests({ reload: true, dir });
+    await assert.rejects(
+      () => runScout('city_development_permits', {
+        quotaOptions: nuevoEstado(), sleep: async () => {},
+        fetchImpl: () => { throw new Error('no debería llegar a pedir nada'); },
+      }),
+      /no está en los recursos permitidos/,
+    );
+  } finally {
+    process.env.SCOUT_MANIFEST_DIR = original;
+    registry.loadManifests({ reload: true, dir: manifestDir });
+  }
+});
+
+test('la City acepta solo obra comercial emitida y reciente, y cuenta cada rechazo', async () => {
+  const s = await fx.createFakeCityDevServer();
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    const nombres = r.staging.doc.candidates.map((c) => c.businessName).sort();
+    assert.deepEqual(nombres, [
+      'Harbor Interiors, Inc',
+      'Davies Electric Co., Inc',
+      'CertEX Construction',
+      'Elements of "Hospitality", Inc',
+    ].sort());
+
+    assert.equal(r.metrics.fetched, fx.CITY_DEV_ROWS.length);
+    assert.equal(r.metrics.accepted, 4);
+    assert.equal(r.metrics.rejected_inactive, 3, 'Closed, Pending Invoice Payment y Cancelled');
+    assert.equal(r.metrics.rejected_stale, 1, 'emitida en febrero, fuera de la ventana de 90 días');
+    assert.equal(r.metrics.rejected_unverifiable, 6,
+      'sin fecha, fecha futura, sin clasificación, sin dirección, [Pending] y sin APPROVAL_ID');
+    assert.equal(r.metrics.rejected_not_commercial, 3, 'unifamiliar, 5+ apartamentos y companion unit');
+    assert.equal(r.metrics.rejected_mixed_use_ambiguous, 2, 'las dos clases "3+ Fam or NonRes"');
+    assert.equal(r.metrics.rejected_not_relevant, 1, 'el rótulo');
+    assert.equal(r.metrics.rejected_residential, 3, 'alcance con dwelling, ADU, y dirección con APT');
+    assert.equal(r.metrics.rejected_personal, 8,
+      'dos personas, una lista, un nombre pelado, un titular vacío y tres compuestos persona+empresa');
+    assert.equal(r.metrics.deduped, 1, 'el segundo permiso del mismo titular');
+    assert.equal(r.metrics.crm_writes, 0);
+    assert.equal(r.metrics.outbound, 0);
+
+    // Ni una fila se pierde sin contarse.
+    const sumado = r.metrics.accepted + r.metrics.deduped + r.metrics.rejected_inactive
+      + r.metrics.rejected_stale + r.metrics.rejected_unverifiable + r.metrics.rejected_not_commercial
+      + r.metrics.rejected_mixed_use_ambiguous + r.metrics.rejected_not_relevant
+      + r.metrics.rejected_residential + r.metrics.rejected_personal;
+    assert.equal(sumado, r.metrics.fetched);
+  } finally { s.close(); }
+});
+
+test('un titular solo pasa con señal positiva de entidad, y se anota con qué nivel', () => {
+  // El diccionario oficial define el campo como "Contact name whom the Approval
+  // is issued to". Es un nombre de CONTACTO: en el archivo real hay personas.
+  for (const [nombre, nivel] of [
+    ['Harbor Interiors, Inc', 1],
+    ['Daylight Coffee LLC', 1],
+    ['Jenco Building Group, Inc', 1],
+    ['Pacific Holdings L.P.', 1],
+    ['CertEX Construction', 2],
+    ['Mesa Roofing Services', 2],
+  ]) {
+    const r = rules.corporateHolder(nombre);
+    assert.equal(r.ok, true, `${nombre} se rechazó: ${r.reason}`);
+    assert.equal(r.tier, nivel, `${nombre} entró por el nivel ${r.tier}`);
+  }
+  for (const nombre of ['Cole Storey', 'Architect MD Lyon, Sara Hoffelt', 'Ortega, Jose Ramon',
+    'Jose R Ortega', 'Acme', 'Maria Lopez', '', '   ',
+    // Compuestos persona + empresa. Los encontró la preview real: tenían sufijo
+    // legal o palabra de actividad, y habrían metido a una persona en el CRM
+    // como si fuera una empresa.
+    'Ana Ruiz - Flow Builders', 'Harbor Builders Inc. / Luis Mora', 'Pedro Soto/Del Mar Builders',
+    'Mesa Roofing LLC / Pedro Soto']) {
+    const r = rules.corporateHolder(nombre);
+    assert.equal(r.ok, false, `"${nombre}" se aceptó como empresa`);
+    assert.ok(r.reason, 'un rechazo sin razón no se puede auditar');
+  }
+});
+
+test('la señal comercial sale de la clasificación del permiso, no de adivinar', () => {
+  const m = registry.manifestFor('city_development_permits');
+  const base = fx.cityDevRow({ APPROVAL_ID: '9000001', APPROVAL_PERMIT_HOLDER: 'Harbor Interiors, Inc' });
+  assert.equal(rules.evaluateCityDevRow(base, m, { now: fx.CITY_DEV_NOW }).ok, true);
+
+  for (const [patch, kind] of [
+    [{ JOB_BC_CODE_DESCRIPTION: '' }, 'unverifiable'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Add/Alt 1 or 2 Fam, No Chg DU' }, 'not_commercial'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Five or More Family Apt' }, 'not_commercial'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Acc Bldg to 3+ Fam or NonRes' }, 'mixed_use_ambiguous'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Pool or Spa/3+ Fam or NonRes' }, 'mixed_use_ambiguous'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Signs - Permanent' }, 'not_relevant'],
+    [{ JOB_BC_CODE_DESCRIPTION: 'Clase Que Nadie Ha Visto' }, 'not_commercial'],
+    [{ APPROVAL_STATUS: 'Closed' }, 'inactive'],
+    [{ APPROVAL_ISSUE_DATE: '2026-01-02' }, 'stale'],
+    [{ APPROVAL_ISSUE_DATE: '2027-05-01' }, 'unverifiable'],
+    [{ APPROVAL_ISSUE_DATE: '' }, 'unverifiable'],
+    [{ APPROVAL_ID: '' }, 'unverifiable'],
+    [{ GIS_ADDRESS: '' }, 'unverifiable'],
+    [{ GIS_ADDRESS: '2310 CAMINO DEL RIO NORTH [Pending]' }, 'unverifiable'],
+    [{ GIS_ADDRESS: '77 BAY BLVD APT 7B' }, 'residential'],
+    [{ APPROVAL_SCOPE: 'New single-family dwelling' }, 'residential'],
+    [{ PROJECT_SCOPE: 'JADU conversion' }, 'residential'],
+    [{ APPROVAL_PERMIT_HOLDER: 'Cole Storey' }, 'personal'],
+    [{ APPROVAL_PERMIT_HOLDER: 'Ana Ruiz - Flow Builders' }, 'personal'],
+    [{ APPROVAL_PERMIT_HOLDER: 'Harbor Builders Inc. / Luis Mora' }, 'personal'],
+  ]) {
+    const v = rules.evaluateCityDevRow({ ...base, ...patch }, m, { now: fx.CITY_DEV_NOW });
+    assert.equal(v.ok, false, `${JSON.stringify(patch)} se aceptó`);
+    assert.equal(v.kind, kind, `${JSON.stringify(patch)} → ${v.kind}`);
+    assert.ok(v.reason, 'un rechazo sin razón no se puede auditar');
+  }
+});
+
+test('el motivo de un rechazo no lleva dentro el valor de la fila', () => {
+  const m = registry.manifestFor('city_development_permits');
+  const fila = fx.cityDevRow({
+    APPROVAL_ID: '9000002', APPROVAL_PERMIT_HOLDER: 'Cole Storey',
+    GIS_ADDRESS: '77 BAY BLVD APT 7B',
+  });
+  const v = rules.evaluateCityDevRow(fila, m, { now: fx.CITY_DEV_NOW });
+  assert.equal(v.ok, false);
+  // Rechazar una fila y luego escribir su contenido en el motivo es registrarla.
+  for (const aguja of ['Cole Storey', '77 BAY BLVD', '5350123400', 'TA-99881', 'DWG-2026-4412']) {
+    assert.ok(!v.reason.includes(aguja), `el motivo filtró "${aguja}"`);
+  }
+});
+
+test('un titular con varios permisos es una sola Company, y gana el más reciente', async () => {
+  const s = await fx.createFakeCityDevServer();
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    const harbor = r.staging.doc.candidates.filter((c) => c.businessName === 'Harbor Interiors, Inc');
+    assert.equal(harbor.length, 1, 'el mismo titular produjo dos Companies');
+    // 2630001 se emitió el 2026-09-15; 2630010, el 2026-07-20.
+    assert.equal(harbor[0].evidence.approvalId, '2630001');
+    assert.equal(harbor[0].evidence.issueDate, '2026-09-15');
+    assert.equal(r.metrics.deduped, 1);
+  } finally { s.close(); }
+});
+
+test('el archivo no viene ordenado por fecha, así que el tope coge los más recientes', async () => {
+  // Esto importa: cortar en el candidato 50 leyendo de arriba daría "los primeros
+  // del archivo", no "los más recientes". En el fichero real había permisos de
+  // enero junto a otros de octubre en el mismo tramo.
+  const filas = [];
+  for (let i = 0; i < 70; i++) {
+    // Días 10-27, para que ninguna fecha roce el corte de la ventana: lo que esta
+    // prueba mide es el orden, no el filtro de antigüedad.
+    const dia = String((i % 18) + 10).padStart(2, '0');
+    const mes = i % 2 === 0 ? '09' : '07';   // alternando reciente y antiguo
+    filas.push(fx.cityDevRow({
+      APPROVAL_ID: `27${String(i).padStart(5, '0')}`,
+      APPROVAL_PERMIT_HOLDER: `Obras Numero ${i} LLC`,
+      APPROVAL_ISSUE_DATE: `2026-${mes}-${dia}`,
+    }));
+  }
+  const s = await fx.createFakeCityDevServer({ body: fx.cityDevCsv(filas) });
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    assert.equal(r.metrics.accepted, 50, `aceptó ${r.metrics.accepted}`);
+    assert.equal(r.metrics.over_cap, 20, 'no contó los que quedaron fuera del tope');
+    const fechas = r.staging.doc.candidates.map((c) => c.evidence.issueDate);
+    assert.deepEqual(fechas, [...fechas].sort().reverse(), 'no están de más reciente a más antiguo');
+    // Los 35 de septiembre entran todos; ninguno de julio puede desplazarlos.
+    assert.equal(fechas.filter((f) => f.startsWith('2026-09')).length, 35);
+  } finally { s.close(); }
+});
+
+test('dos corridas sobre el mismo archivo eligen exactamente los mismos 50', async () => {
+  const filas = Array.from({ length: 60 }, (_, i) => fx.cityDevRow({
+    // Misma fecha a propósito: el desempate tiene que ser el id, no el azar.
+    APPROVAL_ID: `28${String(i).padStart(5, '0')}`,
+    APPROVAL_PERMIT_HOLDER: `Empate ${i} LLC`,
+    APPROVAL_ISSUE_DATE: '2026-09-01',
+  }));
+  const cuerpo = fx.cityDevCsv(filas);
+  const claves = [];
+  for (let n = 0; n < 2; n++) {
+    const s = await fx.createFakeCityDevServer({ body: cuerpo });
+    try {
+      const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+      claves.push(r.staging.doc.candidates.map((c) => c.dedupKey).join('|'));
+    } finally { s.close(); }
+  }
+  assert.equal(claves[0], claves[1], 'la selección no es determinista');
+});
+
+test('la City no conserva parcela, coordenadas, cuenta fiduciaria ni plano', async () => {
+  const s = await fx.createFakeCityDevServer();
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    const texto = fs.readFileSync(r.staging.file, 'utf8');
+    for (const aguja of fx.PII_PROHIBIDA) {
+      assert.ok(!texto.includes(aguja), `"${aguja}" entró en el staging`);
+    }
+    for (const prohibido of registry.neverRequested('city_development_permits')) {
+      assert.ok(!texto.includes(prohibido), `el nombre de columna ${prohibido} sobrevivió`);
+    }
+    for (const c of r.staging.doc.candidates) {
+      assert.match(c.dedupKey, /^city-dev:/);
+      assert.equal(c.city, 'San Diego');
+      assert.equal(c.zip, null, 'el archivo no trae ZIP y no se inventa');
+      assert.equal(c.evidence.apn, undefined);
+      assert.equal(c.evidence.latitude, undefined);
+      assert.equal(c.evidence.trustAccount, undefined);
+      assert.equal(c.evidence.drawingNumber, undefined);
+    }
+  } finally { s.close(); }
+});
+
+test('una columna nueva con teléfono y correo se cae sin que nadie la prohíba', async () => {
+  const s = await fx.createFakeCityDevServer({ mode: 'unknownColumns' });
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    assert.equal(r.metrics.accepted, 1);
+    const texto = fs.readFileSync(r.staging.file, 'utf8');
+    assert.ok(!texto.includes('(619) 555-0101'));
+    assert.ok(!texto.includes('privado@ejemplo.invalid'));
+    assert.ok(!texto.includes('HOLDER_PHONE'));
+    assert.equal(r.staging.doc.provenance.headerUnexpectedCount, 2, 'no contó las columnas de más');
+  } finally { s.close(); }
+});
+
+test('si el CSV deja de traer una columna de la allowlist, se para', async () => {
+  const s = await fx.createFakeCityDevServer({ mode: 'missingColumn' });
+  try {
+    await assert.rejects(() => corre('city_development_permits', s), (err) => {
+      assert.match(err.message, /esquema del CSV .* cambió/);
+      assert.match(err.message, /GIS_ADDRESS/);
+      return true;
+    });
+  } finally { s.close(); }
+});
+
+test('un 304 no gasta la corrida del día ni sella nada', async () => {
+  const s = await fx.createFakeCityDevServer({ mode: 'notModified' });
+  const estado = nuevoEstado();
+  try {
+    const r = await corre('city_development_permits', s, { quotaOptions: estado, etag: s.etag });
+    assert.equal(r.notModified, true);
+    assert.equal(r.staging, null);
+    const segunda = await corre('city_development_permits', s, { quotaOptions: estado, etag: s.etag });
+    assert.equal(segunda.blocked.reason, 'sin_cambios_304', 'un 304 consumió la corrida del día');
+  } finally { s.close(); }
+});
+
+test('una descarga cortada, vacía, malformada o de más del tope es un error', async () => {
+  for (const mode of ['truncated', 'empty', 'malformed', 'oversize']) {
+    const s = await fx.createFakeCityDevServer({ mode });
+    try {
+      await assert.rejects(() => corre('city_development_permits', s), undefined, `mode=${mode} pasó`);
+    } finally { s.close(); }
+  }
+  assert.deepEqual(
+    fs.readdirSync(process.env.SOURCE_CSV_TMP_DIR).filter((f) => f.startsWith('cc-csv-')), [],
+    'quedó en disco un CSV con parcelas y coordenadas',
+  );
+});
+
+test('la procedencia dice el dataset, la regla de aceptación y de dónde sale la ciudad', async () => {
+  const s = await fx.createFakeCityDevServer();
+  try {
+    const r = await corre('city_development_permits', s, { clock: () => fx.CITY_DEV_NOW });
+    const pr = r.staging.doc.provenance;
+    assert.equal(pr.dataset, 'Approvals for development projects');
+    assert.equal(pr.downloadUrl,
+      'https://seshat.datasd.org/development_permits/approvals_issued_2026_datasd.csv');
+    assert.equal(pr.license.name, 'ODC PDDL 1.0');
+    assert.equal(pr.license.status, 'VERIFICADA');
+    assert.match(pr.fileSha256, /^[0-9a-f]{64}$/);
+    assert.ok(pr.verifiedAt, 'sin fecha de verificación no se puede saber de cuándo es el dato');
+    assert.equal(pr.issuedWithinDays, 90);
+    assert.match(pr.cityFrom, /alcance del conjunto de datos/);
+    assert.equal(pr.headerColumns, fx.CITY_DEV_HEADER.length);
+
+    // Y cada candidato trae lo que el encargo pide poder auditar.
+    for (const c of r.staging.doc.candidates) {
+      assert.ok(c.evidence.approvalId, 'sin approval_id no se puede volver a la fuente');
+      assert.match(c.evidence.issueDate, /^\d{4}-\d{2}-\d{2}$/);
+      assert.ok(c.lastVerified, 'sin fecha de verificación');
+      assert.match(c.evidence.acceptanceRule, /nivel [12]/);
+      assert.ok([1, 2].includes(c.evidence.holderTier));
+      assert.ok(c.evidence.buildingClass, 'sin la clasificación no se puede revisar por qué entró');
+      assert.equal(c.sourceUrl, 'https://data.sandiego.gov/datasets/development-permits/');
+    }
+  } finally { s.close(); }
+});
+
 // ══ Privacidad transversal ════════════════════════════════════
 test('ningún staging de los tres lleva un solo dato personal', async () => {
   for (const [scoutId, crear] of [
-    ['cslb_contractors', fx.createFakeCslbServer],
+    ['city_development_permits', fx.createFakeCityDevServer],
     ['hud_multifamily', fx.createFakeArcgisServer],
     ['cde_schools', fx.createFakeCdeServer],
   ]) {
@@ -951,7 +1165,7 @@ test('cada scout tiene su cuota y no estorba a los demás ni a County/City', asy
 
   const st = quota.readState(estado.stateFile);
   assert.ok(st.sources.cde_schools, 'no se registró la corrida del scout');
-  for (const otro of ['cslb_contractors', 'hud_multifamily',
+  for (const otro of ['city_development_permits', 'hud_multifamily',
     'sdcounty_food_facility_permits', 'sd_business_tax_certificates']) {
     assert.equal(st.sources[otro], undefined, `la cuota de ${otro} se vio afectada`);
   }
@@ -967,7 +1181,7 @@ test('el guard durable de cada scout mira su propio prefijo', async () => {
   assert.equal(bloqueado.reason, 'cuota_24h_durable');
 
   // Y los otros dos, con el mismo CRM, siguen permitidos.
-  for (const ns of ['cslb', 'hud-mf', 'sdcounty-ffp', 'city-btc']) {
+  for (const ns of ['city-dev', 'hud-mf', 'sdcounty-ffp', 'city-btc']) {
     const r = await checkDurableQuota({ namespace: ns, now: AHORA, lookup: lookup({ 'cde:': reciente }) });
     assert.equal(r.allowed, true, `${ns} se dejó bloquear por cde`);
   }
@@ -1058,7 +1272,7 @@ const indiceVacio = () => ({
 async function tresStagings() {
   const docs = {};
   for (const [scoutId, crear] of [
-    ['cslb_contractors', fx.createFakeCslbServer],
+    ['city_development_permits', fx.createFakeCityDevServer],
     ['hud_multifamily', fx.createFakeArcgisServer],
     ['cde_schools', fx.createFakeCdeServer],
   ]) {
@@ -1149,10 +1363,10 @@ test('la prioridad entre fuentes es determinista y está razonada', async () => 
         matchKeys: { name: 'harborviewelementary', cross: 'harborviewelementary|1200harborblvd' },
       }],
     },
-    cslb_contractors: {
-      scoutId: 'cslb_contractors',
+    city_development_permits: {
+      scoutId: 'city_development_permits',
       candidates: [{
-        dedupKey: 'cslb:1', businessName: 'Harbor View Elementary', address: null,
+        dedupKey: 'city-dev:1', businessName: 'Harbor View Elementary', address: '1200 Harbor Blvd',
         matchKeys: { name: 'harborviewelementary', cross: null },
       }],
     },
@@ -1169,7 +1383,7 @@ test('la prioridad entre fuentes es determinista y está razonada', async () => 
 
   // Y el orden no depende del orden de las claves del objeto.
   const alRevés = {
-    cslb_contractors: stagings.cslb_contractors,
+    city_development_permits: stagings.city_development_permits,
     hud_multifamily: stagings.hud_multifamily,
     cde_schools: stagings.cde_schools,
   };
@@ -1178,11 +1392,11 @@ test('la prioridad entre fuentes es determinista y está razonada', async () => 
 });
 
 test('la prioridad documentada cubre las tres fuentes y explica por qué', () => {
-  assert.deepEqual(intake.SOURCE_PRIORITY, ['cde_schools', 'hud_multifamily', 'cslb_contractors']);
+  assert.deepEqual(intake.SOURCE_PRIORITY, ['cde_schools', 'city_development_permits', 'hud_multifamily']);
   for (const id of intake.SOURCE_PRIORITY) {
     assert.ok(intake.PRIORITY_RATIONALE[id], `${id} sin razón documentada`);
   }
-  assert.match(intake.PRIORITY_RATIONALE.cslb_contractors, /sin dirección/);
+  assert.match(intake.PRIORITY_RATIONALE.hud_multifamily, /sin fecha de actividad/);
 });
 
 test('un índice incompleto para la capa central: no se planifica nada', async () => {
@@ -1209,7 +1423,7 @@ test('la capa central rechaza todo lo que esta fase prohíbe', () => {
     [{ operations: ['create', 'update'] }, 'operacion_no_permitida'],
     [{ operations: ['create', 'delete'] }, 'operacion_no_permitida'],
     [{ perSource: { cde_schools: 51 } }, 'por_encima_del_tope'],
-    [{ disabledSources: ['cslb_contractors'] }, 'fuente_deshabilitada'],
+    [{ disabledSources: ['cde_schools'] }, 'fuente_deshabilitada'],
     [{ staleSources: ['hud_multifamily'] }, 'constancia_o_cuota_vencida'],
     [{ invalidStagings: ['cde_schools'] }, 'staging_alterado'],
   ];
@@ -1432,8 +1646,8 @@ test('el verificador distingue evidencia pendiente de evidencia rota', async () 
   const salida = execFileSync(process.execPath, ['scripts/verify-attestation.js'], {
     cwd: process.cwd(), encoding: 'utf8', env,
   });
-  // County, City y ahora HUD están verificadas; CSLB y CDE siguen pendientes.
-  assert.match(salida, /3 válida\(s\) · 2 pendiente\(s\) por diseño · 0 con problemas/);
+  // County, City, HUD y los permisos de desarrollo están verificados; CDE sigue pendiente.
+  assert.match(salida, /4 válida\(s\) · 1 pendiente\(s\) por diseño · 0 con problemas/);
   assert.match(salida, /PENDIENTE por diseño/);
   assert.match(salida, /mantiene su fuente apagada/);
 });

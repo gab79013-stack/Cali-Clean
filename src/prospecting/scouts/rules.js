@@ -1,5 +1,5 @@
 /**
- * Reglas de aceptación de los tres scouts, con el motivo de cada descarte.
+ * Reglas de aceptación de los scouts, con el motivo de cada descarte.
  *
  * Todas devuelven `{ ok, reason, kind, ... }` con `kind` en un vocabulario
  * común, para que las métricas puedan contar rechazos por razón y alguien sepa,
@@ -8,11 +8,10 @@
  *
  *   personal | inactive | residential | out_of_area | unverifiable
  *
- * La regla que gobierna las tres: si no se puede demostrar que la entidad es una
- * organización, se omite. En estos tres registros aparecen personas físicas
- * —un contratista autónomo, el titular de una propiedad, un profesional con
- * licencia— y un filtro laxo no produce leads mediocres: produce una lista de
- * particulares.
+ * La regla que las gobierna todas: si no se puede demostrar que la entidad es una
+ * organización, se omite. En estos registros aparecen personas físicas —el
+ * titular de una propiedad, el contacto de un permiso— y un filtro laxo no
+ * produce leads mediocres: produce una lista de particulares.
  */
 
 import { normalizeForMatch } from '../sources/city-btc-rules.js';
@@ -58,72 +57,7 @@ const AMBIGUOUS_RESIDENTIAL_ADDRESS = [
   /\bspc\b|\bspace\b/i,
 ];
 
-// ── 1. CaliClean State License Scout · CSLB ──────────────────
-
-/**
- * ¿`Classifications(s)` contiene la clase pedida como token exacto?
- *
- * El guion NO separa: las clases de CSLB son códigos con guion y son clases
- * distintas. `B` es General Building y `B-2` es Residential Remodeling, que es
- * otra cosa y además apunta a vivienda. Partir por cualquier carácter no
- * alfanumérico convertía "B-2" en ["B","2"] y aceptaba como clase B a un
- * contratista que no la tiene.
- *
- * Se separa solo por los delimitadores que el campo usa de verdad —coma, punto y
- * coma, barra vertical y espacios— y se compara el token entero.
- */
-export function hasClassification(field, wanted) {
-  const tokens = clean(field).split(/[,;|\s]+/).filter(Boolean);
-  const buscado = String(wanted).toUpperCase();
-  return tokens.some((t) => t.toUpperCase() === buscado);
-}
-
-export function evaluateCslbRow(row, manifest) {
-  const val = (k) => clean(row?.[k]);
-  const f = manifest.filters;
-
-  if (val('County').toLowerCase() !== String(f.county).toLowerCase()) {
-    return { ok: false, kind: 'out_of_area', reason: `County="${val('County') || '—'}"` };
-  }
-  if (val('PrimaryStatus').toUpperCase() !== String(f.primaryStatus).toUpperCase()) {
-    return { ok: false, kind: 'inactive', reason: `PrimaryStatus="${val('PrimaryStatus') || '—'}"` };
-  }
-  const tipo = val('BusinessType');
-  if (!f.businessTypeAllowed.some((t) => t.toLowerCase() === tipo.toLowerCase())) {
-    // Una forma jurídica que no se reconoce se descarta: admitir variantes sin
-    // documentarlas es cómo entra un "Sole Owner" en una lista de empresas.
-    return { ok: false, kind: 'personal', reason: `BusinessType="${tipo || '—'}" no está en la lista de entidades` };
-  }
-  if (!hasClassification(row?.['Classifications(s)'], f.classificationRequired)) {
-    return {
-      ok: false,
-      kind: 'unverifiable',
-      reason: `sin la clase ${f.classificationRequired} como token exacto`,
-    };
-  }
-
-  const licencia = val('LicenseNo');
-  if (!licencia) return { ok: false, kind: 'unverifiable', reason: 'sin LicenseNo' };
-
-  // El nombre comercial completo es preferible al corto, pero ninguno de los dos
-  // puede ser una persona.
-  const nombre = val('FullBusinessName') || val('BusinessName');
-  const org = isOrganizationName(nombre);
-  if (!org.ok) return { ok: false, kind: 'personal', reason: org.reason };
-
-  return {
-    ok: true, kind: null, reason: null,
-    licenseNo: licencia,
-    businessName: nombre,
-    businessType: tipo,
-    primaryStatus: val('PrimaryStatus'),
-    secondaryStatus: val('SecondaryStatus') || null,
-    classifications: clean(row?.['Classifications(s)']),
-    lastUpdate: val('LastUpdate') || null,
-  };
-}
-
-// ── 2. CaliClean Property & Manager Scout · HUD ──────────────
+// ── 1. CaliClean Property & Manager Scout · HUD ──────────────
 
 const NON_INSTITUTIONAL_CATEGORY = /single\s*family|vacant|land|mobile\s*home|duplex|triplex/i;
 
@@ -211,7 +145,7 @@ export function evaluateHudRow(row, manifest, { cities, zips } = {}) {
   };
 }
 
-// ── 3. CaliClean Education & Childcare Facility Scout · CDE ──
+// ── 2. CaliClean Education & Childcare Facility Scout · CDE ──
 
 /**
  * Marcadores que el volcado del directorio usa cuando una fila NO es un centro.
@@ -321,6 +255,179 @@ export function evaluateCdeRow(row, manifest) {
   };
 }
 
+// ── 3. CaliClean Commercial Development Permit Scout · City ──
+//
+// Esta fuente es la más peligrosa de las tres, y conviene decir por qué antes de
+// leer la regla. El diccionario oficial define `approval_permit_holder` como
+// "Contact name whom the Approval is issued to": un nombre de CONTACTO. En la
+// muestra real aparecen personas físicas tal cual, y hasta listas de personas.
+// Así que aquí no basta con que un nombre no parezca una persona: hace falta una
+// señal POSITIVA de que es una entidad. Lo demás se descarta.
+
+/** Sufijo de forma jurídica al final del nombre. La señal más fuerte que hay. */
+const LEGAL_SUFFIX = /[\s,.](l\.?l\.?c|l\.?l\.?p|l\.?p|p\.?c|p\.?l\.?l\.?c|inc|incorporated|corp|corporation|co|company|ltd|limited|partnership)\.?$/i;
+
+/**
+ * Designadores de actividad empresarial. Son nivel 2: valen solo si el nombre no
+ * tiene además forma de persona, porque "Architect MD Lyon, Sara Hoffelt" trae
+ * una palabra de oficio y sigue siendo un par de personas.
+ */
+const BUSINESS_ACTIVITY = /\b(construction|contracting|contractors?|builders?|building|development|developers?|properties|realty|group|enterprises?|industries|services|systems|solutions|electric(al)?|plumbing|roofing|mechanical|hvac|engineering|architects|interiors|restaurant|hospitality|brewing|coffee|market|retail|hotel|motel|clinic|dental|medical|laboratories|logistics|storage|automotive|manufacturing)\b/i;
+
+/** Marcadores residenciales, en cualquier campo que los pueda delatar. */
+const CITY_DEV_RESIDENTIAL = [
+  /\bresidential?\b/i,
+  /\bsingle[-\s]?family\b/i,
+  /\bmulti[-\s]?family\b/i,
+  /\bduplex\b|\btriplex\b/i,
+  /\bapartments?\b/i,
+  /\bcondo(minium)?s?\b/i,
+  /\btownhomes?\b|\btownhouses?\b/i,
+  /\bdwelling\b/i,
+  /\bsdu\b/i,
+  /\badu\b/i,
+  /\bjadu\b/i,
+  /\bcompanion\s+unit\b/i,
+  /\baccessory\s+(dwelling|apt)\b/i,
+];
+
+/** Un rótulo no es una obra que haya que limpiar. */
+const SIGN_MARKERS = [/\bsigns?\s*-\s*(permanent|temporary)\b/i, /\bsign\s+p(er)?mt\b/i];
+
+/**
+ * ¿El titular del permiso es inequívocamente una empresa?
+ *
+ * Devuelve el NIVEL que lo aceptó, porque la procedencia tiene que poder decir
+ * con qué regla entró cada Company. "Lo aceptó una heurística" no es auditable;
+ * "nivel 1, sufijo legal" sí.
+ */
+/** ¿Este trozo de nombre es, por sí solo, el nombre de una persona? */
+const PARECE_PERSONA = (trozo) => {
+  const t = trozo.trim().replace(/[.,]+$/, '');
+  if (!t) return false;
+  if (PERSON_SHAPES.some((re) => re.test(t))) return true;
+  // "Nombre Apellido" pelado, sin nada que lo convierta en empresa.
+  return /^[\p{Lu}][\p{L}'’-]+\s+[\p{Lu}][\p{L}'’-]+$/u.test(t) && !BUSINESS_ACTIVITY.test(t);
+};
+
+export function corporateHolder(name) {
+  const value = clean(name);
+  if (!value) return { ok: false, tier: null, reason: 'sin titular' };
+
+  // ── Compuestos "persona + empresa" ──
+  //
+  // Esta comprobación está aquí porque la primera versión de la regla no la hacía
+  // y la preview real lo demostró: entre 50 candidatos aceptados había tres con
+  // una persona dentro del nombre, en las tres formas que usa este registro —
+  // "Persona - Empresa", "Empresa / Persona" y "Persona/Empresa". Tenían sufijo
+  // legal o palabra de actividad, así que pasaban, y habrían metido el nombre de
+  // alguien en el CRM como si fuera el de una empresa. Si CUALQUIER trozo es una
+  // persona, se rechaza el titular entero: un compuesto así no es inequívoco.
+  const trozos = value.split(/\s*[/|]\s*|\s+-\s+|\s*\b(?:and|&)\b\s*/i).filter(Boolean);
+  if (trozos.length > 1 && trozos.some(PARECE_PERSONA)) {
+    return { ok: false, tier: null, reason: 'el titular mezcla el nombre de una persona con el de una empresa' };
+  }
+
+  const limpio = value.replace(/[.,\s]+$/, '');
+  if (PARECE_PERSONA(limpio)) {
+    return { ok: false, tier: null, reason: 'el titular tiene forma de nombre de persona' };
+  }
+  if (LEGAL_SUFFIX.test(limpio)) return { ok: true, tier: 1, reason: null };
+  if (PERSON_SHAPES.some((re) => re.test(limpio))) {
+    return { ok: false, tier: null, reason: 'el titular tiene forma de nombre de persona' };
+  }
+  if (BUSINESS_ACTIVITY.test(limpio)) return { ok: true, tier: 2, reason: null };
+  return { ok: false, tier: null, reason: 'el titular no se puede afirmar empresa sin ambigüedad' };
+}
+
+/**
+ * Una aprobación emitida se acepta solo si las seis cosas se cumplen: estado
+ * emitido, emisión reciente, clasificación de edificación comercial explícita,
+ * dirección completa, identificador, y titular empresarial.
+ *
+ * Ningún `reason` lleva el valor de la fila dentro: una fila rechazada no se
+ * registra, y un motivo que cite el nombre del titular sería registrarla.
+ */
+export function evaluateCityDevRow(row, manifest, { now = Date.now() } = {}) {
+  const val = (k) => clean(row?.[k]);
+  const f = manifest.filters;
+
+  if (val('APPROVAL_STATUS') !== f.approvalStatus) {
+    return { ok: false, kind: 'inactive', reason: `estado "${val('APPROVAL_STATUS') || '—'}", no "${f.approvalStatus}"` };
+  }
+
+  const emitida = val('APPROVAL_ISSUE_DATE').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(emitida)) {
+    return { ok: false, kind: 'unverifiable', reason: 'sin fecha de emisión legible' };
+  }
+  const ms = Date.parse(`${emitida}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return { ok: false, kind: 'unverifiable', reason: 'fecha de emisión inválida' };
+  const dias = Math.floor((now - ms) / 86400000);
+  if (dias > f.issuedWithinDays) {
+    return { ok: false, kind: 'stale', reason: `emitida hace ${dias} días (ventana: ${f.issuedWithinDays})` };
+  }
+  if (dias < 0) {
+    return { ok: false, kind: 'unverifiable', reason: 'fecha de emisión en el futuro' };
+  }
+
+  const aprobacion = val('APPROVAL_ID');
+  if (!aprobacion) return { ok: false, kind: 'unverifiable', reason: 'sin APPROVAL_ID' };
+
+  // ── Señal comercial: de la clasificación del propio permiso ──
+  const bc = val('JOB_BC_CODE_DESCRIPTION');
+  if (!bc) {
+    return { ok: false, kind: 'unverifiable', reason: 'sin clasificación de edificación: no hay señal comercial' };
+  }
+  if ((f.ambiguousBcCodes || []).includes(bc)) {
+    return { ok: false, kind: 'mixed_use_ambiguous', reason: 'la clasificación no distingue residencial de comercial' };
+  }
+  if (f.excludeSignPermits && SIGN_MARKERS.some((re) => re.test(bc) || re.test(val('APPROVAL_TYPE')))) {
+    return { ok: false, kind: 'not_relevant', reason: 'permiso de rótulo: no es obra que haya que limpiar' };
+  }
+  if (!(f.commercialBcCodes || []).includes(bc)) {
+    return { ok: false, kind: 'not_commercial', reason: 'la clasificación de edificación no está en la lista comercial' };
+  }
+
+  // ── Nada residencial, mire donde mire ──
+  const paraResidencial = [bc, val('APPROVAL_SCOPE'), val('PROJECT_SCOPE'),
+    val('PROJECT_TITLE'), val('PROJECT_TYPE'), val('APPROVAL_TYPE')].join(' ');
+  if (CITY_DEV_RESIDENTIAL.some((re) => re.test(paraResidencial))) {
+    return { ok: false, kind: 'residential', reason: 'el alcance o el tipo señalan uso residencial' };
+  }
+
+  // ── Dirección: solo después de la señal comercial ──
+  const direccion = val('GIS_ADDRESS');
+  if (!direccion) return { ok: false, kind: 'unverifiable', reason: 'sin GIS_ADDRESS' };
+  if (/\[pending\]/i.test(direccion)) {
+    return { ok: false, kind: 'unverifiable', reason: 'la dirección está marcada [Pending]: aún no está asignada' };
+  }
+  if (AMBIGUOUS_RESIDENTIAL_ADDRESS.some((re) => re.test(direccion))) {
+    return { ok: false, kind: 'residential', reason: 'la dirección señala una vivienda concreta' };
+  }
+
+  // ── Titular: señal positiva de entidad, o nada ──
+  const titular = corporateHolder(row?.APPROVAL_PERMIT_HOLDER);
+  if (!titular.ok) return { ok: false, kind: 'personal', reason: `titular: ${titular.reason}` };
+
+  const valoracion = Number(String(val('APPROVAL_VALUATION')).replace(/[^0-9.]/g, ''));
+
+  return {
+    ok: true, kind: null, reason: null,
+    approvalId: aprobacion,
+    businessName: clean(row?.APPROVAL_PERMIT_HOLDER).replace(/[.,\s]+$/, ''),
+    holderTier: titular.tier,
+    address: direccion,
+    issueDate: emitida,
+    issuedDaysAgo: dias,
+    approvalType: val('APPROVAL_TYPE') || null,
+    buildingClass: bc,
+    buildingClassCode: val('JOB_BC_CODE') || null,
+    projectId: val('PROJECT_ID') || null,
+    projectType: val('PROJECT_TYPE') || null,
+    valuation: Number.isFinite(valoracion) && valoracion > 0 ? valoracion : null,
+  };
+}
+
 /** Clave de comparación cruzada: nombre + calle, normalizados. */
 export function crossKey(name, street) {
   const n = normalizeForMatch(name);
@@ -334,4 +441,4 @@ export function nameKey(name) {
   return n || null;
 }
 
-export default { evaluateCslbRow, evaluateHudRow, evaluateCdeRow };
+export default { evaluateHudRow, evaluateCdeRow, evaluateCityDevRow };

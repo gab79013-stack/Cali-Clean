@@ -27,182 +27,21 @@ export const PII_PROHIBIDA = [
   '(619) 555-0142', '(619) 555-0188', '(619) 555-0101',
   'AdmFName', 'AdmLName', 'Phone Ext', 'Latitude', 'Longitude',
   'MailStreet', 'MailStrAbr', 'MailZip', 'FaxNumber', '4100 Normal St',
+  // Del CSV de aprobaciones de desarrollo: parcela, coordenadas, cuenta
+  // fiduciaria, numero de plano y los titulares que son personas.
+  'Cole Storey', 'Architect MD Lyon', 'Sara Hoffelt',
+  '5350123400', '32.711230', '-117.160450', 'TA-99881', 'DWG-2026-4412',
+  'GIS_APN', 'GIS_LATITUDE', 'GIS_LONGITUDE', 'PROJECT_TRUST_ACCOUNT_NO', 'JOB_DRAWING_NUMBER',
+  'HOLDER_PHONE', 'HOLDER_EMAIL',
 ];
 
-// ── 1. CSLB · WebForms + CSV ─────────────────────────────────
-export const CSLB_HEADER = [
-  'LicenseNo', 'LastUpdate', 'BusinessName', 'FullBusinessName', 'MailingAddress', 'City', 'State', 'ZIPCode',
-  'County', 'BusinessPhone', 'BusinessType', 'IssueDate', 'ExpirationDate', 'PrimaryStatus', 'SecondaryStatus',
-  'Classifications(s)', 'BondAmount', 'WorkersCompInsurance', 'PolicyNumber', 'PersonnelName',
-];
-
+/** Escapa un campo de CSV: comillas, comas y saltos de línea. */
 const campo = (v) => {
-  const s = String(v ?? '');
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const t = String(v ?? '');
+  return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 };
 
-export function cslbRow(partial) {
-  const base = {
-    LicenseNo: '', LastUpdate: '2026-10-03', BusinessName: '', FullBusinessName: '',
-    MailingAddress: '1450 Harbor Dr', City: 'San Diego', State: 'CA', ZIPCode: '92101',
-    County: 'San Diego', BusinessPhone: '+16195550101', BusinessType: 'Corporation',
-    IssueDate: '2015-04-01', ExpirationDate: '2027-04-30', PrimaryStatus: 'CLEAR',
-    SecondaryStatus: '', 'Classifications(s)': 'B | C-10', BondAmount: '25000',
-    WorkersCompInsurance: 'EXEMPT', PolicyNumber: 'WC-99881', PersonnelName: 'Ortega, Jose Ramon',
-  };
-  return { ...base, ...partial };
-}
-
-export const CSLB_ROWS = [
-  // ── Aceptables ──
-  cslbRow({ LicenseNo: '1000001', BusinessName: 'Harbor Builders Inc', FullBusinessName: 'Harbor Builders Incorporated' }),
-  cslbRow({
-    LicenseNo: '1000002', BusinessName: 'Gaslamp Construction, "The Original" LLC',
-    FullBusinessName: 'Gaslamp Construction, "The Original" LLC', BusinessType: 'Limited Liability',
-  }),
-  cslbRow({
-    // Nombre con salto de línea dentro de un campo entrecomillado.
-    LicenseNo: '1000003', BusinessName: 'Mesa\nRoofing Co', FullBusinessName: 'Mesa\nRoofing Company',
-    'Classifications(s)': 'B, C-39',
-  }),
-  // ── Fuera del condado ──
-  cslbRow({ LicenseNo: '1000010', BusinessName: 'Riverside Builders Inc', County: 'Riverside' }),
-  // ── Licencia no vigente ──
-  cslbRow({ LicenseNo: '1000011', BusinessName: 'Expired Builders Inc', PrimaryStatus: 'EXPIRED' }),
-  cslbRow({ LicenseNo: '1000012', BusinessName: 'Suspended Builders Inc', PrimaryStatus: 'SUSPENDED' }),
-  // ── Forma jurídica personal ──
-  cslbRow({ LicenseNo: '1000020', BusinessName: 'Ortega, Jose Ramon', FullBusinessName: 'Ortega, Jose Ramon', BusinessType: 'Sole Owner' }),
-  cslbRow({ LicenseNo: '1000021', BusinessName: 'Chen Partnership', BusinessType: 'Partnership' }),
-  // ── Sin la clase B ──
-  cslbRow({ LicenseNo: '1000030', BusinessName: 'Plumb Only Inc', 'Classifications(s)': 'C-36 | C-20' }),
-  cslbRow({ LicenseNo: '1000031', BusinessName: 'Remodel Only Inc', 'Classifications(s)': 'B-2 | C-10' }),
-  // ── Nombre de persona pese a ser Corporation ──
-  cslbRow({ LicenseNo: '1000040', BusinessName: 'Patel, Asha', FullBusinessName: 'Patel, Asha' }),
-  // ── Duplicado de licencia en el mismo volcado ──
-  cslbRow({ LicenseNo: '1000001', BusinessName: 'Harbor Builders Inc', FullBusinessName: 'Harbor Builders Incorporated' }),
-];
-
-export function cslbCsv(rows = CSLB_ROWS, { header = CSLB_HEADER } = {}) {
-  return `${[header.join(','), ...rows.map((r) => header.map((h) => campo(r[h])).join(','))].join('\n')}\n`;
-}
-
-export const CSLB_CSV = cslbCsv();
-export const CSLB_CSV_SHA256 = crypto.createHash('sha256').update(CSLB_CSV, 'utf8').digest('hex');
-
-const PAGINA_PORTAL = (viewstate) => `<!DOCTYPE html><html><body><form method="post">
-<input type="hidden" name="__VIEWSTATE" value="${viewstate}" />
-<input type="hidden" name="__VIEWSTATEGENERATOR" value="A1B2C3D4" />
-<input type="hidden" name="__EVENTVALIDATION" value="EV-${viewstate}" />
-<select name="ctl00$MainContent$ddlStatus"><option value="M">License Master</option></select>
-<a id="MainContent_lbMasterCSV" href="javascript:__doPostBack('ctl00$MainContent$lbMasterCSV','')">CSV</a>
-</form></body></html>`;
-
-/**
- * Portal WebForms simulado.
- * mode: ok | htmlInsteadOfCsv | redirect | noViewstate | wrongAttachment |
- *       truncated | oversize | malformedCsv | unknownColumns | empty | throttled
- */
-export function createFakeCslbServer({ mode = 'ok', body = null } = {}) {
-  const requests = [];
-  let csvPedido = 0;
-  const server = http.createServer(async (req, res) => {
-    const chunks = [];
-    for await (const c of req) chunks.push(c);
-    const raw = Buffer.concat(chunks).toString();
-    const params = new URLSearchParams(raw);
-    const target = params.get('__EVENTTARGET');
-    requests.push({
-      method: req.method,
-      url: req.url,
-      eventTarget: target,
-      dataType: params.get('ctl00$MainContent$ddlStatus'),
-      viewstate: params.get('__VIEWSTATE'),
-      eventValidation: params.get('__EVENTVALIDATION'),
-      userAgent: req.headers['user-agent'] ?? null,
-    });
-
-    // Solo el recurso del portal existe. Nada de buscadores individuales.
-    if (!req.url.startsWith('/onlineservices/dataportal/ContractorList')) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end('not found');
-    }
-
-    if (req.method === 'GET') {
-      if (mode === 'noViewstate') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        return res.end('<html><body><form></form></body></html>');
-      }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(PAGINA_PORTAL('VS-1'));
-    }
-
-    // Postback de selección.
-    if (target === 'ctl00$MainContent$ddlStatus') {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(PAGINA_PORTAL('VS-2'));
-    }
-
-    // Postback del CSV.
-    if (target === 'ctl00$MainContent$lbMasterCSV') {
-      csvPedido++;
-      if (mode === 'throttled' && csvPedido === 1) {
-        res.writeHead(429, { 'Retry-After': '2' });
-        return res.end();
-      }
-      if (mode === 'redirect') {
-        res.writeHead(302, { Location: 'https://otro-sitio.invalid/MasterLicenseData.csv' });
-        return res.end();
-      }
-      if (mode === 'htmlInsteadOfCsv') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        return res.end('<html><body>Session expired. Please try again.</body></html>');
-      }
-
-      let payload = body ?? CSLB_CSV;
-      if (mode === 'malformedCsv') payload = `${CSLB_HEADER.join(',')}\n1000099,"sin cerrar,CLEAR\n`;
-      if (mode === 'unknownColumns') {
-        payload = cslbCsv([cslbRow({ LicenseNo: '1000050', BusinessName: 'Columna Nueva Inc' })], {
-          header: [...CSLB_HEADER, 'OwnerMobile', 'OwnerEmail'],
-        }).replace(/\n$/, ',+16195550101,privado@ejemplo.invalid\n');
-      }
-      if (mode === 'empty') payload = '';
-
-      const headers = {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': mode === 'wrongAttachment'
-          ? 'attachment; filename=OtraCosa.csv'
-          : 'attachment; filename=MasterLicenseData.csv',
-      };
-      if (mode === 'oversize') {
-        headers['Content-Length'] = String(1024 * 1024 * 1024);
-        res.writeHead(200, headers);
-        return res.end(payload);
-      }
-      headers['Content-Length'] = String(Buffer.byteLength(payload));
-      res.writeHead(200, headers);
-      if (mode === 'truncated') {
-        res.write(payload.slice(0, Math.floor(payload.length / 3)));
-        return res.destroy();
-      }
-      return res.end(payload);
-    }
-
-    res.writeHead(400, { 'Content-Type': 'text/plain' });
-    return res.end('postback desconocido');
-  });
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({
-      server,
-      requests,
-      baseUrl: `http://127.0.0.1:${server.address().port}`,
-      portalUrl: `http://127.0.0.1:${server.address().port}/onlineservices/dataportal/ContractorList`,
-      close: () => server.close(),
-    }));
-  });
-}
-
-// ── 2. HUD · ArcGIS ──────────────────────────────────────────
+// ── 1. HUD · ArcGIS ──────────────────────────────────────────
 export function hudRow(partial) {
   const base = {
     PROPERTY_ID: '', PROPERTY_NAME_TEXT: '', TOTAL_UNIT_COUNT: 120,
@@ -308,7 +147,7 @@ export function createFakeArcgisServer({ mode = 'ok', rows = HUD_ROWS, pageSize 
   });
 }
 
-// ── 3. CDE · directorio de escuelas (TSV) ────────────────────
+// ── 2. CDE · directorio de escuelas (TSV) ────────────────────
 // Cabecera REAL del volcado, copiada del esquema oficial que el CDE publica en
 // /ds/si/ds/fspubschls.asp (revisado el 2024-09-19): 46 columnas, en ese orden.
 // La primera versión de este fixture se escribió a ciegas y se equivocaba en tres
@@ -466,6 +305,252 @@ export function createFakeCdeServer({ mode = 'ok', body = null, etag = '"cde-1"'
       etag,
       lastModified,
       downloadUrl: `http://127.0.0.1:${server.address().port}/schooldirectory/report?rid=dl1&tp=txt`,
+      close: () => server.close(),
+    }));
+  });
+}
+
+// ── 3. City of San Diego · aprobaciones de desarrollo (CSV) ──
+//
+// Cabecera REAL del archivo, leída con un GET de rango sobre
+// approvals_issued_2026_datasd.csv el 2026-10-04: 54 columnas, en ese orden.
+// Dentro van APN, latitud, longitud, número de cuenta fiduciaria y número de
+// plano, porque el archivo los trae de verdad y las pruebas tienen que
+// demostrar que no sobreviven.
+export const CITY_DEV_HEADER = [
+    "DEVELOPMENT_ID",
+    "PROJECT_ID",
+    "PROJECT_TYPE",
+    "PROJECT_STATUS",
+    "PROJECT_PROCESSING_CODE",
+    "PROJECT_CREATE_DATE",
+    "PROJECT_DEEMEDCOMPLETE_DATE",
+    "PROJECT_TRUST_ACCOUNT_NO",
+    "PROJECT_TITLE",
+    "PROJECT_SCOPE",
+    "JOB_ID",
+    "JOB_DRAWING_NUMBER",
+    "GIS_ADDRESS",
+    "GIS_APN",
+    "JOB_BC_CODE",
+    "JOB_BC_CODE_DESCRIPTION",
+    "GIS_LATITUDE",
+    "GIS_LONGITUDE",
+    "APPROVAL_ID",
+    "APPROVAL_CATEGORY_CODE",
+    "APPROVAL_PROCESSING_CODE",
+    "APPROVAL_TYPE",
+    "APPROVAL_STATUS",
+    "APPROVAL_SCOPE",
+    "APPROVAL_CREATE_DATE",
+    "APPROVAL_ISSUE_DATE",
+    "APPROVAL_CLOSE_DATE",
+    "APPROVAL_EXPIRE_DATE",
+    "APPROVAL_VALUATION",
+    "APPROVAL_DU_NET_CHANGE",
+    "APPROVAL_STORIES",
+    "APPROVAL_FLOOR_AREA",
+    "APPROVAL_DU_EXTREMELY_LOW",
+    "APPROVAL_DU_VERY_LOW",
+    "APPROVAL_DU_LOW",
+    "APPROVAL_DU_MODERATE",
+    "APPROVAL_DU_ABOVE_MODERATE",
+    "APPROVAL_DU_FUTURE_DEMO",
+    "APPROVAL_DU_BONUS",
+    "APPROVAL_ADU_EXTREMELY_LOW",
+    "APPROVAL_ADU_VERY_LOW",
+    "APPROVAL_ADU_LOW",
+    "APPROVAL_ADU_MODERATE",
+    "APPROVAL_ADU_ABOVE_MODERATE",
+    "APPROVAL_ADU_BONUS",
+    "APPROVAL_ADU_TOTAL",
+    "APPROVAL_JADU_EXTREMELY_LOW",
+    "APPROVAL_JADU_VERY_LOW",
+    "APPROVAL_JADU_LOW",
+    "APPROVAL_JADU_MODERATE",
+    "APPROVAL_JADU_ABOVE_MODERATE",
+    "APPROVAL_JADU_BONUS",
+    "APPROVAL_JADU_TOTAL",
+    "APPROVAL_PERMIT_HOLDER"
+  ];
+
+export function cityDevRow(partial) {
+  const base = {
+    DEVELOPMENT_ID: '700001', PROJECT_ID: '628113', PROJECT_TYPE: 'Building Construction',
+    PROJECT_STATUS: 'Active', PROJECT_PROCESSING_CODE: 'MIN',
+    PROJECT_CREATE_DATE: '2026-05-02', PROJECT_DEEMEDCOMPLETE_DATE: '',
+    PROJECT_TRUST_ACCOUNT_NO: 'TA-99881',
+    PROJECT_TITLE: 'Gaslamp Retail Build-Out', PROJECT_SCOPE: 'Interior tenant improvement',
+    JOB_ID: '880001', JOB_DRAWING_NUMBER: 'DWG-2026-4412',
+    GIS_ADDRESS: '750 FIFTH AVE', GIS_APN: '5350123400',
+    JOB_BC_CODE: '437', JOB_BC_CODE_DESCRIPTION: 'Add/Alt Tenant Improvements',
+    GIS_LATITUDE: '32.711230', GIS_LONGITUDE: '-117.160450',
+    APPROVAL_ID: '', APPROVAL_CATEGORY_CODE: 'B', APPROVAL_PROCESSING_CODE: 'CBP',
+    APPROVAL_TYPE: 'Combination Building Permit', APPROVAL_STATUS: 'Issued',
+    APPROVAL_SCOPE: 'Tenant improvement of ground floor commercial suite',
+    APPROVAL_CREATE_DATE: '2026-08-01', APPROVAL_ISSUE_DATE: '2026-09-15',
+    APPROVAL_CLOSE_DATE: '', APPROVAL_EXPIRE_DATE: '2027-09-15',
+    APPROVAL_VALUATION: '450000.00', APPROVAL_DU_NET_CHANGE: '0',
+    APPROVAL_STORIES: '1', APPROVAL_FLOOR_AREA: '3200',
+    APPROVAL_DU_EXTREMELY_LOW: '0', APPROVAL_DU_VERY_LOW: '0', APPROVAL_DU_LOW: '0',
+    APPROVAL_DU_MODERATE: '0', APPROVAL_DU_ABOVE_MODERATE: '0',
+    APPROVAL_DU_FUTURE_DEMO: '0', APPROVAL_DU_BONUS: '0',
+    APPROVAL_ADU_EXTREMELY_LOW: '0', APPROVAL_ADU_VERY_LOW: '0', APPROVAL_ADU_LOW: '0',
+    APPROVAL_ADU_MODERATE: '0', APPROVAL_ADU_ABOVE_MODERATE: '0', APPROVAL_ADU_BONUS: '0',
+    APPROVAL_ADU_TOTAL: '0',
+    APPROVAL_JADU_EXTREMELY_LOW: '0', APPROVAL_JADU_VERY_LOW: '0', APPROVAL_JADU_LOW: '0',
+    APPROVAL_JADU_MODERATE: '0', APPROVAL_JADU_ABOVE_MODERATE: '0', APPROVAL_JADU_BONUS: '0',
+    APPROVAL_JADU_TOTAL: '0',
+    APPROVAL_PERMIT_HOLDER: '',
+  };
+  return { ...base, ...partial };
+}
+
+// `now` de referencia de las pruebas: 2026-10-04. La ventana es de 90 días, así
+// que el corte cae en 2026-07-06.
+export const CITY_DEV_NOW = Date.parse('2026-10-04T12:00:00.000Z');
+
+export const CITY_DEV_ROWS = [
+  // ── Aceptables ──
+  cityDevRow({ APPROVAL_ID: '2630001', APPROVAL_PERMIT_HOLDER: 'Harbor Interiors, Inc' }),
+  cityDevRow({
+    APPROVAL_ID: '2630002', APPROVAL_PERMIT_HOLDER: 'Davies Electric Co., Inc',
+    JOB_BC_CODE_DESCRIPTION: 'Add/Alt NonRes Bldg or Struct', GIS_ADDRESS: '1200 BROADWAY',
+    APPROVAL_ISSUE_DATE: '2026-09-30', APPROVAL_TYPE: 'Electrical Pmt',
+  }),
+  cityDevRow({
+    // Nivel 2: designador de actividad sin sufijo legal.
+    APPROVAL_ID: '2630003', APPROVAL_PERMIT_HOLDER: 'CertEX Construction',
+    JOB_BC_CODE_DESCRIPTION: 'Demo of NonRes Buildings', GIS_ADDRESS: '4040 KEARNY MESA RD',
+    APPROVAL_ISSUE_DATE: '2026-08-20', APPROVAL_TYPE: 'Approval - Construction - Demolition Pmt',
+    APPROVAL_SCOPE: 'Demolition of former warehouse structure',
+    PROJECT_TITLE: 'Kearny Mesa Warehouse Demo', PROJECT_SCOPE: 'Demolition',
+  }),
+  cityDevRow({
+    // Comilla y coma dentro de un campo: el CSV tiene que sobrevivir.
+    APPROVAL_ID: '2630004', APPROVAL_PERMIT_HOLDER: 'Elements of "Hospitality", Inc',
+    JOB_BC_CODE_DESCRIPTION: 'Store/Mercantile Building', GIS_ADDRESS: '98 MARKET ST, SUITE 200',
+    APPROVAL_ISSUE_DATE: '2026-07-10',
+  }),
+  // ── Mismo titular, dos permisos: una sola Company, gana el más reciente ──
+  cityDevRow({ APPROVAL_ID: '2630010', APPROVAL_PERMIT_HOLDER: 'Harbor Interiors, Inc', APPROVAL_ISSUE_DATE: '2026-07-20' }),
+  // ── Estado que no es Issued ──
+  cityDevRow({ APPROVAL_ID: '2630020', APPROVAL_PERMIT_HOLDER: 'Closed Works LLC', APPROVAL_STATUS: 'Closed' }),
+  cityDevRow({ APPROVAL_ID: '2630021', APPROVAL_PERMIT_HOLDER: 'Pending Pay LLC', APPROVAL_STATUS: 'Pending Invoice Payment' }),
+  cityDevRow({ APPROVAL_ID: '2630022', APPROVAL_PERMIT_HOLDER: 'Cancelado LLC', APPROVAL_STATUS: 'Cancelled' }),
+  // ── Fuera de la ventana de 90 días ──
+  cityDevRow({ APPROVAL_ID: '2630030', APPROVAL_PERMIT_HOLDER: 'Antigua Obra LLC', APPROVAL_ISSUE_DATE: '2026-02-19' }),
+  // ── Sin fecha de emisión / fecha en el futuro ──
+  cityDevRow({ APPROVAL_ID: '2630031', APPROVAL_PERMIT_HOLDER: 'Sin Fecha LLC', APPROVAL_ISSUE_DATE: '' }),
+  cityDevRow({ APPROVAL_ID: '2630032', APPROVAL_PERMIT_HOLDER: 'Futura LLC', APPROVAL_ISSUE_DATE: '2027-01-05' }),
+  // ── Sin clasificación de edificación: no hay señal comercial ──
+  cityDevRow({ APPROVAL_ID: '2630040', APPROVAL_PERMIT_HOLDER: 'Sin Clase LLC', JOB_BC_CODE_DESCRIPTION: '' }),
+  // ── Residencial, por clasificación ──
+  cityDevRow({ APPROVAL_ID: '2630050', APPROVAL_PERMIT_HOLDER: 'Casas Unifamiliares LLC', JOB_BC_CODE_DESCRIPTION: 'One Family Detached' }),
+  cityDevRow({ APPROVAL_ID: '2630051', APPROVAL_PERMIT_HOLDER: 'Cinco Pisos LLC', JOB_BC_CODE_DESCRIPTION: 'Five or More Family Apt' }),
+  cityDevRow({ APPROVAL_ID: '2630052', APPROVAL_PERMIT_HOLDER: 'Companion LLC', JOB_BC_CODE_DESCRIPTION: 'Add/Alt Companion Unit/Acc Apt' }),
+  // ── Uso mixto ambiguo: la clasificación no distingue ──
+  cityDevRow({ APPROVAL_ID: '2630060', APPROVAL_PERMIT_HOLDER: 'Ambigua LLC', JOB_BC_CODE_DESCRIPTION: 'Acc Bldg to 3+ Fam or NonRes' }),
+  cityDevRow({ APPROVAL_ID: '2630061', APPROVAL_PERMIT_HOLDER: 'Piscina Mixta LLC', JOB_BC_CODE_DESCRIPTION: 'Pool or Spa/3+ Fam or NonRes' }),
+  // ── Rótulo: no es obra que limpiar ──
+  cityDevRow({ APPROVAL_ID: '2630070', APPROVAL_PERMIT_HOLDER: 'Rotulos LLC', JOB_BC_CODE_DESCRIPTION: 'Signs - Permanent', APPROVAL_TYPE: 'Approval - Construction - Sign Pmt' }),
+  // ── Comercial por clase, pero el alcance delata vivienda ──
+  cityDevRow({
+    APPROVAL_ID: '2630080', APPROVAL_PERMIT_HOLDER: 'Mixta Residencial LLC',
+    APPROVAL_SCOPE: 'Conversion of ground floor to two residential dwelling units',
+  }),
+  cityDevRow({ APPROVAL_ID: '2630081', APPROVAL_PERMIT_HOLDER: 'Adu Builders LLC', PROJECT_SCOPE: 'New ADU over garage' }),
+  // ── Dirección ausente, [Pending] o de vivienda concreta ──
+  cityDevRow({ APPROVAL_ID: '2630090', APPROVAL_PERMIT_HOLDER: 'Sin Direccion LLC', GIS_ADDRESS: '' }),
+  cityDevRow({ APPROVAL_ID: '2630091', APPROVAL_PERMIT_HOLDER: 'Pendiente LLC', GIS_ADDRESS: '2310 CAMINO DEL RIO NORTH [Pending]' }),
+  cityDevRow({ APPROVAL_ID: '2630092', APPROVAL_PERMIT_HOLDER: 'Piso Concreto LLC', GIS_ADDRESS: '77 BAY BLVD APT 7B' }),
+  // ── Titular que es una persona, o que no se puede afirmar empresa ──
+  cityDevRow({ APPROVAL_ID: '2630100', APPROVAL_PERMIT_HOLDER: 'Cole Storey' }),
+  cityDevRow({ APPROVAL_ID: '2630101', APPROVAL_PERMIT_HOLDER: 'Architect MD Lyon, Sara Hoffelt' }),
+  cityDevRow({ APPROVAL_ID: '2630102', APPROVAL_PERMIT_HOLDER: 'Ortega, Jose Ramon' }),
+  cityDevRow({ APPROVAL_ID: '2630103', APPROVAL_PERMIT_HOLDER: 'Acme' }),
+  cityDevRow({ APPROVAL_ID: '2630104', APPROVAL_PERMIT_HOLDER: '' }),
+  // ── Compuestos "persona + empresa", en las tres formas que usa el registro ──
+  //
+  // Estos tres casos vienen de la preview real: la primera versión de la regla
+  // los aceptaba porque tenían sufijo legal o palabra de actividad. Los nombres
+  // de aquí están inventados a propósito: los reales son de personas concretas y
+  // no van a quedarse escritos en un fixture.
+  cityDevRow({ APPROVAL_ID: '2630110', APPROVAL_PERMIT_HOLDER: 'Ana Ruiz - Flow Builders' }),
+  cityDevRow({ APPROVAL_ID: '2630111', APPROVAL_PERMIT_HOLDER: 'Harbor Builders Inc. / Luis Mora' }),
+  cityDevRow({ APPROVAL_ID: '2630112', APPROVAL_PERMIT_HOLDER: 'Pedro Soto/Del Mar Builders' }),
+  // ── Sin APPROVAL_ID ──
+  cityDevRow({ APPROVAL_ID: '', APPROVAL_PERMIT_HOLDER: 'Sin Id LLC' }),
+];
+
+export function cityDevCsv(rows = CITY_DEV_ROWS, { header = CITY_DEV_HEADER } = {}) {
+  return `${[header.map(campo).join(','), ...rows.map((r) => header.map((h) => campo(r[h])).join(','))].join('\n')}\n`;
+}
+
+export const CITY_DEV_CSV = cityDevCsv();
+
+/**
+ * Servidor del CSV de aprobaciones.
+ * mode: ok | notModified | truncated | oversize | malformed | unknownColumns |
+ *       missingColumn | empty
+ */
+export function createFakeCityDevServer({ mode = 'ok', body = null, etag = '"city-dev-1"', lastModified = 'Fri, 02 Oct 2026 12:30:35 GMT' } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    requests.push({
+      method: req.method,
+      path: url.pathname,
+      ifNoneMatch: req.headers['if-none-match'] ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+      range: req.headers.range ?? null,
+    });
+
+    if (url.pathname !== '/development_permits/approvals_issued_2026_datasd.csv') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('not found');
+    }
+    if (mode === 'notModified' || (mode === 'ok' && req.headers['if-none-match'] === etag)) {
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastModified });
+      return res.end();
+    }
+
+    let payload = body ?? CITY_DEV_CSV;
+    if (mode === 'malformed') payload = `${CITY_DEV_HEADER.join(',')}\n2630001,"sin cerrar,Issued\n`;
+    if (mode === 'unknownColumns') {
+      payload = cityDevCsv([{
+        ...cityDevRow({ APPROVAL_ID: '2630200', APPROVAL_PERMIT_HOLDER: 'Columna Nueva LLC' }),
+        HOLDER_PHONE: '(619) 555-0101',
+        HOLDER_EMAIL: 'privado@ejemplo.invalid',
+      }], { header: [...CITY_DEV_HEADER, 'HOLDER_PHONE', 'HOLDER_EMAIL'] });
+    }
+    if (mode === 'missingColumn') {
+      payload = cityDevCsv(CITY_DEV_ROWS, { header: CITY_DEV_HEADER.filter((h) => h !== 'GIS_ADDRESS') });
+    }
+    if (mode === 'empty') payload = '';
+
+    const headers = { 'Content-Type': 'binary/octet-stream', ETag: etag, 'Last-Modified': lastModified };
+    if (mode === 'oversize') {
+      headers['Content-Length'] = String(1024 * 1024 * 1024);
+      res.writeHead(200, headers);
+      return res.end(payload);
+    }
+    headers['Content-Length'] = String(Buffer.byteLength(payload));
+    res.writeHead(200, headers);
+    if (mode === 'truncated') {
+      res.write(payload.slice(0, Math.floor(payload.length / 3)));
+      return res.destroy();
+    }
+    return res.end(payload);
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      server,
+      requests,
+      etag,
+      lastModified,
+      downloadUrl: `http://127.0.0.1:${server.address().port}/development_permits/approvals_issued_2026_datasd.csv`,
       close: () => server.close(),
     }));
   });

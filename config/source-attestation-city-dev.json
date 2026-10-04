@@ -1,0 +1,211 @@
+{
+  "$comment": "Evidencia del scout de permisos de desarrollo comercial, recogida EN VIVO desde este contenedor el 2026-10-04 contra data.sandiego.gov y seshat.datasd.org. Cinco artefactos con huella reproducible y ninguno pendiente.",
+  "version": 1,
+  "kind": "hash-based-attestation",
+  "generatedAt": "2026-10-04T17:57:37Z",
+  "evidenceCollectedAt": "2026-10-04T17:57:37Z",
+  "collectedFrom": {
+    "method": "GET y HEAD directos desde el contenedor de Claude Cloud, a traves del proxy del entorno",
+    "liveVerifiedFromCloud": true,
+    "requestsMade": 9,
+    "note": "Nueve peticiones: la ficha del portal, los robots de los dos hosts, el diccionario, un HEAD del CSV, tres HEAD de ficheros hermanos para resolver la discrepancia de tamano, y un GET con Range para leer la cabecera. El CSV completo NO se descargo en la auditoria: eso lo hace el scout una sola vez."
+  },
+  "sources": {
+    "city_development_permits": {
+      "sourceId": "city_development_permits",
+      "displayName": "CaliClean Commercial Development Permit Scout",
+      "publisher": "City of San Diego · Development Services",
+      "portalPage": "https://data.sandiego.gov/datasets/development-permits/",
+      "downloadUrl": "https://seshat.datasd.org/development_permits/approvals_issued_2026_datasd.csv",
+      "egressHost": "seshat.datasd.org",
+      "license": {
+        "name": "ODC PDDL 1.0",
+        "status": "VERIFICADA",
+        "declaredBy": "data.sandiego.gov, ficha del conjunto de datos, campo License → View License",
+        "licenseUrl": "https://opendefinition.org/licenses/odc-pddl/",
+        "licenseUrlReadable": false,
+        "licenseUrlNote": "El TEXTO de la PDDL vive en opendefinition.org, host que no esta permitido en la politica de red de este entorno, y no se ha pedido. Lo que si se leyo, y es lo que concede, es la DECLARACION del publicador: la ficha del conjunto de datos en data.sandiego.gov nombra la PDDL y enlaza a ese texto. La PDDL es una dedicacion al dominio publico sin condiciones de atribucion; no se afirma nada mas que eso.",
+        "termsUrl": "https://data.sandiego.gov/help/guides/terms/",
+        "redistribution": "permitida",
+        "footerCopyrightObserved": "(c) 2002-2026 City of San Diego. All rights reserved.",
+        "footerCopyrightNote": "El pie del portal lleva un aviso de copyright generico. La licencia EXPLICITA del conjunto de datos manda sobre el: una concesion escrita y especifica vence a un aviso de plantilla."
+      },
+      "robots": {
+        "status": "LEIDO_EN_AMBOS_HOSTS",
+        "portalRobots": {
+          "url": "https://data.sandiego.gov/robots.txt",
+          "httpStatus": 404,
+          "bytes": 365,
+          "sha256": "40695cb67d1cff130724141134acf71ae0cf7f827d6c52e56105d0435e61fbbd",
+          "observed": "404 NoSuchKey del bucket que sirve el portal: no hay politica publicada."
+        },
+        "downloadRobots": {
+          "url": "https://seshat.datasd.org/robots.txt",
+          "httpStatus": 403,
+          "bytes": 111,
+          "sha256": "a824bc7739e226e1b40ea0f8c4e4f4c6f796fc3b4abfa6e9abe3bd119a30d938",
+          "observed": "403 AccessDenied del bucket: tampoco hay politica publicada, y el 403 es sobre robots.txt, no sobre el CSV."
+        },
+        "disallowsOurPath": false,
+        "disallowsOurPathBasis": "No hay politica que prohiba nada en ninguno de los dos hosts. Eso es lo UNICO que este campo afirma. Un 404 y un 403 sobre robots.txt son hallazgos, NO permiso: el permiso lo da la licencia PDDL explicita y el hecho de que el portal publique este CSV como su via oficial de descarga.",
+        "interpretation": "Dos cosas distintas y las dos hacen falta: el robots gobierna el metodo de acceso y aqui no dice nada, y la licencia gobierna la reutilizacion del dato y aqui dice PDDL. Si el permiso dependiera solo del robots ausente, esta fuente no se encenderia.",
+        "htmlCrawlingAllowed": false,
+        "allowedResources": [
+          "https://seshat.datasd.org/development_permits/approvals_issued_2026_datasd.csv"
+        ]
+      },
+      "limits": {
+        "maxValidCandidatesPerRun": 50,
+        "maxSuccessfulRunsPer24h": 1,
+        "requestsPerRun": 1,
+        "maxBytes": 134217728,
+        "retry": {
+          "maxAttempts": 4,
+          "baseMs": 1000,
+          "capMs": 30000,
+          "jitter": "full",
+          "respectRetryAfter": true
+        }
+      },
+      "schema": {
+        "method": "GET con Range 0-8191 sobre el CSV real: cabecera sin descargar los 20 MB",
+        "httpStatus": 206,
+        "sha256": "62989e88ca7ad90d84aac86eac28bc46bcef7159da23933584e13353fdc51ad6",
+        "sha256Scope": "Primeros 8192 bytes del CSV, que contienen la cabecera y las primeras filas.",
+        "observedFieldCount": 54,
+        "observedFields": [
+          "DEVELOPMENT_ID",
+          "PROJECT_ID",
+          "PROJECT_TYPE",
+          "PROJECT_STATUS",
+          "PROJECT_PROCESSING_CODE",
+          "PROJECT_CREATE_DATE",
+          "PROJECT_DEEMEDCOMPLETE_DATE",
+          "PROJECT_TRUST_ACCOUNT_NO",
+          "PROJECT_TITLE",
+          "PROJECT_SCOPE",
+          "JOB_ID",
+          "JOB_DRAWING_NUMBER",
+          "GIS_ADDRESS",
+          "GIS_APN",
+          "JOB_BC_CODE",
+          "JOB_BC_CODE_DESCRIPTION",
+          "GIS_LATITUDE",
+          "GIS_LONGITUDE",
+          "APPROVAL_ID",
+          "APPROVAL_CATEGORY_CODE",
+          "APPROVAL_PROCESSING_CODE",
+          "APPROVAL_TYPE",
+          "APPROVAL_STATUS",
+          "APPROVAL_SCOPE",
+          "APPROVAL_CREATE_DATE",
+          "APPROVAL_ISSUE_DATE",
+          "APPROVAL_CLOSE_DATE",
+          "APPROVAL_EXPIRE_DATE",
+          "APPROVAL_VALUATION",
+          "APPROVAL_DU_NET_CHANGE",
+          "APPROVAL_STORIES",
+          "APPROVAL_FLOOR_AREA",
+          "APPROVAL_DU_EXTREMELY_LOW",
+          "APPROVAL_DU_VERY_LOW",
+          "APPROVAL_DU_LOW",
+          "APPROVAL_DU_MODERATE",
+          "APPROVAL_DU_ABOVE_MODERATE",
+          "APPROVAL_DU_FUTURE_DEMO",
+          "APPROVAL_DU_BONUS",
+          "APPROVAL_ADU_EXTREMELY_LOW",
+          "APPROVAL_ADU_VERY_LOW",
+          "APPROVAL_ADU_LOW",
+          "APPROVAL_ADU_MODERATE",
+          "APPROVAL_ADU_ABOVE_MODERATE",
+          "APPROVAL_ADU_BONUS",
+          "APPROVAL_ADU_TOTAL",
+          "APPROVAL_JADU_EXTREMELY_LOW",
+          "APPROVAL_JADU_VERY_LOW",
+          "APPROVAL_JADU_LOW",
+          "APPROVAL_JADU_MODERATE",
+          "APPROVAL_JADU_ABOVE_MODERATE",
+          "APPROVAL_JADU_BONUS",
+          "APPROVAL_JADU_TOTAL",
+          "APPROVAL_PERMIT_HOLDER"
+        ],
+        "allowlistFieldsAllExist": true,
+        "dictionary": {
+          "url": "https://seshat.datasd.org/development_permits_set2/permits_set2_datasd_dict.csv",
+          "httpStatus": 200,
+          "bytes": 3157,
+          "sha256": "d8ab7dad7d9b52a11bee89cd392a61223a87b23ba2bbef0858374f4ea5e7417a",
+          "fieldsDescribed": 21,
+          "mismatch": "El diccionario descargable nombra 21 campos en minusculas y con OTROS nombres —address_job, job_apn, lat_job, date_approval_issue— mientras el archivo trae 54 en MAYUSCULAS. No describe este fichero campo a campo. Se registra como hallazgo, no se disimula.",
+          "howWeUseIt": "La semantica se toma del diccionario que el portal RENDERIZA en la ficha, con los mismos nombres en minusculas, y la correspondencia se escribe aqui: address_job = GIS_ADDRESS, job_apn = GIS_APN, lat_job/lng_job = GIS_LATITUDE/GIS_LONGITUDE, date_approval_issue = APPROVAL_ISSUE_DATE, approval_permit_holder = APPROVAL_PERMIT_HOLDER. El esquema del que depende el codigo es la CABECERA REAL, y se contrasta en cada descarga."
+        },
+        "headerAssertion": "Al descargar se contrasta la cabecera real contra la allowlist. Si falta una columna permitida, la corrida se para. Una columna nueva no para nada porque la allowlist es cerrada; se cuenta, y solo la cuenta."
+      },
+      "downloadVerification": {
+        "method": "HEAD",
+        "httpStatus": 200,
+        "contentLength": 21386385,
+        "contentType": "binary/octet-stream",
+        "etag": "\"dbbd27a5f7edc59ed2f298e97fd0515e\"",
+        "lastModified": "Fri, 02 Oct 2026 12:30:35 GMT",
+        "acceptRanges": "bytes",
+        "portalDeclaredSize": "9.57 MB",
+        "sizeDiscrepancy": {
+          "observed": "El archivo real mide 20.4 MB; el portal declara 9.57 MB.",
+          "resolved": true,
+          "evidence": "No es otro archivo: es que la cifra del portal esta cacheada para los ficheros del ano en curso, que crecen a diario. Los tres de 2026 estan desviados por el mismo factor (~2.12x: creados 11.09 declarados / 23.32 reales, emitidos 9.57 / 20.40, cerrados 7.29 / 15.47) y el de 2025, que ya es definitivo, COINCIDE (27.86 declarados / 27.88 reales). Ese caso de control es lo que convierte la discrepancia en explicada y no en ignorada.",
+          "whatWeValidate": "La evidencia reproducible de este archivo es su ETag y su Content-Length observados, no la cifra que el portal renderiza. El tamano declarado NO se usa como regla de validacion."
+        },
+        "updateCadence": "Diaria, declarada por el portal (Update Frequency: Daily). Last Updated: Oct 2, 2026. Date Issued: Apr 10, 2026.",
+        "publisher": "Development Services"
+      },
+      "personalDataNotice": "APPROVAL_PERMIT_HOLDER es un nombre de CONTACTO y contiene personas fisicas. Se lee para decidir y solo se conserva cuando la regla lo declara empresa sin ambiguedad. El archivo trae ademas APN, latitud, longitud, numero de cuenta fiduciaria y numero de plano: ninguno se pide ni se persiste.",
+      "artifacts": {
+        "portalPage": {
+          "url": "https://data.sandiego.gov/datasets/development-permits/",
+          "httpStatus": 200,
+          "bytes": 45856,
+          "sha256": "a7b04755ad3c6c06bbe1efc1c2f748d1d02ae2f973e54743dbf7fc55a17a624e",
+          "sha256Scope": "Cuerpo HTML completo de la ficha del conjunto de datos.",
+          "finding": "Declara 'Issued approvals (2026)' enlazando exactamente la URL del manifiesto, Update Frequency: Daily, Last Updated: Oct 2 2026, y License → View License hacia la PDDL."
+        },
+        "portalRobotsTxt": {
+          "url": "https://data.sandiego.gov/robots.txt",
+          "httpStatus": 404,
+          "httpStatusIsEvidence": true,
+          "bytes": 365,
+          "sha256": "40695cb67d1cff130724141134acf71ae0cf7f827d6c52e56105d0435e61fbbd",
+          "sha256Scope": "Cuerpo del 404 NoSuchKey del bucket. Un 404 es hallazgo, no permiso."
+        },
+        "downloadRobotsTxt": {
+          "url": "https://seshat.datasd.org/robots.txt",
+          "httpStatus": 403,
+          "httpStatusIsEvidence": true,
+          "bytes": 111,
+          "sha256": "a824bc7739e226e1b40ea0f8c4e4f4c6f796fc3b4abfa6e9abe3bd119a30d938",
+          "sha256Scope": "Cuerpo del 403 AccessDenied del bucket, sobre robots.txt y no sobre el CSV. Tampoco es permiso."
+        },
+        "dataDictionary": {
+          "url": "https://seshat.datasd.org/development_permits_set2/permits_set2_datasd_dict.csv",
+          "httpStatus": 200,
+          "bytes": 3157,
+          "sha256": "d8ab7dad7d9b52a11bee89cd392a61223a87b23ba2bbef0858374f4ea5e7417a",
+          "sha256Scope": "CSV completo del diccionario oficial, 21 campos descritos.",
+          "finding": "Define approval_permit_holder como 'Contact name whom the Approval is issued to'. Esa frase es la razon de que la regla del holder exija una senal positiva de entidad. Nombra 21 campos en minusculas frente a las 54 del fichero: el desajuste queda documentado en schema.dictionary."
+        },
+        "csvHeader": {
+          "url": "https://seshat.datasd.org/development_permits/approvals_issued_2026_datasd.csv",
+          "httpStatus": 206,
+          "bytes": 8192,
+          "sha256": "62989e88ca7ad90d84aac86eac28bc46bcef7159da23933584e13353fdc51ad6",
+          "sha256Scope": "Primeros 8192 bytes del CSV real, con la cabecera de 54 columnas. Rango en vez de descarga completa: para leer una cabecera no hacen falta 20 MB.",
+          "finding": "Las 14 columnas de la allowlist existen las 14. Estan presentes APN, lat, long, trust account y drawing number, y ninguna se pide.",
+          "httpStatusIsEvidence": true,
+          "note": "El 206 ES la evidencia: se pidio el rango 0-8191 en lugar de los 20 MB completos, porque para leer una cabecera no hace falta descargar el archivo. Un 206 con Content-Range es una respuesta correcta, no un fallo."
+        }
+      },
+      "decision": "HABILITADA. Licencia explicita PDDL declarada por el publicador, enlace exacto confirmado en la ficha del portal, robots sin politica en los dos hosts (hallazgo, no permiso), esquema real de 54 columnas contrastado, diccionario leido con su desajuste documentado, y tamano/actualizacion comprobados con el caso de control de 2025 que explica la discrepancia del portal. La decision de ESCRIBIR sigue siendo aparte: exige una preview limpia y la puerta central."
+    }
+  },
+  "digest": "sha256:5827c3d3072a769e52461e386acfb4d54f6b330d6bb469d2edb5e4aa9226ed10"
+}
