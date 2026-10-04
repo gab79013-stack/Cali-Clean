@@ -12,7 +12,7 @@ Claude Code/Cloud can run the manifest phase because it needs only Python's stan
 
 ### Mac role
 
-The Mac runner adds the local `render-pilot` step. It creates four branded scene cards from the official Cali Clean artwork, then encodes a 15-second H.264 MP4 with macOS AVFoundation. This avoids a paid video-provider dependency while the visual format is being validated.
+The Mac runner adds the local `render-pilot` step. It creates four branded scene cards from the official Cali Clean artwork, then encodes a 15-second H.264 MP4 with macOS AVFoundation. The encoder and inspector are built from Swift first. If swiftc and the SDK are incompatible (for example Command Line Tools `redefinition of module 'SwiftBridging'`), equivalent Objective-C sources are built with `xcrun clang -fno-modules`, for both binaries together. This avoids a paid video-provider dependency while the visual format is being validated.
 
 ### Provider audit
 

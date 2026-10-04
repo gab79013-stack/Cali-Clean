@@ -50,6 +50,24 @@ MACOS_DEPLOYMENT_TARGET = "13.0"
 SWIFT_LANGUAGE_VERSION = "5"
 SUPPORTED_ARCHS = {"arm64", "x86_64"}
 MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024
+OBJC_FRAMEWORKS = ("Foundation", "AVFoundation", "CoreMedia", "CoreVideo", "CoreGraphics", "ImageIO")
+# Compiler output that means swiftc and the SDK disagree (not a bug in our code).
+SWIFT_INCOMPATIBILITY_PATTERNS = (
+    "redefinition of module",
+    "swiftbridging",
+    "could not build module",
+    "failed to build module",
+    "could not build objective-c module",
+    "module compiled with swift",
+    "compiled module was created by",
+    "cannot load module",
+    "cannot load underlying module",
+    "unable to load standard library",
+    "sdk is not supported by the compiler",
+    "is not supported by this compiler",
+    "missing required module",
+    "no such module 'swift'",
+)
 
 KILL_ENV = "CALI_CLEAN_VIDEO_KILL"
 KILL_FILE = "KILL"
@@ -483,10 +501,28 @@ class Toolchain:
     sdk_version: str
     target: str
     swiftc_version: str
+    clang: str = ""
+    clang_version: str = ""
+
+    @property
+    def arch(self) -> str:
+        return self.target.split("-", 1)[0]
 
     def fingerprint(self) -> str:
-        raw = "|".join([self.swiftc, self.sdk_path, self.sdk_version, self.target, self.swiftc_version, SWIFT_LANGUAGE_VERSION])
+        raw = "|".join([
+            self.swiftc, self.swiftc_version, self.clang, self.clang_version,
+            self.sdk_path, self.sdk_version, self.target, SWIFT_LANGUAGE_VERSION,
+        ])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class CompileError(ToolchainError):
+    """A compiler ran and failed; carries the complete output for classification."""
+
+    def __init__(self, message: str, output: str, log_path: Path) -> None:
+        super().__init__(message)
+        self.output = output
+        self.log_path = log_path
 
 
 def run_diag(command: List[str], timeout: int, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
@@ -511,6 +547,11 @@ def resolve_toolchain(
     runner: Runner = run_diag,
     exists: Callable[[str], bool] = os.path.exists,
 ) -> Toolchain:
+    """Resolve swiftc (preferred) and clang (fallback) for the same xcrun-selected SDK.
+
+    A missing or broken swiftc is tolerated as long as clang is usable; anything
+    that needs a human (license, missing Command Line Tools, authorization) stops.
+    """
     if platform_name != "darwin":
         raise ToolchainError(f"Local AVFoundation rendering requires macOS (darwin); this host is {platform_name!r}")
     for tool in (XCODE_SELECT, XCRUN):
@@ -520,32 +561,47 @@ def resolve_toolchain(
     if arch not in SUPPORTED_ARCHS:
         raise ToolchainError(f"Unsupported CPU architecture: {arch!r}")
 
-    def query(args: List[str], what: str) -> str:
+    def query(args: List[str], what: str, required: bool = True) -> str:
         result = runner(args, 60)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
             human = _human_required(detail)
             if human:
                 raise ToolchainError(f"Blocked: {human}. Command: {' '.join(args)}\n{detail}")
+            if not required:
+                return ""
             raise ToolchainError(f"Cannot resolve {what} (exit {result.returncode}): {' '.join(args)}\n{detail}")
         return result.stdout.strip()
 
     query([XCODE_SELECT, "-p"], "active developer directory")
-    swiftc = query([XCRUN, "--sdk", "macosx", "--find", "swiftc"], "swiftc")
     sdk_path = query([XCRUN, "--sdk", "macosx", "--show-sdk-path"], "macOS SDK path")
     sdk_version = query([XCRUN, "--sdk", "macosx", "--show-sdk-version"], "macOS SDK version")
-    version = query([XCRUN, "--sdk", "macosx", "swiftc", "--version"], "swiftc version")
-    if not swiftc or not exists(swiftc):
-        raise ToolchainError(f"xcrun returned a swiftc that does not exist: {swiftc!r}")
     if not sdk_path or not os.path.isdir(sdk_path):
         raise ToolchainError(f"xcrun returned an SDK path that does not exist: {sdk_path!r}")
+
+    swiftc = query([XCRUN, "--sdk", "macosx", "--find", "swiftc"], "swiftc", required=False)
+    swiftc_version = ""
+    if swiftc and exists(swiftc):
+        swiftc_version = query([XCRUN, "--sdk", "macosx", "swiftc", "--version"], "swiftc version", required=False)
+    else:
+        swiftc = ""
+    clang = query([XCRUN, "--sdk", "macosx", "--find", "clang"], "clang", required=False)
+    clang_version = ""
+    if clang and exists(clang):
+        clang_version = query([XCRUN, "--sdk", "macosx", "clang", "--version"], "clang version", required=False)
+    else:
+        clang = ""
+    if not swiftc and not clang:
+        raise ToolchainError("Neither swiftc nor clang could be resolved through xcrun --sdk macosx")
     return Toolchain(
         xcrun=XCRUN,
         swiftc=swiftc,
         sdk_path=sdk_path,
         sdk_version=sdk_version,
         target=f"{arch}-apple-macos{MACOS_DEPLOYMENT_TARGET}",
-        swiftc_version=version.splitlines()[0] if version else "",
+        swiftc_version=swiftc_version.splitlines()[0] if swiftc_version else "",
+        clang=clang,
+        clang_version=clang_version.splitlines()[0] if clang_version else "",
     )
 
 
@@ -560,6 +616,29 @@ def swiftc_command(toolchain: Toolchain, source: Path, output: Path, module_cach
         str(source),
         "-o", str(output),
     ]
+
+
+def clang_objc_command(toolchain: Toolchain, source: Path, output: Path, module_cache: Path) -> List[str]:
+    # -fno-modules: headers are included textually, so no module map (and no
+    # SwiftBridging module definition) from the SDK or Command Line Tools is read.
+    command = [
+        toolchain.xcrun, "--sdk", "macosx", "clang",
+        "-x", "objective-c",
+        "-fobjc-arc",
+        "-fno-modules",
+        "-isysroot", toolchain.sdk_path,
+        "-arch", toolchain.arch,
+        f"-mmacosx-version-min={MACOS_DEPLOYMENT_TARGET}",
+        "-O2",
+        "-Wall",
+        "-Wno-deprecated-declarations",
+        "-Werror=implicit-function-declaration",
+        str(source),
+        "-o", str(output),
+    ]
+    for framework in OBJC_FRAMEWORKS:
+        command.extend(["-framework", framework])
+    return command
 
 
 def swift_env(module_cache: Path) -> Dict[str, str]:
@@ -579,13 +658,15 @@ def diagnostic_log(command: List[str], result: subprocess.CompletedProcess, extr
     return "\n".join(lines) + "\n"
 
 
-def compile_swift(
+def _compile(
     toolchain: Toolchain,
     name: str,
     source: Path,
     logs: List[Dict[str, Any]],
     log_dir: Path,
-    runner: Runner = run_diag,
+    runner: Runner,
+    compiler: str,
+    build_command: Callable[[Toolchain, Path, Path, Path], List[str]],
 ) -> Path:
     build_dir = ROOT / ".build"
     private_dir(build_dir)
@@ -603,24 +684,81 @@ def compile_swift(
     temp = build_dir / f"{name}.tmp"
     if temp.exists():
         temp.unlink()
-    command = swiftc_command(toolchain, source, temp, module_cache)
+    command = build_command(toolchain, source, temp, module_cache)
     result = runner(command, 300, swift_env(module_cache))
     log_path = log_dir / f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-build-{name}.log"
     write_private(log_path, diagnostic_log(command, result, {
-        "swiftc": toolchain.swiftc,
-        "swiftc_version": toolchain.swiftc_version,
+        "compiler": compiler,
+        "swiftc": f"{toolchain.swiftc} ({toolchain.swiftc_version})",
+        "clang": f"{toolchain.clang} ({toolchain.clang_version})",
         "sdk": f"{toolchain.sdk_path} ({toolchain.sdk_version})",
         "target": toolchain.target,
         "module_cache": module_cache,
     }))
-    logs.append({"step": f"build:{name}", "exit_code": result.returncode, "log": str(log_path)})
+    logs.append({"step": f"build:{name}", "compiler": compiler, "exit_code": result.returncode, "log": str(log_path)})
     if result.returncode != 0 or not temp.exists():
-        tail = "\n".join((result.stderr or result.stdout or "").strip().splitlines()[-25:])
-        raise ToolchainError(f"swiftc failed for {source.name} (exit {result.returncode}); full diagnostics: {log_path}\n{tail}")
+        output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        tail = "\n".join(output.strip().splitlines()[-25:])
+        raise CompileError(
+            f"{compiler} failed for {source.name} (exit {result.returncode}); full diagnostics: {log_path}\n{tail}",
+            output, log_path,
+        )
     os.replace(temp, binary)
     binary.chmod(0o700)
     write_private(stamp, expected + "\n")
     return binary
+
+
+def compile_swift(toolchain: Toolchain, name: str, source: Path, logs: List[Dict[str, Any]], log_dir: Path, runner: Runner = run_diag) -> Path:
+    return _compile(toolchain, name, source, logs, log_dir, runner, "swiftc", swiftc_command)
+
+
+def compile_objc(toolchain: Toolchain, name: str, source: Path, logs: List[Dict[str, Any]], log_dir: Path, runner: Runner = run_diag) -> Path:
+    return _compile(toolchain, name, source, logs, log_dir, runner, "clang", clang_objc_command)
+
+
+def swift_incompatibility(output: str) -> Optional[str]:
+    """Return the first line showing the Swift toolchain cannot use this SDK, if any.
+
+    Only toolchain/SDK mismatches qualify; ordinary code errors never trigger the
+    fallback, so a real bug in the Swift sources is never masked.
+    """
+    for line in output.splitlines():
+        lowered = line.casefold()
+        if any(pattern in lowered for pattern in SWIFT_INCOMPATIBILITY_PATTERNS):
+            return line.strip()
+    return None
+
+
+def build_renderers(
+    toolchain: Toolchain,
+    logs: List[Dict[str, Any]],
+    log_dir: Path,
+    runner: Runner = run_diag,
+) -> Dict[str, Any]:
+    """Build renderer and inspector with one coherent backend: Swift first, else Objective-C for both."""
+    reason = "swiftc not available through xcrun"
+    if toolchain.swiftc:
+        try:
+            return {
+                "backend": "swift",
+                "render": compile_swift(toolchain, "render_mp4", SRC_DIR / "render_mp4.swift", logs, log_dir, runner),
+                "inspect": compile_swift(toolchain, "inspect_mp4", SRC_DIR / "inspect_mp4.swift", logs, log_dir, runner),
+                "fallback_reason": None,
+            }
+        except CompileError as exc:
+            reason = swift_incompatibility(exc.output)
+            if reason is None:
+                raise
+    if not toolchain.clang:
+        raise ToolchainError(f"Swift is unusable ({reason}) and clang is not available for the Objective-C fallback")
+    logs.append({"step": "fallback:objc", "reason": reason})
+    return {
+        "backend": "objc",
+        "render": compile_objc(toolchain, "render_mp4-objc", SRC_DIR / "render_mp4.m", logs, log_dir, runner),
+        "inspect": compile_objc(toolchain, "inspect_mp4-objc", SRC_DIR / "inspect_mp4.m", logs, log_dir, runner),
+        "fallback_reason": reason,
+    }
 
 
 # --- Rendering --------------------------------------------------------------------------
@@ -785,8 +923,8 @@ def render_video(
     log_dir = storage_path(runtime, "logs")
     private_dir(log_dir)
     logs: List[Dict[str, Any]] = []
-    render_bin = compile_swift(toolchain, "render_mp4", ROOT / "src" / "render_mp4.swift", logs, log_dir, runner)
-    inspect_bin = compile_swift(toolchain, "inspect_mp4", ROOT / "src" / "inspect_mp4.swift", logs, log_dir, runner)
+    built = build_renderers(toolchain, logs, log_dir, runner)
+    render_bin, inspect_bin = built["render"], built["inspect"]
     ensure_not_killed(runtime)
     cards = render_cards(manifest, brand, runtime, paths["draft_dir"])
     output = runtime["output"]
@@ -802,11 +940,15 @@ def render_video(
     validate_video_metadata(metadata, output)
     return {
         "engine": "macOS AVFoundation",
+        "backend": built["backend"],
+        "fallback_reason": built["fallback_reason"],
         "provider_cost": 0,
         "rendered_at": now_local(runtime).isoformat(),
         "toolchain": {
             "swiftc": toolchain.swiftc,
             "swiftc_version": toolchain.swiftc_version,
+            "clang": toolchain.clang,
+            "clang_version": toolchain.clang_version,
             "sdk": toolchain.sdk_path,
             "sdk_version": toolchain.sdk_version,
             "target": toolchain.target,
@@ -864,7 +1006,12 @@ def healthcheck(runtime: Dict[str, Any], brand: Dict[str, Any], toolchain_resolv
 
     def toolchain() -> Dict[str, str]:
         tc = toolchain_resolver()
-        return {"swiftc": tc.swiftc, "version": tc.swiftc_version, "sdk": tc.sdk_path, "sdk_version": tc.sdk_version, "target": tc.target}
+        return {
+            "swiftc": tc.swiftc or "unavailable", "swiftc_version": tc.swiftc_version,
+            "clang": tc.clang or "unavailable", "clang_version": tc.clang_version,
+            "sdk": tc.sdk_path, "sdk_version": tc.sdk_version, "target": tc.target,
+            "order": "swift first; objective-c fallback only on toolchain/SDK incompatibility",
+        }
 
     check("brand_integrity", lambda: validate_brand(brand))
     check("runtime_safe", lambda: ensure_runtime_safe(runtime))
