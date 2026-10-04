@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHON_BIN=${CALI_CLEAN_PYTHON:-/Users/gv/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3}
+
+if [ "${VIDEO_ROUTINE_ENABLED:-false}" != "true" ]; then
+  echo "Cali Clean video routine is disabled (VIDEO_ROUTINE_ENABLED is not true)." >&2
+  exit 78
+fi
+
+exec "$PYTHON_BIN" "$ROOT_DIR/src/pipeline.py" hourly
+

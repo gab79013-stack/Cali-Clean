@@ -1,0 +1,64 @@
+{
+  "template_version": "1.0.0",
+  "language_cycle": ["en", "es"],
+  "angles": ["service", "process", "coverage"],
+  "topics": [
+    {
+      "id": "commercial",
+      "asset": "office",
+      "title": {"en": "Commercial cleaning", "es": "Limpieza comercial"},
+      "hook": {"en": "Make room for a better welcome.", "es": "Dele espacio a una mejor bienvenida."},
+      "body": {"en": "A fresh space for customers and your team.", "es": "Un espacio fresco para clientes y su equipo."}
+    },
+    {
+      "id": "office",
+      "asset": "office",
+      "title": {"en": "Office cleaning", "es": "Limpieza de oficinas"},
+      "hook": {"en": "Ready for a more focused workday?", "es": "¿Listos para una jornada con más enfoque?"},
+      "body": {"en": "Choose the priorities, access and schedule.", "es": "Elija prioridades, acceso y frecuencia."}
+    },
+    {
+      "id": "residential",
+      "asset": "home",
+      "title": {"en": "Residential cleaning", "es": "Limpieza residencial"},
+      "hook": {"en": "Come home to more breathing room.", "es": "Vuelva a un hogar con más tranquilidad."},
+      "body": {"en": "One-time refreshes and recurring care.", "es": "Limpiezas únicas y cuidado recurrente."}
+    },
+    {
+      "id": "medical-office",
+      "asset": "office",
+      "title": {"en": "Medical office cleaning", "es": "Limpieza de consultorios"},
+      "hook": {"en": "Thoughtful care around patient care.", "es": "Atención al entorno donde se atiende."},
+      "body": {"en": "Define rooms, surfaces and timing first.", "es": "Primero defina áreas, superficies y horario."}
+    },
+    {
+      "id": "industrial",
+      "asset": "office",
+      "title": {"en": "Industrial cleaning", "es": "Limpieza industrial"},
+      "hook": {"en": "A clearer path through a busy facility.", "es": "Más orden en un espacio en movimiento."},
+      "body": {"en": "Build the plan around the facility details.", "es": "Arme el plan según los detalles de la instalación."}
+    },
+    {
+      "id": "windows",
+      "asset": "home",
+      "title": {"en": "Window cleaning", "es": "Limpieza de ventanas"},
+      "hook": {"en": "Let a little more California in.", "es": "Deje entrar un poco más de California."},
+      "body": {"en": "Confirm glass, access and priority areas.", "es": "Confirme cristales, acceso y áreas prioritarias."}
+    },
+    {
+      "id": "moving",
+      "asset": "home",
+      "title": {"en": "Move-in & move-out cleaning", "es": "Limpieza de entrada y salida"},
+      "hook": {"en": "A fresh start on either side of moving day.", "es": "Un nuevo comienzo antes o después de mudarse."},
+      "body": {"en": "Review the scope before service is scheduled.", "es": "Revise el alcance antes de programar el servicio."}
+    },
+    {
+      "id": "post-construction",
+      "asset": "kitchen",
+      "title": {"en": "Post-construction cleaning", "es": "Limpieza después de obra"},
+      "hook": {"en": "The finishing touch after the finishing touches.", "es": "El último detalle después de los últimos detalles."},
+      "body": {"en": "Tell us about the space and the priority areas.", "es": "Cuéntenos del espacio y las áreas prioritarias."}
+    }
+  ]
+}
+

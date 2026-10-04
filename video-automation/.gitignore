@@ -1,0 +1,11 @@
+var/drafts/**
+var/review/**
+var/state/**
+!var/drafts/.gitkeep
+!var/review/.gitkeep
+!var/state/.gitkeep
+__pycache__/
+.build/
+*.pyc
+*.mp4
+*.png

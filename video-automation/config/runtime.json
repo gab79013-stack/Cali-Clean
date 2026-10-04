@@ -1,0 +1,51 @@
+{
+  "timezone": "America/Los_Angeles",
+  "interval_minutes": 60,
+  "routine_enabled": false,
+  "render_enabled": false,
+  "publication_enabled": false,
+  "meta_connected": false,
+  "planned_destinations": ["facebook_reels", "instagram_reels"],
+  "output": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_seconds": 15,
+    "format": "mp4",
+    "codec": "h264",
+    "audio": false
+  },
+  "limits": {
+    "max_real_renders_per_day": 1,
+    "max_manifests_per_hour": 1,
+    "min_topic_gap_hours": 8
+  },
+  "retention": {
+    "draft_days": 14,
+    "manifest_days": 90,
+    "keep_published_days": 0
+  },
+  "storage": {
+    "drafts": "var/drafts",
+    "review": "var/review",
+    "state": "var/state",
+    "directory_mode": "0700",
+    "file_mode": "0600"
+  },
+  "renderers": {
+    "active": "local_avfoundation",
+    "local_avfoundation": {
+      "available": true,
+      "per_render_provider_cost": 0,
+      "requires": "macOS with Swift and AVFoundation"
+    },
+    "higgsfield_seedance_2_5": {
+      "available": true,
+      "enabled": false,
+      "quoted_credits_for_15s_480p_draft": 45,
+      "available_credits_at_audit": 5.2,
+      "reason_disabled": "Insufficient credits; no purchase, trial, or charge authorized."
+    }
+  }
+}
+

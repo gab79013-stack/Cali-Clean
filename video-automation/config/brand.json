@@ -1,0 +1,107 @@
+{
+  "brand_version": "2026-10-04.1",
+  "audited_at": "2026-10-04",
+  "official_sources": [
+    "https://cali-clean.net/",
+    "https://cali-clean.net/es/",
+    "https://cali-clean.net/privacy/",
+    "https://cali-clean.net/terms/"
+  ],
+  "name": "Cali Clean",
+  "location": "San Diego, California",
+  "website": "https://cali-clean.net/",
+  "taglines": {
+    "en": "A little more clean. A little more California.",
+    "es": "Un poco más limpio. Un poco más California."
+  },
+  "hero": {
+    "en": "Life gets busy. Make room for clean.",
+    "es": "La vida no para. Déjele espacio a lo limpio."
+  },
+  "cta": {
+    "en": "Plan your clean at cali-clean.net",
+    "es": "Planee su limpieza en cali-clean.net"
+  },
+  "coverage": {
+    "en": "Serving homes and businesses across San Diego and nearby coastal and inland communities.",
+    "es": "Para hogares y negocios de San Diego y comunidades cercanas, tanto en la costa como en el interior."
+  },
+  "colors": {
+    "ink": "#193e38",
+    "teal": "#164e47",
+    "paper": "#fbfbf5",
+    "sage": "#d9eccb",
+    "orange": "#f4a16e",
+    "muted": "#5c6d65"
+  },
+  "font": {
+    "family": "Manrope",
+    "asset": "assets/manrope.woff2",
+    "sha256": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f"
+  },
+  "assets": [
+    {
+      "id": "home",
+      "path": "assets/home.webp",
+      "source": "https://cali-clean.net/assets/home.webp",
+      "sha256": "d088322f091624fa1e5927e62accc115e4ff7b2a5730e7ed0d82740f87950982",
+      "disclosure": "Original AI-generated illustration; not client work or company personnel."
+    },
+    {
+      "id": "kitchen",
+      "path": "assets/kitchen.webp",
+      "source": "https://cali-clean.net/assets/kitchen.webp",
+      "sha256": "d59fc5226e2732a05a4071924aca943d5ae6f00bfff0226bbaa8773928ef5482",
+      "disclosure": "Original AI-generated illustration; not client work or company personnel."
+    },
+    {
+      "id": "office",
+      "path": "assets/office.webp",
+      "source": "https://cali-clean.net/assets/office.webp",
+      "sha256": "dc0a23e47da9b7199c651314fa2e2095e04cec4f89cb6f7856d6aee5d27613ca",
+      "disclosure": "Original AI-generated illustration; not client work or company personnel."
+    },
+    {
+      "id": "mark",
+      "path": "assets/favicon.svg",
+      "source": "https://cali-clean.net/favicon.svg",
+      "sha256": "d455e159061c179dac21367895e95773d4d52e499f8f0212f6b8a67d116db4a3",
+      "disclosure": "Cali Clean brand mark."
+    }
+  ],
+  "content_rules": {
+    "required_visual_disclosure": {
+      "en": "Illustrative AI-generated visual — not client work or company personnel.",
+      "es": "Imagen ilustrativa generada con IA; no representa clientes ni personal."
+    },
+    "forbidden_claim_fragments": [
+      "guaranteed",
+      "best cleaning",
+      "number one",
+      "five-star",
+      "5-star",
+      "licensed and insured",
+      "bonded",
+      "certified",
+      "discount",
+      "sale",
+      "testimonial",
+      "before and after",
+      "100%",
+      "garantizado",
+      "la mejor limpieza",
+      "número uno",
+      "cinco estrellas",
+      "certificado",
+      "descuento",
+      "oferta",
+      "testimonio",
+      "antes y después"
+    ],
+    "forbid_personal_data": true,
+    "forbid_prices": true,
+    "forbid_reviews": true,
+    "forbid_before_after": true
+  }
+}
+
