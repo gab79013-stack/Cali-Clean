@@ -286,6 +286,28 @@ function sameValue(current, next) {
   if (typeof next === 'object') {
     if ('primaryLinkUrl' in next) return trim(current.primaryLinkUrl) === trim(next.primaryLinkUrl);
     if ('primaryEmail' in next) return trim(current.primaryEmail).toLowerCase() === trim(next.primaryEmail).toLowerCase();
+
+    // ADDRESS: se comparan SOLO los subcampos que se proponen.
+    //
+    // Comparar el objeto entero con JSON.stringify no funciona: la API devuelve
+    // el compuesto completo —addressStreet2 en blanco, addressLat y addressLng
+    // en null— y nosotros enviamos los cuatro o cinco que conocemos. Así que
+    // cada corrida veía un cambio donde no había ninguno y proponía un PATCH
+    // idéntico en sustancia. Aparte del ruido, eso tapa los cambios de verdad:
+    // si todo "cambia" siempre, un cambio real no se distingue.
+    //
+    // Un subcampo ausente en la propuesta significa "no lo sé", igual que en el
+    // resto del adaptador, y no se usa para decidir que algo cambió.
+    if (Object.keys(next).some((k) => k.startsWith('address'))) {
+      return Object.entries(next).every(([k, v]) => {
+        if (v === undefined) return true;
+        const a = current?.[k];
+        // null, undefined y cadena vacía son lo mismo para un subcampo de
+        // dirección: los tres significan "aquí no hay nada".
+        const norm = (x) => (x === null || x === undefined ? '' : trim(x));
+        return norm(a) === norm(v);
+      });
+    }
     return JSON.stringify(current) === JSON.stringify(next);
   }
   if (next && typeof next === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(next)) {

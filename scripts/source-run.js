@@ -2,8 +2,10 @@
  * Un ciclo de recolección de una fuente, en dos pasos que comparten una sola
  * consulta.
  *
- *   node scripts/source-run.js preview                    # consulta y enseña
- *   node scripts/source-run.js sync --snapshot <f> --confirm   # reutiliza
+ *   node scripts/source-run.js preview                          # consulta y enseña
+ *   node scripts/source-run.js sync  --snapshot <f> --confirm   # plan, sin escribir
+ *   node scripts/source-run.js apply --snapshot <f> --confirm \
+ *        --expect-hash sha256:… --max-creates 38                # escribe Companies
  *
  * Por qué dos pasos y una consulta: si `sync` volviera a preguntar al portal,
  * gastaría una segunda cuota y —lo importante— escribiría en el CRM algo que
@@ -27,7 +29,9 @@ import { MAX_ROWS_PER_RUN, WINDOW_MS } from '../src/prospecting/sources/quota.js
 import {
   writeSnapshot, readSnapshot, summarize, sessionId, latestSnapshot,
 } from '../src/prospecting/sources/snapshot.js';
-import { createClient, planCompanyUpsert, lowestDedupKeyWithPrefix } from '../src/services/crm/twenty.js';
+import {
+  createClient, planCompanyUpsert, upsertCompany, lowestDedupKeyWithPrefix,
+} from '../src/services/crm/twenty.js';
 
 const [command, ...rest] = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -35,6 +39,8 @@ const flag = (name, dflt) => {
   return i === -1 ? dflt : (rest[i + 1] ?? true);
 };
 const confirmed = rest.includes('--confirm');
+const expectHash = flag('expect-hash', null);
+const maxCreates = Number(flag('max-creates', 0));
 const sourceKey = String(flag('source', 'sdcounty_food_facility_permits'));
 const rowLimit = Number(flag('limit', MAX_ROWS_PER_RUN));
 
@@ -83,8 +89,39 @@ function requireGate() {
   return estado;
 }
 
+/**
+ * Una fila del snapshot convertida en prospecto. Un solo sitio, para que el
+ * plan y la escritura no puedan divergir ni por un campo.
+ *
+ * `verifiedAt` es la marca del snapshot, no la hora de ahora. Dos razones, y
+ * las dos importan: es cuando de verdad se comprobó el dato contra el registro
+ * oficial, y además hace la operación idempotente — con `new Date()` cada
+ * pasada propondría actualizar `lastVerified` y nunca llegaría a `noop`.
+ */
+function prospectFromRow(row, verifiedAt) {
+  return {
+    dedupKey: row.dedupKey,
+    businessName: row.businessName,
+    sourceUrl: row.sourceUrl,
+    sourceLabel: row.sourceLabel,
+    serviceArea: row.serviceArea,
+    address: row.address,
+    city: row.city,
+    zip: row.zip,
+    state: 'CA',
+    country: 'US',
+    stage: 'discovered',
+    // Procedencia: registro público del condado. De los cuatro valores que el
+    // enum del CRM ya tiene, un catálogo oficial de establecimientos es un
+    // directorio; PUBLIC_WEBSITE sería mentir, porque a ese negocio no se le ha
+    // visitado la web. No se añade un valor nuevo: eso sería cambiar el esquema.
+    channel: 'public_record',
+    lastVerified: verifiedAt,
+  };
+}
+
 /** Enseña el plan contra el CRM sin tocar nada: solo GET, solo Companies. */
-async function planCompanies(rows) {
+async function planCompanies(rows, verifiedAt) {
   if (!config.twenty.baseUrl) {
     console.log('  (TWENTY_BASE_URL no está configurada: no hay plan que enseñar)');
     return { plans: [], counts: null, writes: 0 };
@@ -93,25 +130,7 @@ async function planCompanies(rows) {
   const plans = [];
   for (const row of rows) {
     try {
-      const plan = await planCompanyUpsert(client, {
-        dedupKey: row.dedupKey,
-        businessName: row.businessName,
-        sourceUrl: row.sourceUrl,
-        sourceLabel: row.sourceLabel,
-        serviceArea: row.serviceArea,
-        address: row.address,
-        city: row.city,
-        zip: row.zip,
-        state: 'CA',
-        country: 'US',
-        stage: 'discovered',
-        // Procedencia: registro público del condado. El enum del CRM no tiene
-        // PUBLIC_RECORD, y añadirlo sería cambiar el esquema del CRM; de los
-        // valores que existen, un registro oficial de establecimientos es un
-        // directorio, no la web del propio negocio.
-        channel: 'public_record',
-        lastVerified: new Date().toISOString(),
-      });
+      const plan = await planCompanyUpsert(client, prospectFromRow(row, verifiedAt));
       plans.push({ dedupKey: plan.dedupKey, name: plan.name, action: plan.action, id: plan.id || null });
     } catch (err) {
       plans.push({ dedupKey: row.dedupKey, name: row.businessName, action: 'error', error: err.message });
@@ -213,7 +232,7 @@ async function preview() {
   console.log('  Fuera de git. Caduca en 6 h y solo se reutiliza desde esta misma sesión.');
 
   title('Plan contra el CRM (solo lectura, solo Companies)');
-  const { plans, counts, writes } = await planCompanies(result.rows);
+  const { plans, counts, writes } = await planCompanies(result.rows, new Date().toISOString());
   printPlan(plans);
 
   title('Lo que esta ejecución NO hizo');
@@ -251,7 +270,7 @@ async function sync() {
   console.log('  Peticiones a la fuente en este paso: 0. Cuota consumida: 0.');
 
   title('Plan contra el CRM (solo Companies)');
-  const { plans, counts, writes } = await planCompanies(doc.rows);
+  const { plans, counts, writes } = await planCompanies(doc.rows, doc.createdAt);
   const tally = printPlan(plans);
 
   const puedeEscribir = !config.twenty.dryRunDefault;
@@ -272,11 +291,111 @@ async function sync() {
   console.log(`\n✓ Reutilización limpia: ${tally.create} a crear, ${tally.update} a actualizar, sin una escritura.`);
 }
 
-const commands = { preview, sync };
+// ── apply ────────────────────────────────────────────────────
+/**
+ * La única ruta que escribe, y escribe solo Companies.
+ *
+ * Cinco cerrojos, y hacen falta los cinco:
+ *   1. `--confirm`;
+ *   2. `TWENTY_WRITE_ENABLED=true` en el entorno;
+ *   3. el hash esperado, pasado a mano: autoriza UN snapshot concreto, no
+ *      "el último que haya";
+ *   4. el hash, la sesión y el TTL del propio archivo;
+ *   5. un tope de creaciones, también a mano.
+ *
+ * Y una regla al fallar: se para en el primer error y no se reintenta. Un
+ * reintento automático sobre un CRM a medio escribir es cómo se duplica.
+ */
+async function apply() {
+  const file = flag('snapshot', null);
+  if (!file || file === true) die('falta --snapshot <archivo>. `apply` no adivina cuál.');
+  if (!confirmed) die('`apply` exige --confirm.');
+  if (config.twenty.dryRunDefault) {
+    die('`apply` exige TWENTY_WRITE_ENABLED=true en el entorno de ESTE comando.');
+  }
+  if (!expectHash || expectHash === true) {
+    die('`apply` exige --expect-hash <sha256:…>: se autoriza un snapshot concreto, no el último que haya.');
+  }
+  if (!Number.isInteger(maxCreates) || maxCreates <= 0) {
+    die('`apply` exige --max-creates <n>: el tope de creaciones se pone a mano.');
+  }
+
+  console.log('── APPLY · escribiendo Companies desde un snapshot ya revisado ──\n');
+
+  const { ok, doc, problems } = readSnapshot(String(file));
+  if (!ok) {
+    for (const p of problems) console.error(`  · ${p}`);
+    die('el snapshot no se puede reutilizar. No se escribe nada.');
+  }
+  if (doc.sha256 !== String(expectHash)) {
+    console.error(`  esperado: ${expectHash}`);
+    console.error(`  del archivo: ${doc.sha256}`);
+    die('el snapshot no es el autorizado.');
+  }
+  if (doc.sourceId !== sourceKey) die(`el snapshot es de ${doc.sourceId}, no de ${sourceKey}.`);
+  if (doc.rows.length > maxCreates) {
+    die(`el snapshot trae ${doc.rows.length} filas y el tope autorizado es ${maxCreates}.`);
+  }
+
+  console.log(`Snapshot: ${file}`);
+  console.log(`  hash:   ${doc.sha256}  (coincide con el autorizado)`);
+  console.log(`  sesión: la misma que lo creó · creado ${doc.createdAt}`);
+  console.log(`  filas:  ${doc.rows.length} · tope autorizado ${maxCreates}`);
+  console.log(`  lastVerified que se escribirá: ${doc.createdAt} (del snapshot, no de ahora)`);
+  console.log('  Peticiones a la fuente en este paso: 0. Cuota consumida: 0.\n');
+
+  const { client, counts, writes } = countingClient();
+  const hechos = { create: 0, update: 0, noop: 0 };
+  const errores = [];
+  let creados = 0;
+
+  for (const row of doc.rows) {
+    if (creados >= maxCreates) {
+      errores.push({ name: row.businessName, error: `tope de ${maxCreates} creaciones alcanzado` });
+      break;
+    }
+    try {
+      const res = await upsertCompany(client, prospectFromRow(row, doc.createdAt), { dryRun: false });
+      hechos[res.action] = (hechos[res.action] || 0) + 1;
+      if (res.action === 'create') creados++;
+      const mark = { create: '+', update: '~', noop: '=' }[res.action] || '?';
+      // En una creación el id no está en el plan (todavía no existía): está en
+      // el registro que devuelve la API. Se imprime porque es lo que permite
+      // auditar después qué fila creó qué empresa.
+      const id = res.id || res.record?.id || '';
+      console.log(`  ${mark} ${res.action.toUpperCase().padEnd(6)} ${res.name}  ${id}`);
+    } catch (err) {
+      errores.push({ name: row.businessName, dedupKey: row.dedupKey, error: err.message });
+      console.error(`  ! ERROR  ${row.businessName}: ${err.message}`);
+      // Fail-closed: se para aquí. Ni se sigue con las demás ni se reintenta.
+      break;
+    }
+  }
+
+  title('Resultado de la carga');
+  console.log(`  creadas:      ${hechos.create}`);
+  console.log(`  actualizadas: ${hechos.update}`);
+  console.log(`  sin cambios:  ${hechos.noop}`);
+  console.log(`  errores:      ${errores.length}`);
+  console.log(`  crm_writes:   ${writes()}`);
+  console.log(`  peticiones al CRM: ${JSON.stringify(counts)}`);
+  console.log(`  outbound: 0 · OUTBOUND_ENABLED: ${config.outbound.enabled}`);
+
+  if (errores.length) {
+    console.error('\n  Detenido en el primer error. No hay reintento automático:');
+    for (const e of errores) console.error(`    · ${e.name}: ${e.error}`);
+    die(`carga incompleta: ${hechos.create} creadas antes de parar.`);
+  }
+  console.log(`\n✓ ${hechos.create} empresas creadas. Ni personas, ni oportunidades, ni un mensaje.`);
+}
+
+const commands = { preview, sync, apply };
 if (!commands[command]) {
   console.log('Uso:');
   console.log('  node scripts/source-run.js preview [--limit 50] [--source <clave>]');
   console.log('  node scripts/source-run.js sync --snapshot <archivo> --confirm');
+  console.log('  node scripts/source-run.js apply --snapshot <archivo> --confirm \\');
+  console.log('       --expect-hash sha256:… --max-creates <n>');
   process.exit(1);
 }
 await commands[command]();

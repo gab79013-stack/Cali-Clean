@@ -166,8 +166,20 @@ export function toLeadStage({ stage, optedOut, hasVerifiedChannel } = {}) {
 }
 
 /** De dónde salió el registro. Solo dos orígenes son posibles hoy. */
+/**
+ * Procedencia del lead, con los valores que el enum del CRM ya tiene.
+ *
+ * `public_record` es el caso de los registros oficiales: un catálogo público de
+ * establecimientos con permiso. PUBLIC_WEBSITE sería mentir —a ese negocio no
+ * se le ha visitado la web— y de los cuatro valores que existen, un registro
+ * oficial es un directorio. No se añade un valor nuevo al enum: eso sería
+ * cambiar el esquema del CRM del cliente.
+ */
 export function toLeadSource(channel) {
-  return channel === 'inbound' ? 'INBOUND_WEBSITE' : 'PUBLIC_WEBSITE';
+  if (channel === 'inbound') return 'INBOUND_WEBSITE';
+  if (channel === 'public_record') return 'BUSINESS_DIRECTORY';
+  if (channel === 'referral') return 'REFERRAL';
+  return 'PUBLIC_WEBSITE';
 }
 
 /** Marca temporal de la última verificación, en el formato que acepta la API. */

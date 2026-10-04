@@ -546,3 +546,118 @@ test('el outbound sigue apagado', async () => {
   const { config } = await import('../src/config.js');
   assert.equal(config.outbound.enabled, false);
 });
+
+// ── El cuerpo exacto que se escribe ──────────────────────────
+/**
+ * Estas tres fijan lo que viaja al CRM en la carga productiva. Si alguien
+ * cambia el mapeo, fallan aquí y no en los datos del cliente.
+ */
+test('la procedencia de un registro público es BUSINESS_DIRECTORY', async () => {
+  const { toLeadSource, ENUMS } = await import('../src/services/crm/twenty-schema.js');
+  assert.equal(toLeadSource('public_record'), 'BUSINESS_DIRECTORY',
+    'PUBLIC_WEBSITE sería mentir: a este negocio no se le ha visitado la web');
+  assert.ok(ENUMS.leadSource.includes('BUSINESS_DIRECTORY'),
+    'el valor tiene que existir ya en el enum: no se cambia el esquema del CRM');
+  assert.equal(toLeadSource('inbound'), 'INBOUND_WEBSITE');
+  assert.equal(toLeadSource('outbound'), 'PUBLIC_WEBSITE');
+});
+
+test('el cuerpo de Company lleva la procedencia completa y ni un dato personal', async () => {
+  const { mapProspectToCompany } = await import('../src/services/crm/twenty.js');
+  const { stateFile, lockFile } = nuevoEstado();
+  const r = await corrida({ extra: { quotaOptions: { stateFile, lockFile } } });
+  const verificadoEn = '2026-10-04T06:49:55.122Z';
+
+  for (const row of r.rows) {
+    const body = mapProspectToCompany({
+      dedupKey: row.dedupKey, businessName: row.businessName, sourceUrl: row.sourceUrl,
+      serviceArea: row.serviceArea, address: row.address, city: row.city, zip: row.zip,
+      state: 'CA', country: 'US', stage: 'discovered', channel: 'public_record',
+      lastVerified: verificadoEn,
+    });
+
+    assert.equal(body.leadSource, 'BUSINESS_DIRECTORY');
+    assert.equal(body.dedupKey, row.dedupKey);
+    assert.match(body.dedupKey, /^sdcounty-ffp:/);
+    assert.equal(body.sourceUrl.primaryLinkUrl, 'https://data.sandiegocounty.gov/resource/c5ez-ufrd.json');
+    assert.equal(body.lastVerified, verificadoEn, 'la marca es la del snapshot, no la de ahora');
+    assert.ok(body.serviceArea, 'sin área de servicio no se puede filtrar por zona');
+    assert.equal(body.contactabilityStatus, 'NO_VERIFIED_CHANNEL',
+      'no hay canal verificado: no se puede afirmar que se le pueda escribir');
+
+    // Nada de contacto: el registro público no lo da y no se inventa.
+    assert.equal(body.businessEmail, undefined);
+    assert.equal(body.domainName, undefined);
+    const texto = JSON.stringify(body);
+    for (const aguja of ['Nombre Inventado', 'ejemplo.invalid', 'permit_owner', 'latitude', '32.71']) {
+      assert.ok(!texto.includes(aguja), `"${aguja}" viajaría al CRM`);
+    }
+  }
+});
+
+test('con la marca del snapshot la segunda pasada es noop, no update', async () => {
+  const { createFakeTwenty } = await import('./fixtures/fake-twenty.js');
+  const { createClient, upsertCompany, planCompanyUpsert } = await import('../src/services/crm/twenty.js');
+  const { stateFile, lockFile } = nuevoEstado();
+  const r = await corrida({ extra: { quotaOptions: { stateFile, lockFile } } });
+  const verificadoEn = '2026-10-04T06:49:55.122Z';
+  const prospecto = (row) => ({
+    dedupKey: row.dedupKey, businessName: row.businessName, sourceUrl: row.sourceUrl,
+    serviceArea: row.serviceArea, address: row.address, city: row.city, zip: row.zip,
+    state: 'CA', country: 'US', stage: 'discovered', channel: 'public_record',
+    lastVerified: verificadoEn,
+  });
+
+  const fake = await createFakeTwenty({ seed: [] });
+  try {
+    const client = createClient({ baseUrl: fake.baseUrl });
+    for (const row of r.rows) {
+      const res = await upsertCompany(client, prospecto(row), { dryRun: false });
+      assert.equal(res.action, 'create');
+    }
+    assert.equal(fake.companies.length, r.rows.length);
+
+    // Replanificar con el MISMO snapshot: nada que cambiar.
+    const escriturasAntes = fake.writes().length;
+    for (const row of r.rows) {
+      const plan = await planCompanyUpsert(client, prospecto(row));
+      assert.equal(plan.action, 'noop', `${row.businessName} propondría un cambio y no debería`);
+    }
+    assert.equal(fake.writes().length, escriturasAntes, 'replanificar escribió');
+    assert.equal(fake.companies.length, r.rows.length, 'se duplicó algo');
+  } finally {
+    fake.server.close();
+  }
+});
+
+test('la dirección no se da por cambiada por los subcampos que no se envían', async () => {
+  const { diffCompany, mapProspectToCompany } = await import('../src/services/crm/twenty.js');
+  const propuesta = mapProspectToCompany({
+    dedupKey: 'sdcounty-ffp:X', businessName: 'Pho Kitchen',
+    address: '9708 Mission Gorge Rd', city: 'Santee', zip: '92071',
+    state: 'CA', country: 'US', stage: 'discovered', channel: 'public_record',
+    lastVerified: '2026-10-04T06:49:55.122Z',
+  });
+
+  // Lo que la API devuelve de verdad: el compuesto completo, con los subcampos
+  // que nosotros no enviamos en blanco o en null.
+  const enElCrm = {
+    ...propuesta,
+    address: {
+      addressStreet1: '9708 Mission Gorge Rd', addressStreet2: '',
+      addressCity: 'Santee', addressPostcode: '92071',
+      addressState: 'CA', addressCountry: 'US',
+      addressLat: null, addressLng: null,
+    },
+  };
+  assert.deepEqual(diffCompany(enElCrm, propuesta), {},
+    'la dirección se daba por cambiada y proponía un PATCH idéntico en sustancia');
+
+  // Y un cambio de verdad sí se ve.
+  const mudado = { ...enElCrm, address: { ...enElCrm.address, addressStreet1: '1 Otra Calle' } };
+  assert.ok('address' in diffCompany(mudado, propuesta), 'una calle distinta tiene que detectarse');
+
+  // Lo mismo con una ciudad distinta, que es el otro cambio que importa.
+  const otraCiudad = { ...enElCrm, address: { ...enElCrm.address, addressCity: 'Poway' } };
+  assert.ok('address' in diffCompany(otraCiudad, propuesta));
+});

@@ -196,7 +196,9 @@ teníamos. Se para con `cursor_indeterminado` y se dice por qué.
 ### Un solo ciclo de recolección
 
     node scripts/source-run.js preview
-    node scripts/source-run.js sync --snapshot <archivo> --confirm
+    node scripts/source-run.js sync  --snapshot <archivo> --confirm
+    node scripts/source-run.js apply --snapshot <archivo> --confirm \
+         --expect-hash sha256:… --max-creates <n>
 
 `preview` consulta **una vez** y deja un snapshot saneado en `data/snapshots/`
 (fuera de git) con su `sha256`. `sync` reutiliza exactamente ese archivo: ni una
@@ -208,6 +210,35 @@ hash dice que el contenido no cambió, no que la autorización siga vigente.
 La preview enseña conteos y campos **semánticos** —nombre comercial, ciudad,
 tipo de establecimiento, estado del permiso, identificador recortado— nunca un
 dato personal.
+
+`apply` es la única ruta que escribe, y escribe solo Companies. Necesita cinco
+cerrojos a la vez: `--confirm`, `TWENTY_WRITE_ENABLED=true`, el hash esperado
+pasado a mano (autoriza **un** snapshot concreto, no "el último que haya"), que
+el hash, la sesión y el TTL del archivo cuadren, y un tope de creaciones también
+a mano. Al primer error se para y no reintenta: un reintento automático sobre un
+CRM a medio escribir es cómo se duplica.
+
+`lastVerified` se escribe con la marca del **snapshot**, no con la hora de la
+escritura. Es cuando de verdad se comprobó el dato contra el registro oficial, y
+además es lo que hace la operación idempotente: con `new Date()` cada pasada
+propondría actualizar ese campo y nunca llegaría a `noop`.
+
+### Primera carga productiva (2026-10-04)
+
+38 empresas creadas desde el snapshot `sha256:96a4cb17…b9d9`, con 38 POST y
+ningún PATCH ni DELETE. Las 3 empresas que el administrador había creado a mano
+quedaron intactas, y las 5 demos retiradas siguen en borrado blando.
+
+Dos defectos de mapeo salieron a la luz justo antes y justo después de escribir,
+y los dos están corregidos:
+
+| Defecto | Por qué importaba |
+|---|---|
+| `toLeadSource('public_record')` devolvía `PUBLIC_WEBSITE` | Habría afirmado que el lead salió de la web del negocio, y a ese negocio no se le ha visitado la web. Ahora devuelve `BUSINESS_DIRECTORY`, que ya existe en el enum: no se cambia el esquema del CRM |
+| `sameValue` comparaba la dirección con `JSON.stringify` | La API devuelve el compuesto completo (`addressStreet2` en blanco, `addressLat`/`addressLng` en null) y nosotros enviamos los que conocemos, así que **cada** corrida proponía 38 PATCH idénticos en sustancia. Peor que el ruido: si todo "cambia" siempre, un cambio real no se distingue. Ahora se comparan solo los subcampos que se proponen |
+
+Tras la corrección, replanificar con el mismo snapshot da **38 `noop` y cero
+escrituras**: la operación es idempotente de verdad, no solo "no crea de más".
 
 **Por qué se pudo encender.** Los tres bloqueos de la auditoría del 2026-10-03
 están resueltos, y cada uno con la prueba que lo sostiene (consta en
