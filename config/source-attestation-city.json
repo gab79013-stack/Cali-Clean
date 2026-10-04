@@ -2,11 +2,11 @@
   "$comment": "Evidencia de la fuente de certificados de actividad de la Ciudad de San Diego, recogida por el operador desde una red autorizada. Este archivo NO lo genera el código: lo escribe una persona. El digest permite comprobar offline que no ha cambiado; no es una firma y no demuestra quién lo escribió.",
   "version": 1,
   "kind": "hash-based-attestation",
-  "generatedAt": "2026-10-04T07:30:00.000Z",
+  "generatedAt": "2026-10-04T08:25:00.000Z",
   "evidenceCollectedAt": "2026-10-04T00:00:00.000Z",
   "collectedFrom": {
     "method": "HEAD y descarga completa desde la red local autorizada del operador",
-    "note": "Claude Cloud NO realizó ninguna peticion a data.sandiego.gov ni a seshat.datasd.org: ninguno de los dos dominios esta permitido en su politica de red. Toda la evidencia de este archivo es importada."
+    "note": "La evidencia original la recogio el operador desde su red autorizada el 2026-10-04 (Claude Cloud no tenia egress a estos dominios en ese momento). Despues se concedio Network=Custom con los tres dominios explicitos, y esta sesion comprobo el HEAD por su cuenta: ver cloudObservations. Lo que sigue siendo importado son los SHA256, que un HEAD no puede dar."
   },
   "sources": {
     "sd_business_tax_certificates": {
@@ -92,8 +92,35 @@
         "lng"
       ],
       "personalDataNotice": "El CSV contiene business_owner_name (persona fisica) y coordenadas. Se leen de paso para descartar filas y no se conservan en ningun sitio: ni prospecto, ni raw_json, ni snapshot, ni log, ni texto de error. El archivo descargado se borra al terminar la corrida.",
-      "decision": "Elegible: dominio publico (ODC-PDDL-1.0), descarga CSV presentada por la pagina oficial del dataset y actualizacion diaria confirmada. DESACTIVADA hasta que (a) las pruebas de esta fuente pasen, (b) una preview real con los dos dominios permitidos se revise, y (c) alguien ponga enabled=true a mano. El acceso csv-static ya esta implementado; la decision operativa no."
+      "decision": "HABILITADA el 2026-10-04. Dominio publico ODC-PDDL-1.0, descarga CSV presentada por la pagina oficial del dataset, acceso csv-static implementado y probado, y egress concedido a los dos dominios con Network=Custom. El HEAD de esta sesion coincide con la evidencia importada. Sigue atada a: 50 candidatos validos por corrida, 1 corrida con exito cada 24 h, un unico GET al recurso CSV oficial, crawling de HTML prohibido, y las cuatro reglas de city-btc-rules.js.",
+      "cloudObservations": [
+        {
+          "observedAt": "2026-10-04T08:24:15.000Z",
+          "by": "Claude Cloud, con Network=Custom y los tres dominios autorizados",
+          "url": "https://data.sandiego.gov/datasets/business-tax-certificates/",
+          "method": "HEAD",
+          "httpStatus": 200,
+          "contentType": "text/html",
+          "contentLength": 32839,
+          "note": "Solo HEAD. No se descarga ni se recorre el HTML: la pagina sirve para confirmar que el dataset sigue publicado, no como fuente de datos."
+        },
+        {
+          "observedAt": "2026-10-04T08:24:16.000Z",
+          "by": "Claude Cloud, con Network=Custom y los tres dominios autorizados",
+          "url": "https://seshat.datasd.org/business_tax_certificates/sd_businesses_active_datasd.csv",
+          "method": "HEAD",
+          "httpStatus": 200,
+          "contentLength": 18861591,
+          "lastModified": "Sat, 03 Oct 2026 09:06:24 GMT",
+          "etag": "\"8299daf430ba562a873873d4b5cd5102-3\"",
+          "acceptRanges": "bytes",
+          "contentType": "binary/octet-stream",
+          "matchesImportedEvidence": true,
+          "note": "contentLength y lastModified coinciden EXACTAMENTE con la evidencia importada: es el mismo volcado que el operador hasheo. El ETag no constaba en la evidencia (solo 'presente') y aqui queda registrado. El SHA256 lo comprueba la corrida, que descarga el archivo entero."
+        }
+      ],
+      "state": "ENABLED"
     }
   },
-  "digest": "sha256:3f5615e6374fc28e0b5ca9234f4a2d9f395573b41f7e436766258bbb4c560e08"
+  "digest": "sha256:3e48c272e055b55ad264f8295e26657f7ac8db454ad27aa6c85027a4766bdb82"
 }

@@ -23,7 +23,9 @@
     "sources:preview": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js preview",
     "sources:sync": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js sync",
     "sources:preview:city": "NODE_USE_ENV_PROXY=1 node scripts/source-run.js preview --source sd_business_tax_certificates",
-    "enrich:preview": "NODE_USE_ENV_PROXY=1 node scripts/enrich-preview.js"
+    "enrich:preview": "NODE_USE_ENV_PROXY=1 node scripts/enrich-preview.js",
+    "routine:daily": "NODE_USE_ENV_PROXY=1 node scripts/routine-daily.js",
+    "routine:daily:write": "NODE_USE_ENV_PROXY=1 TWENTY_WRITE_ENABLED=true node scripts/routine-daily.js --write"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

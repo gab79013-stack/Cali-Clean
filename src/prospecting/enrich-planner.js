@@ -22,6 +22,7 @@
 
 import { segmentFromNaics } from './sources/city-btc-rules.js';
 import { isInServiceArea } from '../services/scoring.js';
+import { ENUMS } from '../services/crm/twenty-schema.js';
 
 /**
  * Puntuación. Cada regla, su motivo y sus puntos, para que un score sea
@@ -31,13 +32,30 @@ import { isInServiceArea } from '../services/scoring.js';
  * prospecto no puede pasar de ahí, porque todavía no se le puede escribir.
  */
 export const SCORE_RULES = Object.freeze([
-  { id: 'segmento_conocido', points: 15, why: 'el segmento del ICP está identificado' },
-  { id: 'dentro_del_area', points: 15, why: 'el ZIP está en el área de servicio' },
-  { id: 'procedencia_oficial', points: 10, why: 'viene de un registro público oficial, con URL comprobable' },
-  { id: 'direccion_completa', points: 10, why: 'calle, ciudad y ZIP: se puede visitar' },
-  { id: 'entidad_juridica', points: 10, why: 'es una entidad, no una persona física' },
-  { id: 'canal_verificado', points: 25, why: 'hay un correo o teléfono comercial verificado' },
+  { id: 'canal_verificado', points: 25, why: 'hay un correo o teléfono comercial verificado', fromCrm: true },
+  { id: 'dentro_del_area', points: 15, why: 'el ZIP está en el área de servicio', fromCrm: true },
+  { id: 'procedencia_oficial', points: 10, why: 'viene de un registro público oficial, con URL comprobable', fromCrm: true },
+  { id: 'direccion_completa', points: 10, why: 'calle, ciudad y ZIP: se puede visitar', fromCrm: true },
+  // Las dos de abajo NO puntúan, y el motivo es la idempotencia, no su valor.
+  //
+  // El CRM no tiene campo para el tipo de establecimiento, el NAICS ni la forma
+  // jurídica, así que esas señales solo se conocen leyendo los snapshots
+  // locales, que viven en un contenedor efímero. Si puntuaran, el mismo
+  // prospecto valdría 60 en el contenedor que tiene el snapshot y 35 en el
+  // siguiente, y cada corrida propondría cambiar el score en una dirección
+  // distinta para siempre.
+  //
+  // Un score que oscila no es información: es ruido con aspecto de dato. Así que
+  // el score se calcula SOLO con lo que el propio CRM sostiene, y estas dos se
+  // informan sin puntuar.
+  { id: 'segmento_conocido', points: 15, why: 'el segmento del ICP está identificado', fromCrm: false },
+  { id: 'entidad_juridica', points: 10, why: 'es una entidad, no una persona física', fromCrm: false },
 ]);
+
+/** Puntos que puede dar el CRM por sí solo. El techo real de un score escrito. */
+export const MAX_SCORE_FROM_CRM = SCORE_RULES
+  .filter((r) => r.fromCrm)
+  .reduce((sum, r) => sum + r.points, 0);
 
 const RATING_THRESHOLDS = Object.freeze([
   { min: 70, rating: 'RATING_4' },
@@ -45,6 +63,27 @@ const RATING_THRESHOLDS = Object.freeze([
   { min: 30, rating: 'RATING_2' },
   { min: 0, rating: 'RATING_1' },
 ]);
+
+/**
+ * Comprueba que un valor propuesto existe en el vocabulario del CRM.
+ *
+ * Esto está aquí porque el planificador proponía la etapa `DISCOVERED`, que
+ * suena razonable y NO existe: el enum real es NEW, QUALIFIED,
+ * READY_FOR_OUTREACH, CONTACTED, REPLIED, OPPORTUNITY, DO_NOT_CONTACT. Un
+ * PATCH con ese valor lo habría rechazado la API, y el planificador habría
+ * seguido proponiéndolo en cada corrida sin que nada lo detuviera.
+ *
+ * Ahora el vocabulario sale de twenty-schema.js, que es el que se contrasta con
+ * el esquema vivo, y un valor fuera de él lanza aquí en vez de en la red.
+ */
+function assertVocabulario(campo, valor) {
+  const permitidos = ENUMS[campo];
+  if (!permitidos) throw new Error(`No hay vocabulario declarado para "${campo}".`);
+  if (!permitidos.includes(valor)) {
+    throw new Error(`"${valor}" no está en el vocabulario de ${campo}: ${permitidos.join(', ')}`);
+  }
+  return valor;
+}
 
 /**
  * Índice de tipo y NAICS a partir de los snapshots locales.
@@ -67,6 +106,7 @@ export function typeIndexFromSnapshots(snapshots = []) {
       index.set(row.dedupKey, {
         businessType: row.raw?.business_type || row.description || null,
         naics: row.naics || row.raw?.naics_code || null,
+        entityType: row.entityType || null,
         source: doc.sourceId || null,
         verifiedAt: doc.createdAt || null,
       });
@@ -119,7 +159,12 @@ export function planEnrichment(company, { serviceAreaDefault = 'San Diego County
   // más y no se deduce del nombre.
   const official = typeIndex?.get?.(company.dedupKey) || null;
   const enriched = official
-    ? { ...company, businessType: company.businessType ?? official.businessType, naics: company.naics ?? official.naics }
+    ? {
+      ...company,
+      businessType: company.businessType ?? official.businessType,
+      naics: company.naics ?? official.naics,
+      entityType: company.entityType ?? official.entityType,
+    }
     : company;
 
   // ── Segmento ──
@@ -155,9 +200,9 @@ export function planEnrichment(company, { serviceAreaDefault = 'San Diego County
   }
 
   // ── Entidad jurídica ──
-  if (company.entityType) {
+  if (enriched.entityType) {
     hits.add('entidad_juridica');
-    reasons.push(`forma jurídica ${company.entityType}`);
+    reasons.push(`forma jurídica ${enriched.entityType}`);
   }
 
   // ── Canal de contacto ──
@@ -166,20 +211,38 @@ export function planEnrichment(company, { serviceAreaDefault = 'San Diego County
   const hasChannel = Boolean(String(email).trim() || String(phone).trim());
   if (hasChannel) { hits.add('canal_verificado'); reasons.push('canal de contacto verificado'); }
 
+  // Solo las señales que el CRM sostiene por sí mismo entran en el score. Ver el
+  // comentario de SCORE_RULES: lo demás haría que el score oscilara según qué
+  // snapshots tenga el contenedor de turno.
   const score = SCORE_RULES
-    .filter((r) => hits.has(r.id))
+    .filter((r) => r.fromCrm && hits.has(r.id))
     .reduce((sum, r) => sum + r.points, 0);
+  const informativas = SCORE_RULES.filter((r) => !r.fromCrm && hits.has(r.id)).map((r) => r.id);
   const rating = RATING_THRESHOLDS.find((t) => score >= t.min).rating;
 
   if (company.leadScore !== rating) {
-    changes.leadScore = rating;
-    reasons.push(`Lead Score ${rating} (${score}/100)`);
+    changes.leadScore = assertVocabulario('leadScore', rating);
+    reasons.push(`Lead Score ${rating} (${score}/${MAX_SCORE_FROM_CRM} posibles desde el CRM)`);
   }
 
   // ── Etapa ──
   // Sin canal verificado una empresa no puede estar cualificada: no hay por
   // dónde contactarla. Es una afirmación sobre lo que sabemos, no un juicio.
-  const stage = hasChannel ? 'QUALIFIED' : 'DISCOVERED';
+  //
+  // Dos valores y nada más, los dos comprobados contra el vocabulario del CRM:
+  //
+  //   sin canal  → NEW        no hay por dónde escribirle
+  //   con canal  → QUALIFIED  hay un canal verificado
+  //
+  // No se usa READY_FOR_OUTREACH, que existe: afirmaría que el prospecto está
+  // listo para que se le escriba, y eso es una decisión de outreach, no una
+  // consecuencia de tener un correo. El outbound está apagado.
+  //
+  // Y no se reutiliza `toLeadStage`, cuyo vocabulario de entrada es el del
+  // pipeline de prospección (discovered/enriched/qualified/contacted): es otro
+  // dominio, y traducir dos veces entre dos vocabularios es cómo apareció el
+  // `DISCOVERED` inexistente. Lo que impide repetir ese fallo es el validador.
+  const stage = assertVocabulario('leadStage', hasChannel ? 'QUALIFIED' : 'NEW');
   if (company.leadStage !== stage) {
     changes.leadStage = stage;
     reasons.push(`etapa ${stage}${hasChannel ? '' : ' (sin canal de contacto todavía)'}`);
@@ -187,6 +250,10 @@ export function planEnrichment(company, { serviceAreaDefault = 'San Diego County
 
   // Lo que NO se propone, y conviene que se vea en el plan.
   const notProposed = [];
+  // El campo no existe en el esquema del CRM. No se propone, no se pide un
+  // permiso más alto y no se añade un campo al CRM del cliente: se informa.
+  notProposed.push('segment/type: el esquema de Company no tiene campo para el segmento '
+    + 'ni para el NAICS. Añadirlo sería cambiar el esquema del CRM');
   if (!segment) {
     notProposed.push(official
       ? `segmento: el tipo oficial "${String(official.businessType).slice(0, 40)}" no encaja en ninguna regla`
@@ -200,6 +267,8 @@ export function planEnrichment(company, { serviceAreaDefault = 'San Diego County
     dedupKey: company.dedupKey || null,
     name: company.name || company.businessName || null,
     typeBasis: official ? `snapshot ${official.source} del ${String(official.verifiedAt).slice(0, 10)}` : null,
+    // Señales conocidas que no puntúan porque el CRM no las sostiene.
+    informativas,
     action: Object.keys(changes).length ? 'update' : 'noop',
     changes,
     score,

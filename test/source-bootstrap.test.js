@@ -426,8 +426,10 @@ test('el resumen del snapshot no lleva un solo dato personal', async () => {
   }
   // Y sí lleva lo que hace falta para decidir.
   for (const c of resumen) {
-    assert.ok(c.businessName && c.city && c.businessType && c.permitStatus && c.dedupKey);
-    assert.match(c.recordIdPartial, /…$/, 'el identificador va recortado');
+    // `status` en lugar de `permitStatus`: el campo es común a las dos fuentes y
+    // cada una lo rellena desde el suyo (permit_status o account_status).
+    assert.ok(c.businessName && c.city && c.businessType && c.status && c.dedupKey);
+    assert.match(c.recordIdPartial, /^…/, 'el identificador va recortado');
   }
 });
 
@@ -519,17 +521,23 @@ test('el cursor se puede recuperar del CRM sin escribir nada', async () => {
 });
 
 // ── Las demás fuentes siguen cerradas ────────────────────────
-test('las otras fuentes siguen apagadas y sin poder construir URL', async () => {
+test('ninguna otra fuente puede pedir el endpoint SODA del condado', async () => {
   const { buildUrl } = await import('../src/prospecting/sources/index.js');
   const { allowlistEntry } = await import('../src/prospecting/sources/compliance.js');
+
+  // Las dos municipales son csv-static: `buildUrl` —que construye URLs de
+  // SODA— se niega a formarlas, estén habilitadas o no. El acceso de una fuente
+  // no es intercambiable con el de otra.
   for (const key of ['sd_business_tax_certificates', 'sd_development_approvals']) {
-    assert.equal(allowlistEntry(key).enabled, false);
     assert.throws(() => buildUrl(SOURCES[key], {}), /no está implementado/);
-    await assert.rejects(
-      () => fetchFromSource(key, { baseOverride: 'https://portal.invalid' }),
-      /no está habilitada/,
-    );
   }
+
+  // Y la que sigue apagada tampoco llega a la red.
+  assert.equal(allowlistEntry('sd_development_approvals').enabled, false);
+  await assert.rejects(
+    () => fetchFromSource('sd_development_approvals', { baseOverride: 'https://portal.invalid' }),
+    /no está habilitada/,
+  );
 });
 
 test('los datasets rechazados siguen sin poder construir URL', async () => {

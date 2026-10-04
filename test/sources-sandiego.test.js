@@ -70,12 +70,24 @@ test('cada fuente declara licencia, robots, límites y decisión', () => {
 });
 
 // ── Elegible no es habilitada ────────────────────────────────
-test('solo la fuente del condado está habilitada', () => {
+test('las dos fuentes con acceso implementado están habilitadas; la tercera no', () => {
   const habilitadas = Object.entries(ALLOWLIST.sources)
     .filter(([, e]) => e.enabled === true)
-    .map(([k]) => k);
-  assert.deepEqual(habilitadas, ['sdcounty_food_facility_permits'],
+    .map(([k]) => k).sort();
+  assert.deepEqual(habilitadas, ['sd_business_tax_certificates', 'sdcounty_food_facility_permits'],
     `habilitadas: ${habilitadas.join(', ') || 'ninguna'}`);
+
+  // La de research-only sigue apagada, y por un motivo que no es el acceso.
+  const research = ALLOWLIST.sources.sd_development_approvals;
+  assert.equal(research.enabled, false);
+  assert.equal(research.state, 'RESEARCH_ONLY_DISABLED');
+
+  const city = ALLOWLIST.sources.sd_business_tax_certificates;
+  assert.equal(city.state, 'ENABLED');
+  assert.equal(city.enabledAt, '2026-10-04');
+  assert.deepEqual(city.blockers, []);
+  assert.ok(city.resolvedBlockers.some((r) => /[Ee]gress/.test(r.blocker)),
+    'el bloqueo del egress tiene que constar como resuelto');
 
   // Y la que se habilitó dejó constancia de por qué y de qué lo resolvió.
   const county = ALLOWLIST.sources.sdcounty_food_facility_permits;
@@ -89,21 +101,23 @@ test('solo la fuente del condado está habilitada', () => {
   }
 });
 
-test('las tres son elegibles; solo la del condado puede salir a la red', () => {
+test('las tres son elegibles; solo las habilitadas pueden salir a la red', () => {
   for (const [k, source] of Object.entries(SOURCES)) {
     const entry = allowlistEntry(k);
     assert.equal(entry.eligible, true, `${k} debería ser elegible`);
     const c = checkSourceAllowed(k, source, { attestations: {} });
 
-    if (k === 'sdcounty_food_facility_permits') {
-      // Pasa por la constancia importada, que se comprueba sin red.
-      assert.equal(c.allowed, true, `la fuente habilitada quedó bloqueada: ${c.reason}`);
+    if (entry.enabled === true) {
+      // Pasan por su constancia importada, cada una con la suya y sin red.
+      assert.equal(c.allowed, true, `${k} quedó bloqueada: ${c.reason}`);
       assert.equal(c.attestationKind, 'hash-based-imported');
       continue;
     }
     assert.equal(c.allowed, false, `${k} podría salir a la red`);
     assert.equal(c.eligible, true, 'la puerta debe distinguir elegible de habilitada');
-    assert.equal(c.reason, 'no_habilitada');
+    // La research-only no llega a la comprobación de habilitada: la para antes
+    // el acceso sin implementar.
+    assert.ok(['no_habilitada', 'acceso_no_implementado'].includes(c.reason), c.reason);
   }
 });
 
@@ -111,13 +125,24 @@ test('una constancia operativa válida no basta para habilitar', () => {
   // Este es el punto del diseño: verificar no enciende. La decisión de
   // encender es humana y vive en el allowlist. Se prueba sobre una fuente que
   // sigue apagada, porque es ahí donde la distinción importa.
-  saveAttestation('sd_business_tax_certificates', {
+  // Se prueba sobre la única que sigue apagada. La puerta mira `enabled` antes
+  // que `implemented`, así que el motivo es ese: la decisión humana va primero.
+  saveAttestation('sd_development_approvals', {
     robotsAllowed: true, endpointVerified: true, termsReviewed: true,
     verifiedAt: new Date().toISOString(),
   });
-  const c = checkSourceAllowed('sd_business_tax_certificates', SOURCES.sd_business_tax_certificates);
+  const c = checkSourceAllowed('sd_development_approvals', SOURCES.sd_development_approvals);
   assert.equal(c.allowed, false);
   assert.equal(c.reason, 'no_habilitada');
+
+  // Y encendiéndola a mano aparece la siguiente barrera, que sigue en pie: una
+  // constancia válida no inventa un acceso que nadie ha implementado.
+  const fake = structuredClone(ALLOWLIST);
+  fake.sources.sd_development_approvals.enabled = true;
+  const d = checkSourceAllowed('sd_development_approvals', SOURCES.sd_development_approvals, { allowlist: fake });
+  assert.equal(d.allowed, false);
+  assert.equal(d.reason, 'acceso_no_implementado');
+  loadAllowlist({ reload: true });
 });
 
 test('habilitada en el allowlist pero sin constancia tampoco sale', () => {
@@ -156,7 +181,7 @@ test('un acceso no implementado bloquea aunque esté habilitada', () => {
 test('el acceso csv-static ya está implementado para la fuente de la ciudad', () => {
   const entry = allowlistEntry('sd_business_tax_certificates');
   assert.equal(entry.implemented, true);
-  assert.equal(entry.enabled, false, 'implementado no es habilitado');
+  assert.equal(entry.enabled, true, 'habilitada el 2026-10-04, tras conceder el egress');
   assert.equal(entry.accessType, 'csv-static');
   // Y la URL permitida es UN recurso, no un dominio.
   assert.deepEqual(entry.robots.allowedResources, [SOURCES.sd_business_tax_certificates.downloadUrl]);
@@ -188,8 +213,12 @@ test('una fuente no habilitada no llega a hacer la petición', async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const apagadas = Object.keys(SOURCES).filter((k) => allowlistEntry(k).enabled !== true);
-  assert.equal(apagadas.length, 2, 'se esperaban dos fuentes apagadas');
   try {
+    // La aserción va DENTRO del try: fuera, al fallar, dejaba el servidor
+    // escuchando y el proceso de pruebas no terminaba nunca. Un `finally` que
+    // libera un recurso solo sirve si todo lo que puede lanzar está dentro.
+    assert.equal(apagadas.length, 1,
+      `se esperaba una sola fuente apagada, hay ${apagadas.length}: ${apagadas.join(', ')}`);
     for (const key of apagadas) {
       await assert.rejects(
         () => fetchFromSource(key, { baseOverride: base }),
@@ -417,9 +446,14 @@ test('el 429 y la cuota constan como resueltos; el GET condicional sigue pendien
   const city = allowlistEntry('sd_business_tax_certificates');
   const cityResueltos = city.resolvedBlockers.map((r) => r.blocker).join(' | ');
   assert.match(cityResueltos, /ETag|If-None-Match|csv-static/i, 'el GET condicional no consta como resuelto');
-  assert.ok(city.blockers.some((b) => /egress|dominio/i.test(b)), 'el egress pendiente tiene que constar');
-  assert.ok(city.blockers.some((b) => /decisión operativa|preview/i.test(b)));
-  assert.equal(city.enabled, false, 'sigue apagada hasta que alguien la encienda a mano');
+  assert.match(cityResueltos, /[Ee]gress/, 'el egress no consta como resuelto');
+  assert.match(cityResueltos, /decisión operativa|preview/, 'la decisión operativa no consta');
+  assert.deepEqual(city.blockers, [], 'no puede quedar un bloqueo abierto en una fuente habilitada');
+  assert.equal(city.enabled, true);
+  // Y cada bloqueo resuelto dice con qué se resolvió y qué lo sostiene.
+  for (const r of city.resolvedBlockers) {
+    assert.ok(r.resolvedBy && r.testedBy, `bloqueo resuelto sin respaldo: ${r.blocker}`);
+  }
 
   // La de research-only sigue con su bloqueo de GET condicional abierto.
   const research = allowlistEntry('sd_development_approvals');
@@ -446,26 +480,32 @@ test('sourceStatus separa elegible, habilitada e implementada', () => {
     assert.ok(r.state);
     assert.ok(r.license);
     assert.ok(Array.isArray(r.forbiddenFields));
-    // Habilitada y permitida van juntas: la única habilitada es la única que
-    // puede salir, y las demás no pueden por no estarlo.
-    assert.equal(r.allowed, r.enabled, `${r.key}: enabled=${r.enabled} pero allowed=${r.allowed}`);
+    // La implicación que de verdad importa: no puede salir nada que no esté
+    // habilitado. Al revés no es simétrico, porque una fuente habilitada puede
+    // seguir bloqueada por el acceso o por la constancia.
+    if (r.allowed) assert.equal(r.enabled, true, `${r.key}: permitida sin estar habilitada`);
   }
   const county = rows.find((r) => r.key === 'sdcounty_food_facility_permits');
   assert.equal(county.enabled, true);
   assert.equal(county.allowed, true);
   assert.equal(county.implemented, true, 'SODA sí está implementado');
   assert.equal(county.configured, true, 'es la fuente por defecto');
-  for (const r of rows.filter((x) => x.key !== county.key)) {
-    assert.equal(r.enabled, false, `${r.key} quedó habilitada`);
-    assert.equal(r.reason, 'no_habilitada');
-  }
+
   const csv = rows.filter((r) => r.accessType === 'csv-static');
   assert.equal(csv.length, 2);
+
   const city = csv.find((r) => r.key === 'sd_business_tax_certificates');
   assert.equal(city.implemented, true, 'csv-static ya está implementado');
-  assert.equal(city.enabled, false, 'y sigue apagada: implementar no es habilitar');
+  assert.equal(city.enabled, true);
+  assert.equal(city.allowed, true, 'con su constancia en regla, puede salir');
+
   const research = csv.find((r) => r.key === 'sd_development_approvals');
   assert.equal(research.implemented, false);
+  assert.equal(research.enabled, false);
+  assert.equal(research.allowed, false);
+  // El motivo es el primero que la puerta encuentra, y el primero es la
+  // decisión humana, no el acceso.
+  assert.equal(research.reason, 'no_habilitada');
 });
 
 // ── Catálogo y área ──────────────────────────────────────────

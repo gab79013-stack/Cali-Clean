@@ -708,16 +708,26 @@ test('el índice del CRM se lee sin escribir y pagina hasta el final', async () 
 });
 
 // ── La ciudad sigue apagada en el repositorio ────────────────
-test('en el allowlist versionado la ciudad está apagada', () => {
+test('en el allowlist versionado la ciudad está encendida y el condado intacto', () => {
   const versionado = JSON.parse(
     fs.readFileSync(new URL('../config/source-allowlist.json', import.meta.url), 'utf8'),
   );
-  assert.equal(versionado.sources[CITY].enabled, false,
-    'la ciudad no puede quedar encendida en el repositorio');
+  assert.equal(versionado.sources[CITY].enabled, true, 'habilitada el 2026-10-04');
   assert.equal(versionado.sources[CITY].implemented, true);
-  assert.equal(versionado.sources[COUNTY].enabled, true, 'el condado sigue encendido');
-  const habilitadas = Object.entries(versionado.sources).filter(([, e]) => e.enabled).map(([k]) => k);
-  assert.deepEqual(habilitadas, [COUNTY]);
+  assert.equal(versionado.sources[CITY].state, 'ENABLED');
+  assert.deepEqual(versionado.sources[CITY].blockers, []);
+
+  // El condado no se toca al encender otra fuente: misma decisión, misma fecha.
+  assert.equal(versionado.sources[COUNTY].enabled, true);
+  assert.equal(versionado.sources[COUNTY].state, 'ENABLED');
+  assert.equal(versionado.sources[COUNTY].enabledAt, '2026-10-04');
+  assert.deepEqual(versionado.sources[COUNTY].blockers, []);
+
+  const habilitadas = Object.entries(versionado.sources)
+    .filter(([, e]) => e.enabled).map(([k]) => k).sort();
+  assert.deepEqual(habilitadas, [CITY, COUNTY].sort());
+  // Y la tercera sigue fuera.
+  assert.equal(versionado.sources.sd_development_approvals.enabled, false);
 });
 
 test('las métricas traen los campos de las dos fuentes y ninguno sobra', () => {
@@ -729,4 +739,95 @@ test('las métricas traen los campos de las dos fuentes y ninguno sobra', () => 
     'skipped_personal', 'skipped_residential', 'skipped_sensitive',
     'skipped_unverifiable',
   ]);
+});
+
+test('la clave usa el account_key EXACTAMENTE como lo publica la ciudad', async () => {
+  // El CSV municipal escribe el identificador con formato de número decimal:
+  // `1974000080.0`. La clave lo conserva tal cual, sufijo incluido, y esto está
+  // fijado en una prueba a propósito.
+  //
+  // La tentación es "limpiarlo" quitando el `.0`. No se hace, y el motivo no es
+  // estético: la clave es permanente. Cambiar su forma después de haber escrito
+  // en el CRM no renombra lo ya escrito — crea un segundo registro de cada
+  // empresa. Si algún día el publicador cambia el formato, eso es una migración
+  // explícita y documentada, no un `trim` silencioso.
+  const { result } = await corridaCity({
+    body: fixture.toCsv([fixture.cityRow({
+      account_key: '1974000080.0', dba_name: 'Negocio Con Clave Decimal LLC',
+    })]),
+  });
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].dedupKey, 'city-btc:1974000080.0',
+    'la clave dejó de ser el identificador publicado');
+  assert.equal(result.rows[0].sourceId, '1974000080.0');
+});
+
+test('el resumen nombra el estado de cada fuente con su propio campo', async () => {
+  const { result } = await corridaCity();
+  for (const c of snap.summarize(result.rows)) {
+    assert.equal(c.status, 'Active', 'el estado de la ciudad es account_status, no permit_status');
+    assert.ok(c.entityType, 'sin forma jurídica el resumen no se puede revisar');
+    assert.ok(c.segment);
+    assert.match(c.recordIdPartial, /^…/);
+  }
+});
+
+test('un enlace sin la barra final que pone el servidor no cuenta como cambio', async () => {
+  const { diffCompany, mapProspectToCompany } = await import('../src/services/crm/twenty.js');
+  const propuesta = mapProspectToCompany({
+    dedupKey: 'city-btc:1974000080.0', businessName: 'Negocio Real LLC',
+    sourceUrl: 'https://data.sandiego.gov/datasets/business-tax-certificates/',
+    serviceArea: 'San Diego', address: '1450 Harbor Dr', city: 'San Diego', zip: '92101',
+    state: 'CA', country: 'US', stage: 'discovered', channel: 'public_record',
+    lastVerified: '2026-10-04T08:35:18.781Z',
+  });
+
+  // Lo que la API devuelve de verdad: el mismo enlace, sin la barra final.
+  const enElCrm = {
+    ...propuesta,
+    sourceUrl: {
+      primaryLinkLabel: propuesta.sourceUrl.primaryLinkLabel,
+      primaryLinkUrl: 'https://data.sandiego.gov/datasets/business-tax-certificates',
+      secondaryLinks: [],
+    },
+  };
+  assert.deepEqual(diffCompany(enElCrm, propuesta), {},
+    'proponía un PATCH del mismo enlace en cada corrida');
+
+  // Y un enlace distinto de verdad sigue detectándose.
+  const otro = {
+    ...enElCrm,
+    sourceUrl: { ...enElCrm.sourceUrl, primaryLinkUrl: 'https://data.sandiego.gov/datasets/otra-cosa' },
+  };
+  assert.ok('sourceUrl' in diffCompany(otro, propuesta), 'un enlace distinto tiene que detectarse');
+});
+
+// ── La corrida diaria ────────────────────────────────────────
+test('el orquestador diario trata cada fuente por separado y no confunde fallos con guards', async () => {
+  const fs2 = await import('node:fs');
+  const src = fs2.readFileSync(new URL('../scripts/routine-daily.js', import.meta.url), 'utf8');
+
+  // Las dos fuentes, en orden, y solo esas.
+  assert.match(src, /'sdcounty_food_facility_permits', 'sd_business_tax_certificates'/);
+
+  // Un bloqueo de guard (2) y una corrida sin candidatos (3) terminan sin
+  // escribir y SIN alerta: son el sistema funcionando. Solo un código
+  // inesperado alerta.
+  assert.match(src, /prev\.code === 2/);
+  assert.match(src, /prev\.code === 3/);
+  assert.match(src, /alertas\.push/);
+
+  // El apply reutiliza el snapshot por su hash y con tope de creaciones.
+  assert.match(src, /'--expect-hash', snap\.hash/);
+  assert.match(src, /'--max-creates'/);
+  assert.match(src, /'--confirm'/);
+
+  // Escribir exige la variable de entorno, no solo la bandera.
+  assert.match(src, /config\.twenty\.dryRunDefault/);
+
+  // Y no hay rastro de outreach, personas ni oportunidades.
+  for (const prohibido of ['outreach', 'people', 'opportunit', 'messageCampaign', 'DELETE']) {
+    assert.ok(!new RegExp(prohibido, 'i').test(src.replace(/opportunidades|oportunidades/gi, '')),
+      `el orquestador menciona "${prohibido}"`);
+  }
 });

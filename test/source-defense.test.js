@@ -401,22 +401,27 @@ test('un hash con forma incorrecta se detecta', () => {
 });
 
 // ── Las demás fuentes siguen cerradas ────────────────────────
-test('solo la fuente del condado puede salir a la red', () => {
+test('solo las fuentes con acceso implementado y constancia pueden salir', () => {
   const rows = sourceStatus();
-  const permitidas = rows.filter((r) => r.allowed).map((r) => r.key);
-  assert.deepEqual(permitidas, [FUENTE], `fuentes habilitadas: ${permitidas.join(', ')}`);
+  const permitidas = rows.filter((r) => r.allowed).map((r) => r.key).sort();
+  assert.deepEqual(permitidas, ['sd_business_tax_certificates', FUENTE].sort(),
+    `permitidas: ${permitidas.join(', ')}`);
+  // Y ninguna permitida sin estar habilitada.
+  for (const r of rows) if (r.allowed) assert.equal(r.enabled, true, `${r.key} permitida sin habilitar`);
 });
 
-test('las fuentes City siguen apagadas y sin poder construir URL', async () => {
+test('la fuente research-only sigue apagada y ninguna csv-static puede pedir SODA', async () => {
+  // `buildUrl` es el constructor de URLs de SODA: una fuente csv-static no
+  // puede colarse por ahí ni estando habilitada.
   for (const key of ['sd_business_tax_certificates', 'sd_development_approvals']) {
-    const entry = allowlistEntry(key);
-    assert.equal(entry.enabled, false, `${key} quedó habilitada`);
     assert.throws(() => buildUrl(SOURCES[key], {}), /no está implementado/);
-    await assert.rejects(
-      () => fetchFromSource(key, { baseOverride: 'https://ejemplo.test', fetchImpl: fetchMuestra() }),
-      /no está habilitada/,
-    );
   }
+
+  assert.equal(allowlistEntry('sd_development_approvals').enabled, false);
+  await assert.rejects(
+    () => fetchFromSource('sd_development_approvals', { baseOverride: 'https://ejemplo.test', fetchImpl: fetchMuestra() }),
+    /no está habilitada/,
+  );
 });
 
 test('los datasets rechazados siguen sin poder construir URL', () => {
@@ -428,10 +433,16 @@ test('los datasets rechazados siguen sin poder construir URL', () => {
   }
 });
 
-test('el allowlist solo tiene una fuente habilitada', () => {
+test('el allowlist tiene exactamente las dos fuentes implementadas habilitadas', () => {
   const lista = loadAllowlist({ reload: true });
-  const habilitadas = Object.entries(lista.sources).filter(([, e]) => e.enabled === true).map(([k]) => k);
-  assert.deepEqual(habilitadas, [FUENTE]);
+  const habilitadas = Object.entries(lista.sources)
+    .filter(([, e]) => e.enabled === true).map(([k]) => k).sort();
+  assert.deepEqual(habilitadas, ['sd_business_tax_certificates', FUENTE].sort());
+  // Habilitada implica implementada: encender lo que no existe no tendría efecto
+  // más que confundir a quien lea el estado.
+  for (const [k, e] of Object.entries(lista.sources)) {
+    if (e.enabled) assert.equal(e.implemented, true, `${k} habilitada sin acceso implementado`);
+  }
 });
 
 // ── Aislamiento del CRM y del outbound ───────────────────────

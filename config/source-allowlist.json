@@ -1,6 +1,6 @@
 {
   "$comment": "Evidencia de la auditoría de fuentes. La escribe una persona tras verificar desde una red autorizada; el código la lee pero nunca la genera. 'eligible' NO significa 'enabled': una fuente elegible está autorizada legalmente, pero no puede salir a la red hasta que alguien ponga enabled=true Y exista una constancia operativa vigente (config/source-attestation.json importada con hash, o data/source-compliance.json local).",
-  "version": 3,
+  "version": 4,
   "auditedAt": "2026-10-03",
   "timezone": "America/Los_Angeles",
   "auditMethod": "verificación manual desde red autorizada (HEAD/GET y lectura de páginas de licencia)",
@@ -12,9 +12,9 @@
   "sources": {
     "sd_business_tax_certificates": {
       "label": "City of San Diego · Business Tax Certificates (activos)",
-      "state": "ELIGIBLE_BUT_DISABLED",
+      "state": "ENABLED",
       "eligible": true,
-      "enabled": false,
+      "enabled": true,
       "accessType": "csv-static",
       "implemented": true,
       "baseDomain": "seshat.datasd.org",
@@ -63,7 +63,10 @@
         "sha256OfOneDump": "5c3e7e6a94848582dbd827936e8ff0a7d1fca2f2fee793c0a47bc27e3781109b",
         "sha256Note": "Huella de UN volcado diario, no una constante: el publicador reemplaza el archivo cada día.",
         "datasetPageStatedUpdate": "2026-10-03",
-        "publisher": "City Treasurer, City of San Diego"
+        "publisher": "City Treasurer, City of San Diego",
+        "cloudHeadVerifiedAt": "2026-10-04T08:24:16.000Z",
+        "cloudHeadMatchesImported": true,
+        "etagObserved": "\"8299daf430ba562a873873d4b5cd5102-3\""
       },
       "license": {
         "name": "ODC PDDL 1.0",
@@ -137,11 +140,8 @@
           "business_owner_name": "Único uso permitido: comparar con dba_name para descartar la fila si coinciden. Nunca se mapea, ni se guarda en raw_json, ni entra en el snapshot, ni se imprime en un log o en un error."
         }
       },
-      "blockers": [
-        "Decisión operativa pendiente: enabled sigue en false hasta que una preview real se revise.",
-        "Egress pendiente: data.sandiego.gov y seshat.datasd.org no están permitidos en la red de Cloud."
-      ],
-      "decision": "Elegible: dominio público ODC-PDDL-1.0, descarga CSV presentada por la página oficial del dataset y actualización diaria confirmada. El acceso csv-static ya está implementado y probado. Sigue DESACTIVADA: la decisión operativa necesita una preview real, y para eso hacen falta dos dominios que la red de Cloud todavía no permite. Encenderla es editar enabled=true a mano.",
+      "blockers": [],
+      "decision": "HABILITADA el 2026-10-04. Licencia de dominio público, descarga presentada por la página oficial, acceso csv-static implementado y probado, y egress concedido. Sujeta a 50 candidatos válidos por corrida, 1 corrida con éxito cada 24 h, un único GET al CSV oficial, crawling de HTML prohibido y las cuatro reglas de entidad, NAICS, vigencia y dirección comercial.",
       "dedupNamespace": "city-btc",
       "entityPolicy": {
         "allowed": [
@@ -200,8 +200,20 @@
           "resolvedBy": "Cuota propia por fuente: guard durable derivado de las Companies con prefijo city-btc:, más cuota local y lock. El GET condicional evita descargar un archivo que no ha cambiado.",
           "testedBy": "test/city-btc.test.js",
           "residualRisk": "No hay caché del cuerpo del CSV entre corridas, y es a propósito: contiene nombres de personas y se borra al terminar. Lo que se recuerda es el ETag, no el contenido."
+        },
+        {
+          "blocker": "Egress pendiente: data.sandiego.gov y seshat.datasd.org no están permitidos en la red de Cloud.",
+          "resolvedBy": "Network=Custom con los tres dominios explícitos. HEAD comprobado desde esta sesión: 200, content-length 18861591 y last-modified idénticos a la evidencia importada.",
+          "testedBy": "comprobación en vivo registrada en config/source-attestation-city.json → cloudObservations"
+        },
+        {
+          "blocker": "Decisión operativa pendiente: enabled sigue en false hasta que una preview real se revise.",
+          "resolvedBy": "El operador autorizó la preview real y la carga condicional el 2026-10-04.",
+          "testedBy": "test/city-btc.test.js (44 pruebas) + preview real de esta sesión"
         }
-      ]
+      ],
+      "enabledAt": "2026-10-04",
+      "enabledBy": "operador, tras conceder Network=Custom y comprobar el HEAD desde esta sesión"
     },
     "sd_development_approvals": {
       "label": "City of San Diego · Approvals for development projects (2026)",
@@ -417,7 +429,7 @@
   },
   "lastChange": {
     "at": "2026-10-04",
-    "what": "sd_business_tax_certificates pasa a implemented=true y sigue enabled=false. County sin cambios.",
-    "why": "Lector csv-static, reglas de defensa y cuota propia implementados y probados. Falta la preview real, que necesita egress a dos dominios."
+    "what": "sd_business_tax_certificates pasa a enabled=true. County intacto y encendido.",
+    "why": "Egress concedido con Network=Custom, HEAD coincidente con la evidencia importada, acceso implementado y probado, y autorización explícita del operador."
   }
 }

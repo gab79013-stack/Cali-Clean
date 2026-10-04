@@ -129,7 +129,7 @@ hash, comprobable sin red, en
 | Clave | Qué trae | Estado |
 |---|---|---|
 | `sdcounty_food_facility_permits` | Permisos de alimentación del Condado (SODA, dominio público) | **Habilitada** · 50 filas por corrida · 1 corrida cada 24 h |
-| `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | Elegible · acceso **implementado y probado** · **apagada**: falta decisión operativa y egress a dos dominios |
+| `sd_business_tax_certificates` | Certificados de actividad de la Ciudad (CSV, ODC PDDL) | **Habilitada** · 50 candidatos por corrida · 1 corrida cada 24 h · un solo GET del CSV |
 | `sd_development_approvals` | Aprobaciones de desarrollo de la Ciudad (CSV, ODC PDDL) | **Solo investigación**, prohibido su uso como lead |
 
 **Una sola fuente habilitada.** `eligible` significa que la licencia lo
@@ -153,6 +153,7 @@ ningún sitio; el CSV descargado se borra al terminar.
     npm run sources:preview               # una consulta real → snapshot con hash
     npm run sources:preview:city          # lo mismo para la fuente de la Ciudad
     npm run enrich:preview                # qué se puede afirmar de lo que ya hay
+    npm run routine:daily                 # las dos fuentes + enriquecimiento, en plan
     npm run sources:sync -- --snapshot <f> --confirm   # reutiliza ese snapshot
 
 El ciclo es de una sola consulta: `preview` pregunta al portal una vez y deja un

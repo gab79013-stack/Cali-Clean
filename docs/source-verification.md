@@ -4,9 +4,9 @@
 manualmente desde una red autorizada por el operador.
 **Evidencia machine-readable:** [`config/source-allowlist.json`](../config/source-allowlist.json)
 **Constancia con hash, comprobable sin red:** [`config/source-attestation.json`](../config/source-attestation.json)
-**Estado operativo: una fuente habilitada** — `sdcounty_food_facility_permits`.
-Las dos municipales siguen apagadas; la de certificados ya tiene el acceso
-implementado y probado, y espera decisión operativa y egress.
+**Estado operativo: dos fuentes habilitadas** — `sdcounty_food_facility_permits`
+y `sd_business_tax_certificates`, cada una con su cuota, su guard durable y su
+evidencia. `sd_development_approvals` sigue apagada y en solo investigación.
 
 ---
 
@@ -51,7 +51,7 @@ comprobación que no se hizo es peor que no hacerla.
 
 ## A · City of San Diego — Business Tax Certificates
 
-**`sd_business_tax_certificates` · ELIGIBLE_BUT_DISABLED · acceso `csv-static` IMPLEMENTADO (2026-10-04)**
+**`sd_business_tax_certificates` · ENABLED (2026-10-04) · acceso `csv-static`**
 
 > **Por qué esta fuente es más peligrosa que la del condado.** El condado publica
 > establecimientos. La ciudad publica **titulares**: `business_owner_name` es el
@@ -132,15 +132,27 @@ estén. Determinista, idempotente, avanza solo, y de paso es la deduplicación
 cruzada: un negocio que ya entró por el condado o a mano **se omite**, no se
 modifica. Sin índice, la fuente no corre.
 
-### Lo que la mantiene apagada
+### Egress y primera carga (2026-10-04)
 
-No es la licencia ni el código: es la **decisión operativa** y el **egress**. Los
-dos dominios que hacen falta para una preview real son:
+La red del entorno pasó a **Network=Custom** con tres dominios explícitos:
+`data.sandiegocounty.gov`, `data.sandiego.gov` y `seshat.datasd.org`. Comprobado
+con HEAD desde la sesión, y el resultado **coincide exactamente** con la
+evidencia que el operador había importado:
 
-    data.sandiego.gov      (página oficial del dataset)
-    seshat.datasd.org      (el CSV)
+| | Evidencia importada | HEAD de la sesión |
+|---|---|---|
+| content-length | 18 861 591 | 18 861 591 |
+| last-modified | Sat, 03 Oct 2026 09:06:24 GMT | idéntico |
+| accept-ranges | bytes | bytes |
+| ETag | "presente" | `"8299daf430ba562a873873d4b5cd5102-3"` |
 
-Ninguno está permitido hoy en la red de Cloud.
+Y al descargar el archivo completo, su **SHA256 salió
+`5c3e7e6a…1109b`: el mismo byte a byte** que el operador había registrado. Eso
+es lo que convirtió la evidencia importada en evidencia comprobada.
+
+Primera carga: **50 Companies** creadas de 285 filas leídas — 191 descartadas por
+ser personas y 44 por no poder verificarse. Todas CORP/LLC/SCORP, todas con
+certificado activo, todas en San Diego, todas con la URL del dataset oficial.
 
 | | |
 |---|---|
@@ -515,13 +527,57 @@ Puntuación, tabulada para que un score sea explicable sin leer código:
 Sin canal de contacto verificado una empresa **no puede estar cualificada**: no
 hay por dónde escribirle. El techo sin canal es 60/100.
 
-**Una limitación real, dicha donde se verá.** El CRM **no tiene campo** para el
-tipo de establecimiento ni para el NAICS, así que para asignar un segmento hay
-dos caminos: leerlo del dato oficial que trajimos (los snapshots locales, que es
-lo que hace) o adivinarlo del nombre comercial (que no se hace). "Lucys Bakery
-And Pizza" probablemente sea un restaurante, pero *probablemente* no es
-verificable, y una ficha con un segmento inventado es peor que una sin segmento:
-la primera se usa para decidir y la segunda se revisa.
+**Dos limitaciones reales, dichas donde se verán.**
+
+1. **El CRM no tiene campo** para el tipo de establecimiento ni para el NAICS, así
+   que el segmento no se puede escribir: se informa y se omite. Añadir el campo
+   sería cambiar el esquema del CRM del cliente. Y para *conocerlo* hay dos
+   caminos: leerlo del dato oficial que trajimos (los snapshots) o adivinarlo del
+   nombre comercial (que no se hace). "Lucys Bakery And Pizza" probablemente sea
+   un restaurante, pero *probablemente* no es verificable.
+2. **Solo puntúan las señales que el propio CRM sostiene**, y el techo real de un
+   score escrito es **60**, no 85. El segmento y la forma jurídica se conocen
+   leyendo los snapshots, que viven en un contenedor efímero: si puntuaran, el
+   mismo prospecto valdría 60 donde está el snapshot y 35 en el contenedor
+   siguiente, y cada corrida propondría moverlo en una dirección distinta para
+   siempre. Un score que oscila no es información, es ruido con aspecto de dato.
+
+Lo que el enriquecimiento puede escribir, y nada más: `serviceArea` (solo si está
+vacía), `leadScore` y `leadStage`. `dedupKey`, `sourceUrl`, `lastVerified` y
+`name` son intocables: son el rastro de procedencia.
+
+### Tres defectos que la verificación encontró
+
+Los tres se detectaron comprobando contra la instancia real en vez de confiar en
+lo que el código creía:
+
+| Defecto | Consecuencia si hubiera pasado |
+|---|---|
+| `toLeadSource('public_record')` devolvía `PUBLIC_WEBSITE` | Habría afirmado en 38 fichas que el lead salió de la web del negocio, sin haberla visitado |
+| `sameValue` comparaba ADDRESS con `JSON.stringify`, y los enlaces con la barra final | La API devuelve el compuesto completo y quita la barra de los enlaces, así que **cada** corrida proponía PATCH idénticos en sustancia. Si todo "cambia" siempre, un cambio real no se distingue |
+| El planificador proponía la etapa `DISCOVERED` | **No existe** en el enum (`NEW, QUALIFIED, READY_FOR_OUTREACH, CONTACTED, REPLIED, OPPORTUNITY, DO_NOT_CONTACT`). Los 88 PATCH habrían sido rechazados, y el planificador habría seguido proponiéndolo cada día |
+
+Ahora un valor fuera del vocabulario del CRM lanza en el planificador, antes de
+llegar a la red.
+
+## La corrida diaria
+
+    node scripts/routine-daily.js          # las dos fuentes, en plan
+    node scripts/routine-daily.js --write  # escribe (exige TWENTY_WRITE_ENABLED=true)
+
+Por cada fuente, en orden: `preview` (attestation → puerta → cuota durable →
+cuota local → índice del CRM → **una** petición → snapshot con hash) y después
+`apply`, que reutiliza ese snapshot **por su hash**. Companies únicamente, tope
+de 50 creaciones. Al final, el enriquecimiento.
+
+Las dos fuentes son independientes de verdad: cada una tiene su cuota, su guard
+durable (por prefijo de clave) y su evidencia. Que una quede bloqueada no impide
+que la otra corra.
+
+**Qué no es un fallo**, y por eso no alerta ni devuelve error: una fuente
+bloqueada por cuota (código 2), un 304 del CSV, o una corrida sin candidatos
+nuevos (código 3). Son el sistema funcionando. El proceso sale distinto de 0
+solo cuando algo que debía funcionar no funcionó.
 
 ## Monitoreo por fuente
 

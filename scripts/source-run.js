@@ -155,7 +155,8 @@ function printCandidates(rows) {
   const resumen = summarize(rows);
   for (const c of resumen) {
     console.log(`  · ${c.businessName}`);
-    console.log(`      ${c.city} ${c.zip} · ${c.businessType} · ${c.permitStatus}`);
+    console.log(`      ${c.city} ${c.zip} · ${c.businessType} · ${c.status}`
+      + (c.entityType ? ` · ${c.entityType}` : '') + (c.segment ? ` · ${c.segment}` : ''));
     console.log(`      record ${c.recordIdPartial} · dedupKey ${c.dedupKey}`);
   }
   return resumen;
@@ -248,7 +249,7 @@ async function preview() {
   if (result.blocked) {
     console.log(`\n  BLOQUEADA: ${result.blocked.reason} — ${result.blocked.detail}`);
     console.log(`  quota_blocked=${result.metrics.quota_blocked} · fetched=${result.metrics.fetched}`
-      + ` · crm_writes=0 · outbound=0 · peticiones al Condado: 0`);
+      + ' · crm_writes=0 · outbound=0 · peticiones a la fuente: 0');
     die('la corrida queda bloqueada. Es el sistema funcionando, no un error.', 2);
   }
 

@@ -88,8 +88,15 @@ export function summarize(rows = []) {
     city: r.city,
     zip: r.zip,
     businessType: r.raw?.business_type || r.description || null,
-    permitStatus: r.raw?.permit_status || r.signal?.permitStatus || null,
-    recordIdPartial: r.sourceId ? `${String(r.sourceId).slice(0, 6)}…` : null,
+    // Cada fuente nombra distinto el estado del permiso: el condado tiene
+    // `permit_status` y la ciudad `account_status`. Dejar fija la del condado
+    // hacía que el informe de la ciudad imprimiera "null" en las 50 filas.
+    status: r.raw?.permit_status || r.raw?.account_status || r.signal?.permitStatus || null,
+    entityType: r.entityType || null,
+    segment: r.segment || null,
+    // Los últimos caracteres identifican mejor que los primeros: en la ciudad
+    // los primeros seis son iguales en miles de filas.
+    recordIdPartial: r.sourceId ? `…${String(r.sourceId).slice(-8)}` : null,
     dedupKey: r.dedupKey || null,
   }));
 }

@@ -31,12 +31,21 @@ const base = {
   address: { addressStreet1: '1450 Harbor Dr', addressCity: 'San Diego', addressPostcode: '92101' },
 };
 
-test('las reglas de puntuación están tabuladas y suman 85 sin canal de contacto', () => {
+test('solo puntúan las señales que el propio CRM sostiene', async () => {
+  const { MAX_SCORE_FROM_CRM } = await import('../src/prospecting/enrich-planner.js');
   const total = SCORE_RULES.reduce((s, r) => s + r.points, 0);
   assert.equal(total, 85);
   for (const r of SCORE_RULES) {
     assert.ok(r.id && r.why && typeof r.points === 'number', 'una regla sin motivo no es explicable');
+    assert.equal(typeof r.fromCrm, 'boolean', 'cada regla dice si el CRM la sostiene');
   }
+
+  // El techo de un score escrito es 60: las dos señales que dependen de los
+  // snapshots locales no puntúan, porque un contenedor sin snapshot daría otro
+  // número y el score oscilaría en cada corrida.
+  assert.equal(MAX_SCORE_FROM_CRM, 60);
+  const noPuntuan = SCORE_RULES.filter((r) => !r.fromCrm).map((r) => r.id).sort();
+  assert.deepEqual(noPuntuan, ['entidad_juridica', 'segmento_conocido']);
   // El canal de contacto vale más que cualquier otra señal: sin él no se puede
   // escribir a nadie, y con él el prospecto es accionable.
   const canal = SCORE_RULES.find((r) => r.id === 'canal_verificado');
@@ -45,11 +54,38 @@ test('las reglas de puntuación están tabuladas y suman 85 sin canal de contact
 
 test('sin canal de contacto una empresa no puede estar cualificada', () => {
   const p = planEnrichment(base);
-  assert.equal(p.changes.leadStage, 'DISCOVERED');
+  assert.equal(p.changes.leadStage, 'NEW');
   assert.match(p.reasons.join(' '), /sin canal de contacto/);
 
   const conCorreo = planEnrichment({ ...base, businessEmail: { primaryEmail: 'info@ejemplo.com' } });
   assert.equal(conCorreo.changes.leadStage, 'QUALIFIED');
+});
+
+test('solo se proponen valores que existen en el vocabulario del CRM', async () => {
+  const { ENUMS } = await import('../src/services/crm/twenty-schema.js');
+  // `DISCOVERED` suena razonable y no existe. Esta prueba está aquí porque el
+  // planificador lo proponía: la API habría rechazado los 88 PATCH.
+  assert.ok(!ENUMS.leadStage.includes('DISCOVERED'));
+
+  const casos = [
+    base,
+    { ...base, businessEmail: { primaryEmail: 'info@ejemplo.com' } },
+    { ...base, address: {}, serviceArea: '' },
+    { ...base, phone: '+16195550100' },
+  ];
+  for (const c of casos) {
+    const p = planEnrichment(c);
+    if (p.changes.leadStage !== undefined) {
+      assert.ok(ENUMS.leadStage.includes(p.changes.leadStage), `etapa inválida: ${p.changes.leadStage}`);
+    }
+    if (p.changes.leadScore !== undefined) {
+      assert.ok(ENUMS.leadScore.includes(p.changes.leadScore), `score inválido: ${p.changes.leadScore}`);
+    }
+    // Y nunca se propone un campo que el rastro de procedencia necesita intacto.
+    for (const intocable of ['dedupKey', 'sourceUrl', 'lastVerified', 'name']) {
+      assert.equal(p.changes[intocable], undefined, `propuso cambiar ${intocable}`);
+    }
+  }
 });
 
 test('el score sube solo con señales que se pueden comprobar', () => {
@@ -65,9 +101,36 @@ test('el score sube solo con señales que se pueden comprobar', () => {
     entityType: 'LLC',
     businessEmail: { primaryEmail: 'info@ejemplo.com' },
   });
-  assert.equal(conTodo.score, 85);
-  assert.equal(conTodo.rating, 'RATING_4');
+  // 60, no 85: el segmento y la forma jurídica se conocen pero no puntúan.
+  assert.equal(conTodo.score, 60);
+  assert.equal(conTodo.rating, 'RATING_3');
   assert.equal(conTodo.segment, 'restaurants');
+  assert.deepEqual(conTodo.informativas.sort(), ['entidad_juridica', 'segmento_conocido']);
+});
+
+test('el score no cambia según qué snapshots tenga el contenedor', () => {
+  const index = typeIndexFromSnapshots([{
+    sourceId: 'sd_business_tax_certificates',
+    createdAt: '2026-10-04T08:35:18.781Z',
+    rows: [{ dedupKey: base.dedupKey, naics: '722511', entityType: 'CORP' }],
+  }]);
+  const conSnapshot = planEnrichment(base, { typeIndex: index });
+  const sinSnapshot = planEnrichment(base);
+
+  assert.equal(conSnapshot.score, sinSnapshot.score,
+    'el score oscilaría entre contenedores y cada corrida propondría cambiarlo');
+  assert.equal(conSnapshot.changes.leadScore, sinSnapshot.changes.leadScore);
+  // El segmento sí se conoce de más con el snapshot: se informa, no se puntúa.
+  assert.equal(conSnapshot.segment, 'restaurants');
+  assert.equal(sinSnapshot.segment, null);
+});
+
+test('el campo del segmento no existe en el CRM: se omite y se dice', () => {
+  const p = planEnrichment(base);
+  assert.equal(p.changes.segment, undefined);
+  assert.equal(p.changes.type, undefined);
+  assert.match(p.notProposed.join(' | '), /no tiene campo para el segmento/);
+  assert.match(p.notProposed.join(' | '), /cambiar el esquema del CRM/);
 });
 
 test('no se propone nada que no esté sustentado, y se dice por qué', () => {
@@ -124,6 +187,7 @@ test('una segunda pasada no propone nada: el plan es idempotente', () => {
 
   // Se aplica mentalmente lo propuesto y se vuelve a planificar.
   const aplicado = { ...base, naics: '722511', entityType: 'LLC', ...primera.changes };
+  assert.equal(aplicado.leadStage, 'NEW');
   const segunda = planEnrichment(aplicado);
   assert.equal(segunda.action, 'noop', `seguiría proponiendo: ${JSON.stringify(segunda.changes)}`);
   assert.deepEqual(segunda.changes, {});

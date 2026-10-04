@@ -361,7 +361,19 @@ function sameValue(current, next) {
   if (next === undefined) return true;              // no se propone nada
   if (current === null || current === undefined) return false;
   if (typeof next === 'object') {
-    if ('primaryLinkUrl' in next) return trim(current.primaryLinkUrl) === trim(next.primaryLinkUrl);
+    if ('primaryLinkUrl' in next) {
+      // La API normaliza los enlaces y le quita la barra final: se le envía
+      // ".../business-tax-certificates/" y devuelve ".../business-tax-certificates".
+      // Comparar en crudo hacía que cada corrida propusiera un PATCH del mismo
+      // enlace, y eso tapa los cambios de verdad: si todo "cambia" siempre, un
+      // cambio real no se distingue de uno fantasma.
+      //
+      // Se quita UNA barra final y nada más. Dos rutas distintas siguen siendo
+      // distintas: esto no es una normalización de URLs, es deshacer la única
+      // que el servidor aplica.
+      const sinBarra = (v) => trim(v).replace(/\/+$/, '');
+      return sinBarra(current.primaryLinkUrl) === sinBarra(next.primaryLinkUrl);
+    }
     if ('primaryEmail' in next) return trim(current.primaryEmail).toLowerCase() === trim(next.primaryEmail).toLowerCase();
 
     // ADDRESS: se comparan SOLO los subcampos que se proponen.
