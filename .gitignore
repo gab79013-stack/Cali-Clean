@@ -31,3 +31,8 @@ data/staging/
 
 # Lock de la orquestacion de la fase 3.
 data/phase3.lock
+
+# Copias de seguridad previas a una escritura del piloto: registros reales del
+# CRM, con su estado anterior. Son datos del cliente, no código, y se escriben
+# con permisos 600 porque eso es lo que son.
+data/backups/
