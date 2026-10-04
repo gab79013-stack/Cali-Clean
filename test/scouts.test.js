@@ -1657,6 +1657,164 @@ test('un staging caducado o de otra sesión no se reutiliza', () => {
   } finally { process.env.SOURCE_SESSION_ID = original; }
 });
 
+// ══ Grieta del reinicio de contenedor ═════════════════════════
+//
+// Un snapshot sellado se ata a la sesión que lo creó. La grieta existe porque el
+// caso se dio: el contenedor se reinició entre la revisión y la carga, el
+// `boot_id` cambió, y un snapshot íntegro y vigente quedó inservible. Lo que estas
+// pruebas fijan es que la grieta sea ESTRECHA: pide las cuatro condiciones a la
+// vez y, por defecto, no existe.
+async function stagingDeOtraSesion() {
+  const s = await fx.createFakeAbcServer();
+  try {
+    const r = await corre('ca_abc_active_licenses', s);
+    const doc = JSON.parse(fs.readFileSync(r.staging.file, 'utf8'));
+    // Se reescribe con el sessionId de otro arranque, y se re-sella: el hash
+    // vuelve a cuadrar con el contenido, que es justo el caso real.
+    doc.sessionId = '00000000-1111-2222-3333-444444444444';
+    doc.sha256 = staging.computeHash(doc);
+    const file = path.join(tmpDir, `otra-sesion-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    return { file, doc, hash: doc.sha256 };
+  } finally { s.close(); }
+}
+
+test('por defecto, un staging de otra sesión se rechaza', async () => {
+  const { file } = await stagingDeOtraSesion();
+  const leido = staging.readStaging(file);
+  assert.equal(leido.ok, false);
+  assert.ok(leido.problems.some((p) => /de otra sesión/.test(p)));
+  assert.equal(leido.containerRestartOverrideUsed, false);
+
+  // Y la capa central, igual: sin flag no hay grieta.
+  const v = intake.validateStaging('ca_abc_active_licenses', file);
+  assert.equal(v.ok, false);
+  assert.ok(v.problems.some((p) => /de otra sesión/.test(p)));
+  assert.equal(v.containerRestartOverrideUsed, false);
+});
+
+test('con las cuatro condiciones, la grieta se abre y queda dicho', async () => {
+  const { file, doc, hash } = await stagingDeOtraSesion();
+  const leido = staging.readStaging(file, {
+    allowContainerRestart: true,
+    expectHash: hash,
+    expectScoutId: 'ca_abc_active_licenses',
+    expectRunId: doc.runId,
+  });
+  assert.equal(leido.ok, true, leido.problems.join('; '));
+  assert.equal(leido.containerRestartOverrideUsed, true, 'se aceptó sin decir que se usó el override');
+  assert.notEqual(leido.sessionOfDoc, leido.sessionNow, 'esta prueba no está probando lo que cree');
+
+  const v = intake.validateStaging('ca_abc_active_licenses', file, {
+    allowContainerRestart: true, expectHash: hash, expectRunId: doc.runId,
+  });
+  assert.equal(v.ok, true, v.problems.join('; '));
+  assert.equal(v.containerRestartOverrideUsed, true);
+  // El documento sale intacto: la grieta perdona el sello, no reescribe nada.
+  assert.equal(v.doc.candidates.length, doc.candidates.length);
+  assert.equal(v.doc.sha256, hash);
+});
+
+test('la grieta NO perdona un hash distinto del autorizado', async () => {
+  const { file, doc } = await stagingDeOtraSesion();
+  const otroHash = `sha256:${'b'.repeat(64)}`;
+  const leido = staging.readStaging(file, {
+    allowContainerRestart: true, expectHash: otroHash,
+    expectScoutId: 'ca_abc_active_licenses', expectRunId: doc.runId,
+  });
+  assert.equal(leido.ok, false);
+  assert.ok(leido.problems.some((p) => /de otra sesión/.test(p)));
+  assert.ok(leido.problems.some((p) => /hash recomputado no coincide con el autorizado/.test(p)),
+    `el motivo no explica qué condición falló: ${leido.problems.join('; ')}`);
+  assert.equal(leido.containerRestartOverrideUsed, false);
+});
+
+test('la grieta NO perdona contenido alterado, ni aunque se re-selle el hash', async () => {
+  // Alguien añade un candidato a mano Y recalcula el sha256 del archivo. El hash
+  // AUTORIZADO sigue siendo el de antes, así que la grieta no se abre: es la
+  // diferencia entre "coincide consigo mismo" y "coincide con lo que se aprobó".
+  const { file, doc, hash } = await stagingDeOtraSesion();
+  doc.candidates.push({
+    dedupKey: 'ca-abc:99999999', sourceId: '99999999', businessName: 'COLADO A MANO LLC',
+    address: '1 A ST', city: 'SAN DIEGO', zip: '92101', serviceArea: 'San Diego County, CA',
+    sourceUrl: 'https://www.abc.ca.gov/licensing/licensing-reports/', evidence: {},
+    matchKeys: { name: 'coladoamanollc', cross: 'coladoamanollc|1ast' },
+  });
+  doc.sha256 = staging.computeHash(doc);
+  const alterado = path.join(tmpDir, 'alterado.json');
+  fs.writeFileSync(alterado, JSON.stringify(doc, null, 2));
+
+  const leido = staging.readStaging(alterado, {
+    allowContainerRestart: true, expectHash: hash,
+    expectScoutId: 'ca_abc_active_licenses', expectRunId: doc.runId,
+  });
+  assert.equal(leido.ok, false, 'un staging con un candidato colado a mano cruzó la grieta');
+  assert.ok(leido.problems.some((p) => /hash recomputado no coincide con el autorizado/.test(p)));
+});
+
+test('la grieta NO perdona un TTL vencido', async () => {
+  const { file, doc, hash } = await stagingDeOtraSesion();
+  const leido = staging.readStaging(file, {
+    now: Date.parse(doc.expiresAt) + 1000,
+    allowContainerRestart: true, expectHash: hash,
+    expectScoutId: 'ca_abc_active_licenses', expectRunId: doc.runId,
+  });
+  assert.equal(leido.ok, false);
+  // Caducado es caducado: aparece su propio problema, y además la grieta se cierra.
+  assert.ok(leido.problems.some((p) => /caducó/.test(p)));
+  assert.ok(leido.problems.some((p) => /TTL está vencido/.test(p)));
+  assert.equal(leido.containerRestartOverrideUsed, false);
+});
+
+test('la grieta NO perdona otro scoutId ni otro runId', async () => {
+  const { file, doc, hash } = await stagingDeOtraSesion();
+
+  const otroScout = staging.readStaging(file, {
+    allowContainerRestart: true, expectHash: hash,
+    expectScoutId: 'hud_multifamily', expectRunId: doc.runId,
+  });
+  assert.equal(otroScout.ok, false);
+  assert.ok(otroScout.problems.some((p) => /scoutId no es el esperado/.test(p)));
+
+  const otroRun = staging.readStaging(file, {
+    allowContainerRestart: true, expectHash: hash,
+    expectScoutId: 'ca_abc_active_licenses', expectRunId: 'run_otro_cualquiera',
+  });
+  assert.equal(otroRun.ok, false);
+  assert.ok(otroRun.problems.some((p) => /runId no es el esperado/.test(p)));
+
+  // Y la capa central pone el scoutId por su cuenta, así que pedir la grieta para
+  // el scout equivocado tampoco cuela.
+  const v = intake.validateStaging('hud_multifamily', file, {
+    allowContainerRestart: true, expectHash: hash, expectRunId: doc.runId,
+  });
+  assert.equal(v.ok, false);
+});
+
+test('pedir la grieta sin el hash autorizado no la abre', async () => {
+  const { file, doc } = await stagingDeOtraSesion();
+  const leido = staging.readStaging(file, {
+    allowContainerRestart: true, expectScoutId: 'ca_abc_active_licenses', expectRunId: doc.runId,
+  });
+  assert.equal(leido.ok, false, 'la grieta se abrió sin nada contra lo que comparar');
+  assert.ok(leido.problems.some((p) => /no se pasó el hash autorizado/.test(p)));
+});
+
+test('el orquestador exige el flag y lo reporta cuando lo usa', () => {
+  const src = fs.readFileSync(new URL('../scripts/phase3-run.js', import.meta.url), 'utf8');
+  assert.match(src, /const permitirReinicio = rest\.includes\('--allow-container-restart'\)/);
+  // El hash que habilita la grieta es el de `--expect-hashes`, no el del archivo.
+  assert.match(src, /allowContainerRestart: permitirReinicio,\s*\n\s*expectHash: hash,/);
+  // Y cuando se usa, se dice.
+  assert.match(src, /se aplicó --allow-container-restart/);
+});
+
+test('la rutina diaria no pasa nunca el override', () => {
+  const src = fs.readFileSync(new URL('../scripts/routine-daily.js', import.meta.url), 'utf8');
+  assert.ok(!src.includes('--allow-container-restart'),
+    'la rutina podría saltarse el sello de sesión sin que nadie lo pida');
+});
+
 // ══ Capa central ══════════════════════════════════════════════
 const indiceVacio = () => ({
   dedupKeys: new Set(), crossKeys: new Set(), nameKeys: new Set(), complete: true,

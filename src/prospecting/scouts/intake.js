@@ -91,8 +91,18 @@ const PII_PATTERNS = [
 const PII_KEY_PATTERNS = /owner|contact|phone|email|latitude|longitude|administrator|manager_name|person/i;
 
 /** Valida un staging por sí solo. Devuelve `{ ok, problems, doc }`. */
-export function validateStaging(scoutId, file, { now = Date.now(), requireSameSession = true } = {}) {
-  const base = readStaging(file, { now, requireSameSession });
+export function validateStaging(scoutId, file, {
+  now = Date.now(),
+  requireSameSession = true,
+  // Grieta del reinicio de contenedor: ver `readStaging`. Aquí solo se traslada,
+  // con el scoutId que esta validación ya conoce como condición (c).
+  allowContainerRestart = false,
+  expectHash = null,
+  expectRunId = null,
+} = {}) {
+  const base = readStaging(file, {
+    now, requireSameSession, allowContainerRestart, expectHash, expectRunId, expectScoutId: scoutId,
+  });
   const problems = [...base.problems];
   const doc = base.doc;
   if (!doc) return { ok: false, problems, doc: null };
@@ -142,7 +152,13 @@ export function validateStaging(scoutId, file, { now = Date.now(), requireSameSe
     problems.push(`${doc.candidates.length} candidatos, por encima del tope de ${tope}`);
   }
 
-  return { ok: problems.length === 0, problems, doc };
+  return {
+    ok: problems.length === 0,
+    problems,
+    doc,
+    // Si la grieta del reinicio se usó, viaja hasta el informe.
+    containerRestartOverrideUsed: base.containerRestartOverrideUsed === true,
+  };
 }
 
 /**

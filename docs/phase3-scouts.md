@@ -426,6 +426,40 @@ Cada scout tiene lo suyo y no estorba a los demás ni a County/City:
   min y, al romperlo, lo dice: un lock roto en silencio esconde que algo murió a
   medias.
 
+### La grieta del reinicio de contenedor
+
+Un staging sellado se ata a la sesión que lo creó: `boot_id` del contenedor. La
+regla es que **una autorización no se hereda** — quien revisó una preview la
+revisó en un proceso concreto, y el archivo en disco es lo único que queda
+después.
+
+Esa regla dejó un snapshot íntegro y vigente inservible: el contenedor se
+reinició entre la revisión y la carga, el `boot_id` cambió, y la capa central
+rechazó un documento cuyo hash cuadraba y cuyo TTL seguía corriendo.
+
+`--allow-container-restart` abre una grieta **estrecha** en eso, y pide las
+cuatro condiciones a la vez, todas aportadas por quien llama y no por el archivo:
+
+| | Condición |
+|---|---|
+| a | el hash **recomputado del contenido** coincide con el hash **autorizado** (`--expect-hashes`), no con el que el archivo dice de sí mismo |
+| b | el TTL sigue vigente |
+| c | el `scoutId` y el `runId` son los esperados |
+| d | la invocación pasa el flag explícitamente |
+
+Si falta una, la sesión distinta sigue bloqueando, y el motivo dice **cuál**
+faltó. Y la grieta perdona **solo eso**: un hash que no cuadra, un TTL vencido o
+un documento de otra corrida siguen bloqueando igual, con flag o sin él.
+
+La diferencia entre (a) y "el hash del archivo cuadra consigo mismo" es la que
+importa: alguien puede añadir un candidato a mano **y recalcular el `sha256`**, y
+entonces el archivo es coherente consigo mismo pero ya no es lo que se aprobó.
+Hay una prueba para exactamente ese caso.
+
+Cuando la grieta se usa, **se dice en el informe**: un override que no se ve es un
+control que se perdió. La rutina diaria no lo pasa nunca, y hay una prueba que lo
+comprueba.
+
 ## Lo que la sync central rechaza, antes de hacer nada
 
 `People`/`Opportunities`/notas/mensajes/borrados · cualquier operación que no sea
@@ -446,7 +480,7 @@ funcionando. Nada de email ni Slack: el push, si llega, será configuración de 
 
 ## Comandos
 
-    npm run phase3:preview        # los tres scouts, en secuencia, sin escribir
+    npm run phase3:preview        # los scouts, en secuencia, sin escribir
     npm run phase3:plan           # capa central sobre los staging que haya
 
 `apply` existe y está cerrado: exige `--confirm`, `--allow-writes`,

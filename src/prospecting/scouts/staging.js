@@ -113,7 +113,47 @@ export function writeStaging({
  * No comprueba si los candidatos siguen siendo ciertos en el portal: para eso
  * habría que volver a consultar, que es justo lo que este mecanismo evita.
  */
-export function readStaging(file, { requireSameSession = true, now = Date.now() } = {}) {
+/** Qué condición de la grieta no se cumple, para poder decirlo en el informe. */
+function explicarGrieta(g, conHash) {
+  if (!conHash) return 'no se pasó el hash autorizado contra el que comparar';
+  if (!g.hashMatchesAuthorized) return 'el hash recomputado no coincide con el autorizado';
+  if (!g.ttlValid) return 'el TTL está vencido';
+  if (!g.scoutIdMatches) return 'el scoutId no es el esperado';
+  if (!g.runIdMatches) return 'el runId no es el esperado';
+  return 'falta alguna condición';
+}
+
+/**
+ * Lee un staging sellado y dice si se puede reutilizar.
+ *
+ * El sello ata el documento a la sesión que lo creó, porque una autorización no
+ * se hereda: quien revisó una preview la revisó en un proceso concreto, y el
+ * archivo en disco es lo único que queda después.
+ *
+ * `allowContainerRestart` abre una grieta ESTRECHA en esa regla, y existe porque
+ * el caso se dio: el contenedor de esta sesión se reinició entre la revisión y la
+ * carga, el `boot_id` cambió, y un snapshot íntegro y vigente quedó inservible.
+ * La grieta pide las CUATRO cosas a la vez, y las cuatro las aporta quien llama,
+ * no el archivo:
+ *
+ *   a. el hash recomputado del contenido coincide con `expectHash`, el hash que
+ *      se autorizó — no con el que el propio archivo dice de sí mismo;
+ *   b. el TTL sigue vigente;
+ *   c. `scoutId` y `runId` coinciden con los esperados;
+ *   d. quien llama lo pide explícitamente.
+ *
+ * Si falta una, la sesión distinta sigue siendo un problema. Y la grieta solo
+ * perdona ESO: un hash que no cuadra, un TTL vencido o un documento de otra
+ * corrida siguen bloqueando igual, con o sin flag.
+ */
+export function readStaging(file, {
+  requireSameSession = true,
+  now = Date.now(),
+  allowContainerRestart = false,
+  expectHash = null,
+  expectScoutId = null,
+  expectRunId = null,
+} = {}) {
   let doc;
   try {
     doc = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -141,16 +181,45 @@ export function readStaging(file, { requireSameSession = true, now = Date.now() 
     problems.push(`el staging caducó el ${doc.expiresAt}: lo que se vio entonces no es lo que hay ahora`);
   }
 
+  // Las condiciones de la grieta se evalúan ANTES de usarla, para poder decir en
+  // el informe cuál de ellas la habilitó o la cerró.
+  const conHash = typeof expectHash === 'string' && expectHash.length > 0;
+  const normalizar = (h) => String(h || '').replace(/^sha256:/, '');
+  const grieta = {
+    requested: allowContainerRestart === true,
+    hashMatchesAuthorized: conHash && normalizar(expected) === normalizar(expectHash),
+    ttlValid: Number.isFinite(caduca) && now <= caduca,
+    scoutIdMatches: expectScoutId === null || doc.scoutId === expectScoutId,
+    runIdMatches: expectRunId === null || doc.runId === expectRunId,
+  };
+  grieta.usable = grieta.requested && grieta.hashMatchesAuthorized && grieta.ttlValid
+    && grieta.scoutIdMatches && grieta.runIdMatches && conHash;
+
+  let containerRestartOverrideUsed = false;
   if (requireSameSession) {
     const actual = sessionId();
     if (!doc.sessionId) problems.push('el staging no registró su sesión: no se puede reutilizar');
     else if (!actual) problems.push('no se puede identificar la sesión actual');
     else if (doc.sessionId !== actual) {
-      problems.push('el staging es de otra sesión: la autorización no se hereda');
+      if (grieta.usable) {
+        // Se perdona, y se deja dicho: un override que no se ve en el informe es
+        // un control que se perdió.
+        containerRestartOverrideUsed = true;
+      } else {
+        problems.push('el staging es de otra sesión: la autorización no se hereda'
+          + (grieta.requested ? ` (--allow-container-restart no aplica: ${explicarGrieta(grieta, conHash)})` : ''));
+      }
     }
   }
 
-  return { ok: problems.length === 0, doc, problems };
+  return {
+    ok: problems.length === 0,
+    doc,
+    problems,
+    containerRestartOverrideUsed,
+    sessionOfDoc: doc.sessionId ?? null,
+    sessionNow: sessionId(),
+  };
 }
 
 /** Los staging más recientes, uno por scout. */

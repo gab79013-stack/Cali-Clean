@@ -6,7 +6,7 @@
  *   node scripts/phase3-run.js plan                     # capa central sobre los staging
  *   node scripts/phase3-run.js apply --confirm \
  *        --expect-hashes <id>=<hash>,... --allow-writes \
- *        [--max-creates 10]                              # exige todo a la vez
+ *        [--max-creates 10] [--allow-container-restart]   # exige todo a la vez
  *
  * Qué garantiza, y cada una está comprobada por una prueba:
  *
@@ -47,6 +47,10 @@ const flag = (name, dflt) => {
 };
 const confirmado = rest.includes('--confirm');
 const permitirEscrituras = rest.includes('--allow-writes');
+// Grieta del reinicio de contenedor. Por defecto NO: un staging de otra sesión se
+// rechaza. Con el flag, solo si el hash recomputado coincide con el autorizado, el
+// TTL sigue vigente y el scoutId y el runId son los esperados.
+const permitirReinicio = rest.includes('--allow-container-restart');
 const soloUno = flag('only', null);
 const esperados = String(flag('expect-hashes', '') || '');
 // Tope de creaciones POR FUENTE en un apply. Estaba usándose sin declararse, así
@@ -257,11 +261,22 @@ async function plan() {
   }
 
   title('Validación secuencial');
+  // Para el plan, el hash autorizado puede venir por `--expect-hashes` igual que
+  // en el apply; sin él, la grieta no se abre aunque se pida el flag.
+  const hashesDePlan = new Map(
+    String(esperados).split(',').map((par) => par.trim()).filter(Boolean)
+      .map((par) => { const i = par.indexOf('='); return [par.slice(0, i), par.slice(i + 1)]; }),
+  );
   const stagings = {};
   const invalidos = [];
   for (const id of prioritizedScoutIds()) {
     if (!archivos[id]) { console.log(`  ${id}: sin staging`); continue; }
-    const v = validateStaging(id, archivos[id]);
+    // En el plan la grieta se traslada igual, porque un plan que no puede leer el
+    // staging no sirve para revisar lo que el apply hará. No escribe nada.
+    const v = validateStaging(id, archivos[id], {
+      allowContainerRestart: permitirReinicio,
+      expectHash: permitirReinicio ? hashesDePlan.get(id) ?? null : null,
+    });
     if (!v.ok) {
       invalidos.push(id);
       console.log(`  ${id}: ✗ NO válida`);
@@ -269,7 +284,8 @@ async function plan() {
       continue;
     }
     stagings[id] = v.doc;
-    console.log(`  ${id}: ✓ válida · ${v.doc.candidateCount} candidatos · runId ${v.doc.runId}`);
+    console.log(`  ${id}: ✓ válida · ${v.doc.candidateCount} candidatos · runId ${v.doc.runId}`
+      + (v.containerRestartOverrideUsed ? ' · ⚠ con --allow-container-restart' : ''));
   }
   if (!Object.keys(stagings).length) die('ningún staging válido: no se planifica nada.', 3);
 
@@ -387,12 +403,25 @@ async function apply() {
     const file = archivos[scoutId];
     if (!file) die(`no hay staging de ${scoutId}.`);
 
-    const v = validateStaging(scoutId, file);
+    // El hash autorizado llega por `--expect-hashes`, así que es exactamente la
+    // condición (a) de la grieta del reinicio: se compara el hash RECOMPUTADO del
+    // contenido contra el que una persona autorizó, no contra el que el archivo
+    // dice de sí mismo.
+    const v = validateStaging(scoutId, file, {
+      allowContainerRestart: permitirReinicio,
+      expectHash: hash,
+    });
     if (!v.ok) {
       invalidos.push(scoutId);
       console.error(`  ${scoutId}: ✗ NO válida`);
       for (const p of v.problems) console.error(`      · ${p}`);
       continue;
+    }
+    if (v.containerRestartOverrideUsed) {
+      console.log(`  ${scoutId}: ⚠ se aplicó --allow-container-restart`);
+      console.log('      el staging es de otra sesión (el contenedor se reinició), y se acepta porque');
+      console.log('      el hash recomputado coincide con el autorizado, el TTL sigue vigente y');
+      console.log(`      el scoutId y el runId son los esperados (runId ${v.doc.runId}).`);
     }
     if (v.doc.sha256 !== hash) {
       console.error(`  ${scoutId}: el hash no es el autorizado`);
