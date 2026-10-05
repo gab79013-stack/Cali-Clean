@@ -2,7 +2,7 @@
 
 ## Generation path
 
-`hour slot → deterministic topic/language → policy validation → storyboard manifest → optional local render → private review queue`
+`hour slot → deterministic script/language → copy + reading-time validation → timed motion plan → safe-zone layout → frame QA + contact sheet → optional local render → private review queue`
 
 The slot, topic, language, brand version, and template version are hashed into a stable draft ID. Re-running the same slot returns the existing result rather than producing a duplicate.
 
@@ -12,7 +12,7 @@ Claude Code/Cloud can run the manifest phase because it needs only Python's stan
 
 ### Mac role
 
-The Mac runner adds the local `render-pilot` step. It creates four branded scene cards from the official Cali Clean artwork, then encodes a 15-second H.264 MP4 with macOS AVFoundation. The encoder and inspector are built from Swift first. If swiftc and the SDK are incompatible (for example Command Line Tools `redefinition of module 'SwiftBridging'`), equivalent Objective-C sources are built with `xcrun clang -fno-modules`, for both binaries together. This avoids a paid video-provider dependency while the visual format is being validated.
+The Mac runner adds the local `render-pilot` step. `src/motion.py` rasterizes 1080x1920 frames at 30 fps (18–24 s, hook → problem → tips → benefit → CTA) from the official artwork. The frames are piped as raw BGRA into a local AVFoundation H.264 encoder. The encoder is built from Swift first. If the only problem is a duplicated `SwiftBridging` module map, Swift is retried through a project-local VFS overlay in `.build/vfs/`, with no system file changed. Failing that, Objective-C equivalents built with `xcrun clang -fno-modules` are used for both binaries.
 
 ### Provider audit
 

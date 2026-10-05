@@ -1,11 +1,10 @@
 import AVFoundation
-import CoreGraphics
 import CoreVideo
 import Foundation
-import ImageIO
 
-// Headless renderer: ImageIO + CoreGraphics + AVFoundation only (no AppKit), so it
-// runs from SSH, launchd or a terminal without a window-server session.
+// Headless H.264 encoder: reads exactly FRAMES raw BGRA frames (WIDTH*HEIGHT*4
+// bytes each) from stdin and writes an MP4. Every frame is a CVPixelBuffer
+// created directly with CVPixelBufferCreate; the writer adaptor only appends.
 
 struct RenderError: Error, CustomStringConvertible {
     let description: String
@@ -23,59 +22,19 @@ func describe(_ error: Error) -> String {
     return parts.joined(separator: " ")
 }
 
-func cgImage(_ path: String) throws -> CGImage {
-    let url = URL(fileURLWithPath: path)
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-        throw RenderError(description: "Cannot read frame: \(path)")
+func readExactly(_ pointer: UnsafeMutableRawPointer, _ count: Int) -> Bool {
+    var done = 0
+    while done < count {
+        let n = fread(pointer.advanced(by: done), 1, count - done, stdin)
+        if n == 0 {
+            return false
+        }
+        done += n
     }
-    guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-        throw RenderError(description: "Cannot decode frame: \(path)")
-    }
-    return image
+    return true
 }
 
-func pixelBuffer(pool: CVPixelBufferPool, width: Int, height: Int, a: CGImage, b: CGImage?, blend: CGFloat) throws -> CVPixelBuffer {
-    var maybe: CVPixelBuffer?
-    let status = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &maybe)
-    guard status == kCVReturnSuccess, let buffer = maybe else {
-        throw RenderError(description: "Cannot allocate pixel buffer (CVReturn \(status))")
-    }
-    CVPixelBufferLockBaseAddress(buffer, [])
-    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-    guard let base = CVPixelBufferGetBaseAddress(buffer) else {
-        throw RenderError(description: "Missing pixel buffer base address")
-    }
-    guard let context = CGContext(
-        data: base,
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-    ) else {
-        throw RenderError(description: "Cannot create render context")
-    }
-    let rect = CGRect(x: 0, y: 0, width: width, height: height)
-    context.setFillColor(red: 0.086, green: 0.306, blue: 0.278, alpha: 1)
-    context.fill(rect)
-    context.interpolationQuality = .high
-    context.draw(a, in: rect)
-    if let b = b, blend > 0 {
-        context.saveGState()
-        context.setAlpha(blend)
-        context.draw(b, in: rect)
-        context.restoreGState()
-    }
-    return buffer
-}
-
-func render(framePaths: [String], outputPath: String, width: Int, height: Int, fps: Int, duration: Double) throws -> Int {
-    guard framePaths.count >= 2 else { throw RenderError(description: "At least two frames are required") }
-    let frames = try framePaths.map(cgImage)
-    for (index, frame) in frames.enumerated() where frame.width != width || frame.height != height {
-        throw RenderError(description: "Frame \(index + 1) is \(frame.width)x\(frame.height), expected \(width)x\(height)")
-    }
+func render(outputPath: String, width: Int, height: Int, fps: Int, frameCount: Int) throws -> Int {
     let url = URL(fileURLWithPath: outputPath)
     if FileManager.default.fileExists(atPath: outputPath) {
         try FileManager.default.removeItem(at: url)
@@ -88,7 +47,7 @@ func render(framePaths: [String], outputPath: String, width: Int, height: Int, f
         AVVideoWidthKey: width,
         AVVideoHeightKey: height,
         AVVideoCompressionPropertiesKey: [
-            AVVideoAverageBitRateKey: 6_000_000,
+            AVVideoAverageBitRateKey: 8_000_000,
             AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
             AVVideoExpectedSourceFrameRateKey: fps,
             AVVideoMaxKeyFrameIntervalKey: fps * 2
@@ -100,21 +59,18 @@ func render(framePaths: [String], outputPath: String, width: Int, height: Int, f
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
         kCVPixelBufferWidthKey as String: width,
         kCVPixelBufferHeightKey as String: height,
-        kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+        kCVPixelBufferCGImageCompatibilityKey as String: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()
     ]
     let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: attrs)
     guard writer.canAdd(input) else { throw RenderError(description: "AVAssetWriter rejected video input") }
     writer.add(input)
     guard writer.startWriting() else { throw writer.error ?? RenderError(description: "Writer did not start") }
     writer.startSession(atSourceTime: .zero)
-    guard let pool = adaptor.pixelBufferPool else {
-        throw writer.error ?? RenderError(description: "Pixel buffer pool unavailable")
-    }
 
-    let totalFrames = Int((duration * Double(fps)).rounded())
-    let segment = Double(totalFrames) / Double(frames.count)
-    let transitionFrames = max(1, Int(Double(fps) * 0.35))
-    for index in 0..<totalFrames {
+    let rowBytes = width * 4
+    for index in 0..<frameCount {
         let deadline = Date().addingTimeInterval(30)
         while !input.isReadyForMoreMediaData {
             if writer.status == .failed {
@@ -125,24 +81,38 @@ func render(framePaths: [String], outputPath: String, width: Int, height: Int, f
             }
             Thread.sleep(forTimeInterval: 0.002)
         }
-        let position = Double(index) / segment
-        let frameIndex = min(frames.count - 1, Int(position))
-        let within = Int(Double(index) - Double(frameIndex) * segment)
-        let remaining = Int(segment) - within
-        var next: CGImage? = nil
-        var alpha: CGFloat = 0
-        if frameIndex + 1 < frames.count && remaining <= transitionFrames {
-            next = frames[frameIndex + 1]
-            alpha = CGFloat(transitionFrames - max(0, remaining)) / CGFloat(transitionFrames)
+        var maybe: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &maybe)
+        guard status == kCVReturnSuccess, let buffer = maybe else {
+            throw RenderError(description: "CVPixelBufferCreate failed (CVReturn \(status)) at frame \(index)")
         }
-        let buffer = try pixelBuffer(pool: pool, width: width, height: height, a: frames[frameIndex], b: next, blend: alpha)
-        let time = CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps))
-        guard adaptor.append(buffer, withPresentationTime: time) else {
+        guard CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess else {
+            throw RenderError(description: "CVPixelBufferLockBaseAddress failed at frame \(index)")
+        }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else {
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            throw RenderError(description: "Missing pixel buffer base address at frame \(index)")
+        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        var complete = bytesPerRow >= rowBytes
+        var y = 0
+        while complete && y < height {
+            complete = readExactly(base.advanced(by: y * bytesPerRow), rowBytes)
+            y += 1
+        }
+        let unlock = CVPixelBufferUnlockBaseAddress(buffer, [])
+        guard complete else {
+            throw RenderError(description: "stdin ended early at frame \(index) of \(frameCount)")
+        }
+        guard unlock == kCVReturnSuccess else {
+            throw RenderError(description: "CVPixelBufferUnlockBaseAddress failed at frame \(index)")
+        }
+        guard adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps))) else {
             throw writer.error ?? RenderError(description: "Failed to append frame \(index)")
         }
     }
     input.markAsFinished()
-    writer.endSession(atSourceTime: CMTime(value: CMTimeValue(totalFrames), timescale: CMTimeScale(fps)))
+    writer.endSession(atSourceTime: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(fps)))
     let semaphore = DispatchSemaphore(value: 0)
     writer.finishWriting { semaphore.signal() }
     if semaphore.wait(timeout: .now() + 120) == .timedOut {
@@ -152,29 +122,28 @@ func render(framePaths: [String], outputPath: String, width: Int, height: Int, f
     guard writer.status == .completed else {
         throw writer.error ?? RenderError(description: "Writer finished with status \(writer.status.rawValue)")
     }
-    return totalFrames
+    return frameCount
 }
 
 do {
     let args = CommandLine.arguments
-    guard args.count >= 8 else {
-        throw RenderError(description: "usage: render_mp4 OUTPUT WIDTH HEIGHT FPS DURATION FRAME FRAME...")
+    guard args.count == 6 else {
+        throw RenderError(description: "usage: render_mp4 OUTPUT WIDTH HEIGHT FPS FRAMES < raw BGRA frames on stdin")
     }
     let output = args[1]
-    guard let width = Int(args[2]), let height = Int(args[3]), let fps = Int(args[4]), let duration = Double(args[5]) else {
+    guard let width = Int(args[2]), let height = Int(args[3]), let fps = Int(args[4]), let frames = Int(args[5]) else {
         throw RenderError(description: "Invalid numeric argument")
     }
     guard width > 0, height > 0, width % 2 == 0, height % 2 == 0 else {
         throw RenderError(description: "H.264 needs positive, even dimensions; got \(width)x\(height)")
     }
-    guard (1...60).contains(fps), duration > 0, duration <= 60 else {
-        throw RenderError(description: "Out-of-range fps (\(fps)) or duration (\(duration))")
+    guard (1...60).contains(fps), frames > 0, frames <= fps * 60 else {
+        throw RenderError(description: "Out-of-range fps (\(fps)) or frame count (\(frames))")
     }
-    let framePaths = Array(args[6...])
-    let frames = try render(framePaths: framePaths, outputPath: output, width: width, height: height, fps: fps, duration: duration)
+    let written = try render(outputPath: output, width: width, height: height, fps: fps, frameCount: frames)
     let payload: [String: Any] = [
         "status": "ok", "output": output, "width": width, "height": height,
-        "fps": fps, "duration": duration, "frames": frames
+        "fps": fps, "duration": Double(written) / Double(fps), "frames": written
     ]
     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     print(String(decoding: data, as: UTF8.self))

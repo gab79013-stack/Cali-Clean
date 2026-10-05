@@ -50,15 +50,18 @@ class PixelBufferRegressionTests(unittest.TestCase):
     def test_every_cvreturn_and_lock_is_checked(self):
         code = objc_code("render_mp4.m")
         self.assertRegex(code, r"status = CVPixelBufferCreate\(")
-        self.assertRegex(code, r"status = CVPixelBufferLockBaseAddress\(")
-        self.assertRegex(code, r"status = CVPixelBufferUnlockBaseAddress\(buffer, 0\);\s*if \(status != kCVReturnSuccess\)")
-        # Every early exit after a successful lock unlocks and releases the buffer.
-        self.assertIn("CVPixelBufferUnlockBaseAddress(buffer, 0);\n        CVPixelBufferRelease(buffer);", code)
+        self.assertRegex(code, r"status = CVPixelBufferLockBaseAddress\(buffer, 0\);\s*if \(status != kCVReturnSuccess\)")
+        self.assertRegex(code, r"status = CVPixelBufferUnlockBaseAddress\(buffer, 0\);")
+        self.assertRegex(code, r"if \(status != kCVReturnSuccess\) \{\s*CVPixelBufferRelease\(buffer\);\s*Fail\(error, RenderError\(\[NSString stringWithFormat:@\"CVPixelBufferUnlockBaseAddress")
+        # A short read releases the buffer and fails instead of encoding a partial frame.
+        self.assertRegex(code, r"if \(!complete\) \{\s*CVPixelBufferRelease\(buffer\);")
         self.assertIn("CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA", code)
 
-    def test_swift_renderer_is_unchanged_by_this_fix(self):
+    def test_swift_renderer_also_avoids_the_pool(self):
         source = (ROOT / "src" / "render_mp4.swift").read_text(encoding="utf-8")
-        self.assertIn("adaptor.pixelBufferPool", source)
+        self.assertNotIn("pixelBufferPool", source)
+        self.assertIn("CVPixelBufferCreate(kCFAllocatorDefault", source)
+        self.assertIn("CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess", source)
 
     @unittest.skipUnless(shutil.which("clang"), "clang not installed")
     def test_objc_sources_parse_cleanly(self):
@@ -126,6 +129,7 @@ class QuotaOverrideTests(guards.OfflineCase):
     def run_pilot(self, reason=None):
         with mock.patch.object(pipeline, "resolve_toolchain", return_value=object()), \
              mock.patch.object(pipeline, "check_card_dependencies", return_value="ok"), \
+             mock.patch.object(pipeline, "build_renderers", return_value={"backend": "objc"}), \
              mock.patch.object(pipeline, "render_video", side_effect=self.fake_render):
             return pipeline.run("render-pilot", SLOT, supervised=True, override_reason=reason)
 
@@ -146,6 +150,7 @@ class QuotaOverrideTests(guards.OfflineCase):
         # A different slot (new draft) cannot get a second override today.
         with mock.patch.object(pipeline, "resolve_toolchain", return_value=object()), \
              mock.patch.object(pipeline, "check_card_dependencies", return_value="ok"), \
+             mock.patch.object(pipeline, "build_renderers", return_value={"backend": "objc"}), \
              mock.patch.object(pipeline, "render_video", side_effect=self.fake_render):
             with self.assertRaisesRegex(pipeline.PolicyError, "quota"):
                 pipeline.run("render-pilot", "2026-10-04T10:00:00-07:00", supervised=True, override_reason=REASON)
@@ -154,6 +159,7 @@ class QuotaOverrideTests(guards.OfflineCase):
         self.spend_normal_quota()
         with mock.patch.object(pipeline, "resolve_toolchain", return_value=object()), \
              mock.patch.object(pipeline, "check_card_dependencies", return_value="ok"), \
+             mock.patch.object(pipeline, "build_renderers", return_value={"backend": "objc"}), \
              mock.patch.object(pipeline, "render_video", side_effect=pipeline.PolicyError("render failed")):
             with self.assertRaisesRegex(pipeline.PolicyError, "render failed"):
                 pipeline.run("render-pilot", SLOT, supervised=True, override_reason=REASON)

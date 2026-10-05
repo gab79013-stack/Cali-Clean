@@ -15,7 +15,10 @@ Keep the hourly routine disabled until all items are complete.
 - [x] Objective-C fallback (`render_mp4.m`, `inspect_mp4.m`) builds with `xcrun clang -fno-modules` when Swift hits a toolchain/SDK mismatch; covered by offline tests.
 - [x] Objective-C renderer no longer uses the adaptor pixel-buffer pool (SIGTRAP regression test).
 - [x] Supervised quota override: one extra attempt per day, reason required, recorded in the ledger.
+- [x] High-production generator: 6–8 scenes, 18–24 s, hook < 0.5 s, reading-time model, safe zones, contrast ≥ 7:1, no empty frames, deterministic frames, contact sheet ≥ 8 moments (offline tests).
+- [x] Reversible SwiftBridging fix through a project-local VFS overlay (offline tests; system files untouched).
 - [ ] `src/pipeline.py healthcheck` exits 0 on the Mac runner.
+- [ ] `src/pipeline.py preflight` passes on the Mac runner (encoders build; contact sheet reviewed).
 - [ ] The manifest of the pilot render records which backend (`swift`/`objc`) produced it.
 - [ ] One supervised `render-pilot --supervised` produces a validated 1080x1920, 12–20 s MP4.
 - [ ] Pilot MP4 has been visually reviewed by a human.

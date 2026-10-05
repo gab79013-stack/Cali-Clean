@@ -13,7 +13,8 @@
     "width": 1080,
     "height": 1920,
     "fps": 30,
-    "duration_seconds": 15,
+    "min_duration_seconds": 18,
+    "max_duration_seconds": 24,
     "format": "mp4",
     "codec": "h264",
     "audio": false

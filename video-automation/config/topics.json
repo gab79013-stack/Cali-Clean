@@ -1,64 +1,403 @@
 {
-  "template_version": "1.0.0",
-  "language_cycle": ["en", "es"],
-  "angles": ["service", "process", "coverage"],
-  "topics": [
-    {
-      "id": "commercial",
-      "asset": "office",
-      "title": {"en": "Commercial cleaning", "es": "Limpieza comercial"},
-      "hook": {"en": "Make room for a better welcome.", "es": "Dele espacio a una mejor bienvenida."},
-      "body": {"en": "A fresh space for customers and your team.", "es": "Un espacio fresco para clientes y su equipo."}
+  "template_version": "2.0.0",
+  "language_cycle": [
+    "en",
+    "es"
+  ],
+  "labels": {
+    "en": {
+      "problem": "THE PROBLEM",
+      "tip": "TIP {n} OF {total}",
+      "benefit": "THE PAYOFF",
+      "cta": "CALI CLEAN · SAN DIEGO"
     },
+    "es": {
+      "problem": "EL PROBLEMA",
+      "tip": "CONSEJO {n} DE {total}",
+      "benefit": "EL BENEFICIO",
+      "cta": "CALI CLEAN · SAN DIEGO"
+    }
+  },
+  "scripts": [
     {
-      "id": "office",
-      "asset": "office",
-      "title": {"en": "Office cleaning", "es": "Limpieza de oficinas"},
-      "hook": {"en": "Ready for a more focused workday?", "es": "¿Listos para una jornada con más enfoque?"},
-      "body": {"en": "Choose the priorities, access and schedule.", "es": "Elija prioridades, acceso y frecuencia."}
-    },
-    {
-      "id": "residential",
+      "id": "residential-weekly-reset",
+      "service": "residential",
       "asset": "home",
-      "title": {"en": "Residential cleaning", "es": "Limpieza residencial"},
-      "hook": {"en": "Come home to more breathing room.", "es": "Vuelva a un hogar con más tranquilidad."},
-      "body": {"en": "One-time refreshes and recurring care.", "es": "Limpiezas únicas y cuidado recurrente."}
+      "title": {
+        "en": "Residential cleaning",
+        "es": "Limpieza residencial"
+      },
+      "scenes": [
+        {
+          "kind": "hook",
+          "icon": "spark",
+          "headline": {
+            "en": "Your weekend clean is taking too long.",
+            "es": "¿Su limpieza semanal tarda demasiado tiempo?"
+          },
+          "support": {
+            "en": "A simple order of tasks saves time and keeps every room feeling fresher.",
+            "es": "Un orden sencillo de tareas ahorra tiempo y mantiene cada cuarto más fresco."
+          }
+        },
+        {
+          "kind": "problem",
+          "icon": "alert",
+          "headline": {
+            "en": "Random cleaning means doing the same work twice.",
+            "es": "Limpiar sin orden duplica el mismo trabajo."
+          },
+          "support": {
+            "en": "Dust falls onto clean floors when you start low and finish high.",
+            "es": "El polvo cae sobre pisos limpios si empieza abajo y termina arriba."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "layers",
+          "headline": {
+            "en": "Always clean from the top down first.",
+            "es": "Limpie siempre de arriba hacia abajo."
+          },
+          "support": {
+            "en": "Dust shelves and fans first, then counters, and leave floors for last.",
+            "es": "Sacuda repisas y ventiladores primero, luego superficies, y deje los pisos al final."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "timer",
+          "headline": {
+            "en": "Let the cleaner sit before you wipe.",
+            "es": "Deje actuar el limpiador antes de limpiar."
+          },
+          "support": {
+            "en": "Check the label for dwell time so the product can do its job.",
+            "es": "Lea en la etiqueta el tiempo de contacto para que el producto funcione."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "shield",
+          "headline": {
+            "en": "Never mix bleach with ammonia or vinegar.",
+            "es": "Nunca mezcle cloro con amoníaco ni vinagre."
+          },
+          "support": {
+            "en": "Mixing products can release harmful fumes; use one and keep air flowing.",
+            "es": "Mezclar productos puede liberar gases dañinos; use uno a la vez y ventile."
+          }
+        },
+        {
+          "kind": "benefit",
+          "icon": "sun",
+          "headline": {
+            "en": "Less rushing, more time for your weekend.",
+            "es": "Menos prisa y más tiempo para descansar."
+          },
+          "support": {
+            "en": "A steady routine keeps surfaces easier to maintain between deeper cleaning visits.",
+            "es": "Una rutina constante facilita el mantenimiento entre una limpieza profunda y otra."
+          }
+        },
+        {
+          "kind": "cta",
+          "icon": "arrow",
+          "headline": {
+            "en": "Need help? Plan your clean at cali-clean.net",
+            "es": "¿Necesita ayuda? Planee su limpieza en cali-clean.net"
+          },
+          "support": {
+            "en": "Tell us about the space, choose your priorities, and confirm the details online.",
+            "es": "Cuéntenos del espacio, elija sus prioridades y confirme los detalles en línea."
+          }
+        }
+      ]
     },
     {
-      "id": "medical-office",
+      "id": "office-touchpoints",
+      "service": "office",
       "asset": "office",
-      "title": {"en": "Medical office cleaning", "es": "Limpieza de consultorios"},
-      "hook": {"en": "Thoughtful care around patient care.", "es": "Atención al entorno donde se atiende."},
-      "body": {"en": "Define rooms, surfaces and timing first.", "es": "Primero defina áreas, superficies y horario."}
+      "title": {
+        "en": "Office cleaning",
+        "es": "Limpieza de oficinas"
+      },
+      "scenes": [
+        {
+          "kind": "hook",
+          "icon": "spark",
+          "headline": {
+            "en": "Busy desks need more care than they get.",
+            "es": "Un escritorio activo necesita más cuidado diario."
+          },
+          "support": {
+            "en": "Keyboards, door handles and shared screens are touched again and again daily.",
+            "es": "Teclados, manijas y pantallas compartidas se tocan una y otra vez cada día."
+          }
+        },
+        {
+          "kind": "problem",
+          "icon": "alert",
+          "headline": {
+            "en": "Quick wipes often just move dust around.",
+            "es": "Una pasada rápida solo mueve el polvo."
+          },
+          "support": {
+            "en": "A dry paper towel spreads residue, and harsh sprays can damage screens.",
+            "es": "Una toalla seca esparce residuos y los aerosoles fuertes pueden dañar pantallas."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "plug",
+          "headline": {
+            "en": "Power down devices before you clean them.",
+            "es": "Apague los equipos antes de limpiarlos."
+          },
+          "support": {
+            "en": "Unplug devices, then use a slightly damp microfiber cloth, never spraying liquid directly.",
+            "es": "Desconéctelos y use un paño de microfibra apenas húmedo, sin rociar líquido directamente."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "check",
+          "headline": {
+            "en": "Start with the spots touched most often.",
+            "es": "Empiece por lo que más se toca."
+          },
+          "support": {
+            "en": "Handles, light switches, phones and shared tables deserve attention before anything else.",
+            "es": "Manijas, interruptores, teléfonos y mesas compartidas merecen atención antes que todo lo demás."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "timer",
+          "headline": {
+            "en": "Follow the disinfectant label, step by step.",
+            "es": "Siga paso a paso la etiqueta del desinfectante."
+          },
+          "support": {
+            "en": "Disinfectants need the surface to stay wet for the listed time to work.",
+            "es": "El desinfectante necesita que la superficie siga húmeda durante el tiempo indicado."
+          }
+        },
+        {
+          "kind": "benefit",
+          "icon": "sun",
+          "headline": {
+            "en": "A tidier, calmer place to get work done.",
+            "es": "Un lugar más ordenado y tranquilo para trabajar."
+          },
+          "support": {
+            "en": "Clear surfaces and a steady routine help the whole team feel organized.",
+            "es": "Superficies despejadas y una rutina constante ayudan al equipo a organizarse mejor."
+          }
+        },
+        {
+          "kind": "cta",
+          "icon": "arrow",
+          "headline": {
+            "en": "Need help? Plan your clean at cali-clean.net",
+            "es": "¿Necesita ayuda? Planee su limpieza en cali-clean.net"
+          },
+          "support": {
+            "en": "Tell us about the space, choose your priorities, and confirm the details online.",
+            "es": "Cuéntenos del espacio, elija sus prioridades y confirme los detalles en línea."
+          }
+        }
+      ]
     },
     {
-      "id": "industrial",
-      "asset": "office",
-      "title": {"en": "Industrial cleaning", "es": "Limpieza industrial"},
-      "hook": {"en": "A clearer path through a busy facility.", "es": "Más orden en un espacio en movimiento."},
-      "body": {"en": "Build the plan around the facility details.", "es": "Arme el plan según los detalles de la instalación."}
-    },
-    {
-      "id": "windows",
+      "id": "move-out-checklist",
+      "service": "moving",
       "asset": "home",
-      "title": {"en": "Window cleaning", "es": "Limpieza de ventanas"},
-      "hook": {"en": "Let a little more California in.", "es": "Deje entrar un poco más de California."},
-      "body": {"en": "Confirm glass, access and priority areas.", "es": "Confirme cristales, acceso y áreas prioritarias."}
+      "title": {
+        "en": "Move-in & move-out cleaning",
+        "es": "Limpieza de mudanza"
+      },
+      "scenes": [
+        {
+          "kind": "hook",
+          "icon": "spark",
+          "headline": {
+            "en": "Moving out? Don't forget these hidden spots.",
+            "es": "¿Se muda? No olvide estos rincones escondidos."
+          },
+          "support": {
+            "en": "Cabinets, baseboards and spots behind appliances are easy to miss on moving day.",
+            "es": "Gabinetes, zócalos y el espacio tras los electrodomésticos se olvidan con facilidad."
+          }
+        },
+        {
+          "kind": "problem",
+          "icon": "alert",
+          "headline": {
+            "en": "Last-minute cleaning turns moving day into chaos.",
+            "es": "Limpiar a última hora complica la mudanza."
+          },
+          "support": {
+            "en": "Saving everything for the end means rushing tasks that need time to dry.",
+            "es": "Dejarlo todo para el final obliga a apresurar tareas que necesitan secarse."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "box",
+          "headline": {
+            "en": "Empty and wipe each room as you go.",
+            "es": "Limpie cada cuarto en cuanto quede vacío."
+          },
+          "support": {
+            "en": "Clean every room the moment it empties, so boxes never block you.",
+            "es": "Así las cajas nunca estorban y cada espacio queda listo para entregar."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "drop",
+          "headline": {
+            "en": "Clean out the fridge a day early.",
+            "es": "Limpie el refrigerador un día antes."
+          },
+          "support": {
+            "en": "Empty it, wipe the shelves, and prop the door open so it dries.",
+            "es": "Vacíelo, limpie las repisas y deje la puerta abierta para que se seque."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "check",
+          "headline": {
+            "en": "Test new cleaners on a hidden spot.",
+            "es": "Pruebe productos nuevos en una zona oculta."
+          },
+          "support": {
+            "en": "Try new cleaners on a small hidden area first to protect surfaces.",
+            "es": "Pruebe cada limpiador nuevo en un área pequeña y escondida para proteger superficies."
+          }
+        },
+        {
+          "kind": "benefit",
+          "icon": "home",
+          "headline": {
+            "en": "Hand over keys with a lighter mind.",
+            "es": "Entregue las llaves con más tranquilidad."
+          },
+          "support": {
+            "en": "A planned clean leaves more energy for settling into your new place.",
+            "es": "Una limpieza planeada deja más energía para instalarse en su nuevo hogar."
+          }
+        },
+        {
+          "kind": "cta",
+          "icon": "arrow",
+          "headline": {
+            "en": "Need help? Plan your clean at cali-clean.net",
+            "es": "¿Necesita ayuda? Planee su limpieza en cali-clean.net"
+          },
+          "support": {
+            "en": "Tell us about the space, choose your priorities, and confirm the details online.",
+            "es": "Cuéntenos del espacio, elija sus prioridades y confirme los detalles en línea."
+          }
+        }
+      ]
     },
     {
-      "id": "moving",
+      "id": "streak-free-windows",
+      "service": "windows",
       "asset": "home",
-      "title": {"en": "Move-in & move-out cleaning", "es": "Limpieza de entrada y salida"},
-      "hook": {"en": "A fresh start on either side of moving day.", "es": "Un nuevo comienzo antes o después de mudarse."},
-      "body": {"en": "Review the scope before service is scheduled.", "es": "Revise el alcance antes de programar el servicio."}
-    },
-    {
-      "id": "post-construction",
-      "asset": "kitchen",
-      "title": {"en": "Post-construction cleaning", "es": "Limpieza después de obra"},
-      "hook": {"en": "The finishing touch after the finishing touches.", "es": "El último detalle después de los últimos detalles."},
-      "body": {"en": "Tell us about the space and the priority areas.", "es": "Cuéntenos del espacio y las áreas prioritarias."}
+      "title": {
+        "en": "Window cleaning",
+        "es": "Limpieza de ventanas"
+      },
+      "scenes": [
+        {
+          "kind": "hook",
+          "icon": "spark",
+          "headline": {
+            "en": "Streaky windows? Try changing your method first.",
+            "es": "¿Ventanas con rayas? Importa más el método."
+          },
+          "support": {
+            "en": "Simple changes in tools and timing help glass dry clearer and faster.",
+            "es": "Pequeños cambios de herramientas y horario ayudan a que el vidrio seque claro."
+          }
+        },
+        {
+          "kind": "problem",
+          "icon": "alert",
+          "headline": {
+            "en": "Cleaning in direct sun leaves streaks behind.",
+            "es": "Limpiar bajo el sol directo deja rayas."
+          },
+          "support": {
+            "en": "Heat dries the solution too quickly, leaving visible marks across the glass.",
+            "es": "El calor seca la solución muy rápido y deja marcas en el vidrio."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "sun",
+          "headline": {
+            "en": "Clean windows on cloudy days instead.",
+            "es": "Limpie las ventanas en días nublados."
+          },
+          "support": {
+            "en": "Pick shade or cloudy hours so the glass stays wet while you wipe.",
+            "es": "Elija sombra u horas nubladas para que el vidrio siga húmedo mientras limpia."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "wind",
+          "headline": {
+            "en": "Vacuum frames and sills before the glass.",
+            "es": "Aspire marcos y rieles antes del vidrio."
+          },
+          "support": {
+            "en": "Vacuum tracks and sills first so loose dirt never turns into streaks.",
+            "es": "Aspire rieles y marcos antes para que la tierra no forme rayas."
+          }
+        },
+        {
+          "kind": "tip",
+          "icon": "ladder",
+          "headline": {
+            "en": "Use ladders safely, with three contact points.",
+            "es": "Use la escalera con firmeza y cuidado."
+          },
+          "support": {
+            "en": "Set ladders on firm ground, and leave high exterior windows to trained pros.",
+            "es": "Apóyela en suelo firme y deje las ventanas exteriores altas a profesionales."
+          }
+        },
+        {
+          "kind": "benefit",
+          "icon": "sun",
+          "headline": {
+            "en": "More daylight and a clearer view outside.",
+            "es": "Más luz natural y mejor vista exterior."
+          },
+          "support": {
+            "en": "Clean glass makes rooms feel brighter and more open throughout the whole day.",
+            "es": "Un vidrio limpio hace que cada cuarto se vea más amplio y luminoso."
+          }
+        },
+        {
+          "kind": "cta",
+          "icon": "arrow",
+          "headline": {
+            "en": "Need help? Plan your clean at cali-clean.net",
+            "es": "¿Necesita ayuda? Planee su limpieza en cali-clean.net"
+          },
+          "support": {
+            "en": "Tell us about the space, choose your priorities, and confirm the details online.",
+            "es": "Cuéntenos del espacio, elija sus prioridades y confirme los detalles en línea."
+          }
+        }
+      ]
     }
   ]
 }
-

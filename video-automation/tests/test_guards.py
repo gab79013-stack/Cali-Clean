@@ -212,8 +212,11 @@ class ToolchainTests(OfflineCase):
             source = (ROOT / "src" / name).read_text()
             self.assertNotIn("import AppKit", source)
             self.assertNotIn("NSImage", source)
-        self.assertIn("import ImageIO", (ROOT / "src" / "render_mp4.swift").read_text())
-        self.assertIn("shouldOptimizeForNetworkUse = true", (ROOT / "src" / "render_mp4.swift").read_text())
+        render = (ROOT / "src" / "render_mp4.swift").read_text()
+        self.assertIn("CVPixelBufferCreate(", render)
+        self.assertNotIn("pixelBufferPool", render)
+        self.assertIn("fread(", render)
+        self.assertIn("shouldOptimizeForNetworkUse = true", render)
         self.assertIn("decodable", (ROOT / "src" / "inspect_mp4.swift").read_text())
 
     def test_subprocesses_cannot_wait_on_stdin(self):
@@ -459,8 +462,9 @@ class RuntimeSafetyTests(OfflineCase):
             "paid provider": self.mutated(renderers__higgsfield_seedance_2_5__enabled=True),
             "paid active": self.mutated(renderers__active="higgsfield_seedance_2_5"),
             "local cost": self.mutated(renderers__local_avfoundation__per_render_provider_cost=1),
-            "too short": self.mutated(output__duration_seconds=11),
-            "too long": self.mutated(output__duration_seconds=21),
+            "too short": self.mutated(output__min_duration_seconds=12),
+            "too long": self.mutated(output__max_duration_seconds=30),
+            "fps": self.mutated(output__fps=24),
             "landscape": self.mutated(output__width=1920, output__height=1080),
             "audio": self.mutated(output__audio=True),
             "codec": self.mutated(output__codec="hevc"),
@@ -487,30 +491,34 @@ class BrandingAndOutputTests(OfflineCase):
         with self.assertRaisesRegex(pipeline.PolicyError, "CTA"):
             pipeline.validate_branding(manifest, self.brand)
         manifest = self.manifest()
-        manifest["scenes"][-1]["body"] = ""
+        manifest["disclosure"] = ""
         with self.assertRaisesRegex(pipeline.PolicyError, "disclosure"):
             pipeline.validate_branding(manifest, self.brand)
 
     def good_metadata(self):
-        return {"width": 1080.0, "height": 1920.0, "duration": 15.0, "fps": 30, "codec_fourcc": "avc1",
+        return {"width": 1080.0, "height": 1920.0, "duration": 22.0, "fps": 30, "codec_fourcc": "avc1",
                 "decodable": True, "audio_tracks": 0, "bytes": 1}
 
+    def output(self):
+        return {**self.runtime["output"], "duration_seconds": 22.0, "frames": 660}
+
     def test_valid_metadata_passes(self):
-        pipeline.validate_video_metadata(self.good_metadata(), self.runtime["output"])
+        pipeline.validate_video_metadata(self.good_metadata(), self.output())
 
     def test_invalid_metadata_fails(self):
         cases = {
             "landscape": {"width": 1920.0, "height": 1080.0},
-            "short": {"duration": 11.5},
-            "long": {"duration": 20.5},
-            "off target": {"duration": 15.5},
+            "short": {"duration": 17.5},
+            "long": {"duration": 24.5},
+            "off target": {"duration": 22.5},
+            "frame rate": {"fps": 24},
             "codec": {"codec_fourcc": "hvc1"},
             "undecodable": {"decodable": False},
             "audio": {"audio_tracks": 1},
         }
         for label, change in cases.items():
             with self.subTest(label), self.assertRaises(pipeline.PolicyError):
-                pipeline.validate_video_metadata({**self.good_metadata(), **change}, self.runtime["output"])
+                pipeline.validate_video_metadata({**self.good_metadata(), **change}, self.output())
 
 
 class MetaAdapterTests(OfflineCase):

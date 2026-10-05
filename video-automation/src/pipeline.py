@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 SRC_DIR = Path(__file__).resolve().parent
@@ -25,8 +25,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from meta_adapter import DisabledMetaAdapter  # noqa: E402  (offline, no network imports)
+import motion  # noqa: E402  (offline motion generator; Pillow is imported lazily)
 
 ROOT = SRC_DIR.parent
+# Read-only, hash-pinned brand assets always come from the project tree.
+ASSET_ROOT = SRC_DIR.parent
 BRAND_PATH = ROOT / "config" / "brand.json"
 TOPICS_PATH = ROOT / "config" / "topics.json"
 RUNTIME_PATH = ROOT / "config" / "runtime.json"
@@ -36,8 +39,8 @@ DISCLOSURE_ES = "Imagen ilustrativa generada con IA; no representa clientes ni p
 # Output contract for reviewable Reels-style drafts.
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
-MIN_DURATION_SECONDS = 12.0
-MAX_DURATION_SECONDS = 20.0
+MIN_DURATION_SECONDS = 18.0
+MAX_DURATION_SECONDS = 24.0
 DURATION_TOLERANCE_SECONDS = 0.2
 ALLOWED_CODECS = {"avc1", "h264"}
 LOCAL_RENDERER = "local_avfoundation"
@@ -76,6 +79,12 @@ LEDGER_FILE = "render-ledger.jsonl"
 MAX_QUOTA_OVERRIDES_PER_DAY = 1
 MAX_OVERRIDE_REASON_CHARS = 500
 TRUTHY = {"1", "true", "yes", "on"}
+BACKEND_ENV = "CALI_CLEAN_RENDER_BACKEND"
+VFS_ENV = "CALI_CLEAN_SWIFT_VFS"
+OVERLAY_MODULES = {"SwiftBridging"}
+# Only module maps shipped by Apple developer tools may be shadowed by the overlay.
+APPLE_DEVELOPER_ROOTS = ("/Library/Developer/CommandLineTools/", "/Applications/")
+RENDER_TIMEOUT_SECONDS = 900
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -181,70 +190,56 @@ def parse_slot(value: str | None, timezone: str) -> datetime:
 class Plan:
     slot: datetime
     language: str
-    angle: str
-    topic: Dict[str, Any]
+    script: Dict[str, Any]
     draft_id: str
 
 
 def choose_plan(slot: datetime, brand: Dict[str, Any], topics: Dict[str, Any]) -> Plan:
     hour_index = int(slot.timestamp() // 3600)
-    topic_items = topics["topics"]
-    topic = topic_items[hour_index % len(topic_items)]
     language_cycle = topics["language_cycle"]
     language = language_cycle[hour_index % len(language_cycle)]
-    angles = topics["angles"]
-    angle = angles[(hour_index // len(topic_items)) % len(angles)]
+    scripts = topics["scripts"]
+    script = scripts[(hour_index // len(language_cycle)) % len(scripts)]
     raw = "|".join([
-        slot.isoformat(), topic["id"], language, angle,
+        slot.isoformat(), script["id"], language,
         brand["brand_version"], topics["template_version"],
     ])
     draft_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
-    return Plan(slot=slot, language=language, angle=angle, topic=topic, draft_id=draft_id)
+    return Plan(slot=slot, language=language, script=script, draft_id=draft_id)
 
 
-def build_storyboard(plan: Plan, brand: Dict[str, Any], runtime: Dict[str, Any]) -> Dict[str, Any]:
-    lang = plan.language
-    disclosure = brand["content_rules"]["required_visual_disclosure"][lang]
-    coverage_short = (
-        "San Diego homes, workplaces and properties."
-        if lang == "en"
-        else "Hogares, negocios y propiedades de San Diego."
+def build_storyboard(plan: Plan, brand: Dict[str, Any], runtime: Dict[str, Any], topics: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    topics = topics or load_json(TOPICS_PATH)
+    try:
+        motion_plan = motion.build_plan(plan.script, plan.language, brand, topics["labels"])
+        motion.validate_plan(motion_plan)
+    except motion.MotionError as exc:
+        raise PolicyError(str(exc))
+    validate_copy(
+        [scene[key] for scene in motion_plan["scenes"] for key in ("eyebrow", "headline", "support")],
+        brand,
     )
-    process = (
-        "Tell us about the space. Choose priorities. Confirm the details."
-        if lang == "en"
-        else "Cuéntenos del espacio. Elija prioridades. Confirme los detalles."
-    )
-    middle = {
-        "service": plan.topic["body"][lang],
-        "process": process,
-        "coverage": coverage_short,
-    }[plan.angle]
-    scenes = [
-        {"start": 0.0, "end": 3.5, "eyebrow": brand["location"].upper(), "headline": plan.topic["hook"][lang], "body": plan.topic["title"][lang]},
-        {"start": 3.5, "end": 7.5, "eyebrow": plan.topic["title"][lang].upper(), "headline": middle, "body": brand["taglines"][lang]},
-        {"start": 7.5, "end": 11.5, "eyebrow": "CALI CLEAN", "headline": brand["hero"][lang], "body": coverage_short},
-        {"start": 11.5, "end": float(runtime["output"]["duration_seconds"]), "eyebrow": plan.topic["title"][lang].upper(), "headline": brand["cta"][lang], "body": disclosure},
-    ]
-    validate_copy([scene[key] for scene in scenes for key in ("eyebrow", "headline", "body")], brand)
     return {
-        "schema": "caliclean.video-draft/v1",
+        "schema": "caliclean.video-draft/v2",
+        "template_version": topics["template_version"],
         "draft_id": plan.draft_id,
         "slot": plan.slot.isoformat(),
         "status": "dry_run",
-        "language": lang,
-        "angle": plan.angle,
-        "topic_id": plan.topic["id"],
-        "asset_id": plan.topic["asset"],
+        "language": plan.language,
+        "script_id": plan.script["id"],
+        "service": plan.script["service"],
+        "asset_id": motion_plan["asset_id"],
         "brand_version": brand["brand_version"],
-        "output": runtime["output"],
+        "output": {**runtime["output"], "duration_seconds": motion_plan["duration_seconds"], "frames": motion_plan["total_frames"]},
+        "disclosure": motion_plan["disclosure"],
         "publication": {
             "enabled": False,
             "destinations": [],
             "meta_connected": False,
         },
         "review": {"required": True, "decision": None},
-        "scenes": scenes,
+        "scenes": motion_plan["scenes"],
+        "motion": {key: motion_plan[key] for key in ("fps", "width", "height", "total_frames", "duration_seconds", "cta_url")},
         "safety": {
             "official_assets_only": True,
             "personal_data": False,
@@ -255,6 +250,7 @@ def build_storyboard(plan: Plan, brand: Dict[str, Any], runtime: Dict[str, Any])
             "certifications": False,
             "prices": False,
             "outreach": False,
+            "invented_results": False,
         },
     }
 
@@ -263,23 +259,23 @@ def validate_branding(manifest: Dict[str, Any], brand: Dict[str, Any]) -> None:
     """Every draft must close on the official CTA and carry the AI-visual disclosure."""
     lang = manifest["language"]
     scenes = manifest["scenes"]
-    if len(scenes) != 4:
-        raise PolicyError("Storyboard must have exactly four scenes")
+    if not motion.MIN_SCENES <= len(scenes) <= motion.MAX_SCENES:
+        raise PolicyError(f"Storyboard must have {motion.MIN_SCENES}-{motion.MAX_SCENES} scenes")
     final = scenes[-1]
-    if final["headline"] != brand["cta"][lang] or "cali-clean.net" not in final["headline"]:
+    if final["kind"] != "cta" or brand["cta"][lang] not in final["headline"] or "cali-clean.net" not in final["headline"]:
         raise PolicyError("Final scene must carry the official cali-clean.net CTA")
-    if final["body"] != brand["content_rules"]["required_visual_disclosure"][lang]:
-        raise PolicyError("Final scene must carry the required visual disclosure")
-    if not any(scene["eyebrow"] == "CALI CLEAN" for scene in scenes):
-        raise PolicyError("Storyboard must name the Cali Clean brand")
+    if manifest["disclosure"] != brand["content_rules"]["required_visual_disclosure"][lang]:
+        raise PolicyError("Draft must carry the required visual disclosure")
+    if scenes[0]["kind"] != "hook":
+        raise PolicyError("Storyboard must open with a hook")
     if manifest["asset_id"] not in {asset["id"] for asset in brand["assets"]}:
         raise PolicyError(f"Unknown brand asset: {manifest['asset_id']}")
-    previous_end = 0.0
+    previous_end = 0
     for scene in scenes:
-        if abs(scene["start"] - previous_end) > 1e-6 or scene["end"] <= scene["start"]:
+        if scene["start_frame"] != previous_end or scene["end_frame"] <= scene["start_frame"]:
             raise PolicyError("Scenes must be contiguous and non-empty")
-        previous_end = scene["end"]
-    if abs(previous_end - float(manifest["output"]["duration_seconds"])) > 1e-6:
+        previous_end = scene["end_frame"]
+    if previous_end != manifest["output"]["frames"]:
         raise PolicyError("Storyboard must cover the full output duration")
 
 
@@ -290,19 +286,25 @@ def manifest_markdown(manifest: Dict[str, Any]) -> str:
         f"- Status: `{manifest['status']}`",
         f"- Slot: `{manifest['slot']}`",
         f"- Language: `{manifest['language']}`",
-        f"- Topic: `{manifest['topic_id']}`",
+        f"- Script: `{manifest['script_id']}` ({manifest['service']})",
+        f"- Duration: {manifest['output']['duration_seconds']:.2f}s · {manifest['output']['frames']} frames @ {manifest['output']['fps']} fps",
         f"- Publication: **disabled**",
         "",
         "## Storyboard",
         "",
     ]
-    for index, scene in enumerate(manifest["scenes"], 1):
+    for scene in manifest["scenes"]:
+        reading = scene["reading"]
         lines.extend([
-            f"### Scene {index} · {scene['start']:.1f}–{scene['end']:.1f}s",
+            f"### {scene['index'] + 1} · {scene['kind']} · {scene['start']:.2f}–{scene['end']:.2f}s · {scene['transition']}",
+            "",
+            f"`{scene['eyebrow']}`",
             "",
             f"**{scene['headline']}**",
             "",
-            scene["body"],
+            scene["support"],
+            "",
+            f"_Reading: needs {max(reading['need_headline'], reading['need_all']):.2f}s, has {reading['available']:.2f}s._",
             "",
         ])
     return "\n".join(lines)
@@ -311,9 +313,11 @@ def manifest_markdown(manifest: Dict[str, Any]) -> str:
 def validate_output_spec(output: Dict[str, Any]) -> None:
     if int(output["width"]) != OUTPUT_WIDTH or int(output["height"]) != OUTPUT_HEIGHT:
         raise PolicyError(f"Output must be {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}")
-    duration = float(output["duration_seconds"])
-    if not MIN_DURATION_SECONDS <= duration <= MAX_DURATION_SECONDS:
-        raise PolicyError(f"Output duration must be {MIN_DURATION_SECONDS:g}–{MAX_DURATION_SECONDS:g} s")
+    if int(output["fps"]) != motion.FPS:
+        raise PolicyError(f"Output must be {motion.FPS} fps")
+    low, high = float(output["min_duration_seconds"]), float(output["max_duration_seconds"])
+    if (low, high) != (MIN_DURATION_SECONDS, MAX_DURATION_SECONDS):
+        raise PolicyError(f"Output duration window must be {MIN_DURATION_SECONDS:g}–{MAX_DURATION_SECONDS:g} s")
     if output.get("format") != "mp4" or output.get("codec") != "h264":
         raise PolicyError("Output must be H.264 MP4")
     if output.get("audio"):
@@ -717,12 +721,13 @@ def _compile(
     runner: Runner,
     compiler: str,
     build_command: Callable[[Toolchain, Path, Path, Path], List[str]],
+    salt: str = "",
 ) -> Path:
     build_dir = ROOT / ".build"
     private_dir(build_dir)
     binary = build_dir / name
     stamp = build_dir / f"{name}.stamp"
-    expected = hashlib.sha256((sha256_file(source) + toolchain.fingerprint()).encode()).hexdigest()
+    expected = hashlib.sha256((sha256_file(source) + toolchain.fingerprint() + salt).encode()).hexdigest()
     if binary.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == expected:
         return binary
     # A private module cache, wiped before every build, rules out stale or
@@ -759,8 +764,21 @@ def _compile(
     return binary
 
 
-def compile_swift(toolchain: Toolchain, name: str, source: Path, logs: List[Dict[str, Any]], log_dir: Path, runner: Runner = run_diag) -> Path:
-    return _compile(toolchain, name, source, logs, log_dir, runner, "swiftc", swiftc_command)
+def compile_swift(
+    toolchain: Toolchain,
+    name: str,
+    source: Path,
+    logs: List[Dict[str, Any]],
+    log_dir: Path,
+    runner: Runner = run_diag,
+    extra_flags: Sequence[str] = (),
+    salt: str = "",
+) -> Path:
+    def command(tc: Toolchain, src: Path, out: Path, cache: Path) -> List[str]:
+        base = swiftc_command(tc, src, out, cache)
+        return base[:-3] + list(extra_flags) + base[-3:]
+
+    return _compile(toolchain, name, source, logs, log_dir, runner, "swiftc", command, salt)
 
 
 def compile_objc(toolchain: Toolchain, name: str, source: Path, logs: List[Dict[str, Any]], log_dir: Path, runner: Runner = run_diag) -> Path:
@@ -780,26 +798,142 @@ def swift_incompatibility(output: str) -> Optional[str]:
     return None
 
 
+_REDEFINITION = re.compile(r"(?P<path>/[^\s:]+\.modulemap):\d+:\d+: error: redefinition of module '(?P<module>[A-Za-z0-9_]+)'")
+_PREVIOUSLY = re.compile(r"(?P<path>/[^\s:]+\.modulemap):\d+:\d+: note: previously defined here")
+
+
+def requested_backend() -> str:
+    value = (os.environ.get(BACKEND_ENV, "auto").strip().lower() or "auto")
+    if value not in {"auto", "swift", "objc"}:
+        raise PolicyError(f"{BACKEND_ENV} must be auto, swift or objc (got {value!r})")
+    return value
+
+
+def strip_module(text: str, module: str) -> str:
+    """Remove every `module <name> { ... }` block (with nested braces) from a module map."""
+    pattern = re.compile(r"(?:(?:explicit|framework|extern)\s+)*module\s+" + re.escape(module) + r"\b[^{]*\{")
+    out = text
+    while True:
+        match = pattern.search(out)
+        if not match:
+            return out
+        depth, index = 0, match.end() - 1
+        while index < len(out):
+            if out[index] == "{":
+                depth += 1
+            elif out[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        if depth != 0:
+            raise ToolchainError(f"Unbalanced braces while removing module {module!r}")
+        out = out[:match.start()] + out[index + 1:]
+
+
+def swiftbridging_overlay(output: str, toolchain: Toolchain, build_dir: Path) -> Optional[Dict[str, Any]]:
+    """Project-local, reversible fix for a duplicated module definition (e.g. SwiftBridging).
+
+    Reads the redefinition diagnostics, copies each redefining module map into
+    .build/vfs with the duplicate block removed, and returns a clang/swift VFS
+    overlay that shadows the original. No system file is modified; deleting
+    .build/vfs (or CALI_CLEAN_SWIFT_VFS=0) reverts it.
+    """
+    if os.environ.get(VFS_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    redefinitions = list(dict.fromkeys(
+        (match["path"], match["module"]) for match in _REDEFINITION.finditer(output) if match["module"] in OVERLAY_MODULES
+    ))
+    if not redefinitions:
+        return None
+    winners = {match["path"] for match in _PREVIOUSLY.finditer(output)}
+    allowed = tuple(APPLE_DEVELOPER_ROOTS) + ((toolchain.sdk_path.rstrip("/") + "/",) if toolchain.sdk_path else ())
+    vfs_dir = build_dir / "vfs"
+    if vfs_dir.exists():
+        shutil.rmtree(vfs_dir)
+    private_dir(vfs_dir)
+    roots: Dict[str, List[Dict[str, str]]] = {}
+    hidden: List[Dict[str, str]] = []
+    for path, module in redefinitions:
+        if path in winners or not path.startswith(allowed) or not os.path.isfile(path):
+            continue
+        original = Path(path).read_text(encoding="utf-8", errors="replace")
+        if not re.search(r"module\s+" + re.escape(module) + r"\b", original):
+            continue
+        replacement = vfs_dir / f"{hashlib.sha256(path.encode()).hexdigest()[:12]}-{Path(path).name}"
+        write_private(replacement, f"// Cali Clean project-local VFS overlay: duplicate {module} definition removed.\n" + strip_module(original, module))
+        roots.setdefault(str(Path(path).parent), []).append(
+            {"type": "file", "name": Path(path).name, "external-contents": str(replacement)}
+        )
+        hidden.append({"path": path, "module": module, "replacement": str(replacement)})
+    if not hidden:
+        shutil.rmtree(vfs_dir)
+        return None
+    overlay = {
+        "version": 0,
+        "case-sensitive": "false",
+        "roots": [{"type": "directory", "name": name, "contents": contents} for name, contents in sorted(roots.items())],
+    }
+    overlay_path = vfs_dir / "overlay.yaml"
+    write_private(overlay_path, json.dumps(overlay, indent=2) + "\n")
+    return {
+        "path": str(overlay_path),
+        "hidden": hidden,
+        "flags": ["-vfsoverlay", str(overlay_path), "-Xcc", "-ivfsoverlay", "-Xcc", str(overlay_path)],
+        "sha256": sha256_file(overlay_path),
+    }
+
+
 def build_renderers(
     toolchain: Toolchain,
     logs: List[Dict[str, Any]],
     log_dir: Path,
     runner: Runner = run_diag,
+    backend: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build renderer and inspector with one coherent backend: Swift first, else Objective-C for both."""
+    """Build encoder and inspector with one coherent backend.
+
+    Order: Swift; Swift with a project-local VFS overlay when the only problem is a
+    duplicated module definition; then Objective-C for both. Real Swift code errors
+    are never masked. CALI_CLEAN_RENDER_BACKEND=objc|swift lets an operator pin one.
+    """
+    backend = backend or requested_backend()
     reason = "swiftc not available through xcrun"
-    if toolchain.swiftc:
+    if backend == "objc":
+        reason = f"{BACKEND_ENV}=objc requested by the operator"
+    elif toolchain.swiftc:
         try:
             return {
                 "backend": "swift",
                 "render": compile_swift(toolchain, "render_mp4", SRC_DIR / "render_mp4.swift", logs, log_dir, runner),
                 "inspect": compile_swift(toolchain, "inspect_mp4", SRC_DIR / "inspect_mp4.swift", logs, log_dir, runner),
                 "fallback_reason": None,
+                "overlay": None,
             }
         except CompileError as exc:
             reason = swift_incompatibility(exc.output)
             if reason is None:
                 raise
+            overlay = swiftbridging_overlay(exc.output, toolchain, ROOT / ".build")
+            if overlay:
+                logs.append({"step": "swift:vfs-overlay", "overlay": overlay["path"], "hidden": overlay["hidden"]})
+                try:
+                    return {
+                        "backend": "swift-vfs",
+                        "render": compile_swift(toolchain, "render_mp4-vfs", SRC_DIR / "render_mp4.swift", logs, log_dir, runner,
+                                                overlay["flags"], overlay["sha256"]),
+                        "inspect": compile_swift(toolchain, "inspect_mp4-vfs", SRC_DIR / "inspect_mp4.swift", logs, log_dir, runner,
+                                                 overlay["flags"], overlay["sha256"]),
+                        "fallback_reason": reason,
+                        "overlay": overlay,
+                    }
+                except CompileError as retry:
+                    second = swift_incompatibility(retry.output)
+                    if second is None:
+                        raise
+                    reason = f"{reason} (still after VFS overlay: {second})"
+    if backend == "swift":
+        raise ToolchainError(f"{BACKEND_ENV}=swift but Swift is unusable: {reason}")
     if not toolchain.clang:
         raise ToolchainError(f"Swift is unusable ({reason}) and clang is not available for the Objective-C fallback")
     logs.append({"step": "fallback:objc", "reason": reason})
@@ -808,6 +942,7 @@ def build_renderers(
         "render": compile_objc(toolchain, "render_mp4-objc", SRC_DIR / "render_mp4.m", logs, log_dir, runner),
         "inspect": compile_objc(toolchain, "inspect_mp4-objc", SRC_DIR / "inspect_mp4.m", logs, log_dir, runner),
         "fallback_reason": reason,
+        "overlay": None,
     }
 
 
@@ -834,105 +969,39 @@ def persist_manifest(manifest: Dict[str, Any], runtime: Dict[str, Any]) -> Dict[
     return paths
 
 
-def _fonts():
-    from PIL import ImageFont
-
-    font_path = ROOT / "assets" / "manrope.woff2"
-    return {
-        "eyebrow": ImageFont.truetype(str(font_path), 34),
-        "headline": ImageFont.truetype(str(font_path), 92),
-        "body": ImageFont.truetype(str(font_path), 46),
-        "small": ImageFont.truetype(str(font_path), 25),
-        "brand": ImageFont.truetype(str(font_path), 54),
-    }
-
-
 def check_card_dependencies() -> str:
-    """Pillow must be importable and able to load the pinned Manrope WOFF2 (needs FreeType+brotli)."""
+    """Pillow must load the pinned Manrope WOFF2 with variable weights (FreeType + brotli + variations)."""
     try:
-        import PIL
-        _fonts()
+        return motion.check_dependencies(ASSET_ROOT / "assets" / "manrope.woff2")
     except ImportError as exc:
         raise PolicyError(f"Pillow is not installed for this Python ({sys.executable}): {exc}")
     except OSError as exc:
-        raise PolicyError(f"Pillow cannot load assets/manrope.woff2 (FreeType without WOFF2/brotli?): {exc}")
-    return f"Pillow {PIL.__version__}"
+        raise PolicyError(f"Pillow cannot load assets/manrope.woff2 with variable weights: {exc}")
 
 
-def _hex(value: str):
-    from PIL import ImageColor
-
-    return ImageColor.getrgb(value)
-
-
-def _fit_crop(image, size):
-    from PIL import ImageOps
-
-    return ImageOps.fit(image, size, method=3, centering=(0.5, 0.5))
+def motion_plan_from(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "scenes": manifest["scenes"],
+        "asset_id": manifest["asset_id"],
+        "total_frames": manifest["output"]["frames"],
+        "disclosure": manifest["disclosure"],
+    }
 
 
-def _wrap(draw, text: str, font, max_width: int, max_lines: int) -> List[str]:
-    words = text.split()
-    lines: List[str] = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}".strip()
-        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-            current = word
-        if len(lines) == max_lines:
-            raise PolicyError("Copy exceeds the maximum number of readable lines")
-    if current:
-        lines.append(current)
-    if len(lines) > max_lines:
-        raise PolicyError("Copy exceeds the maximum number of readable lines")
-    return lines
-
-
-def render_cards(manifest: Dict[str, Any], brand: Dict[str, Any], runtime: Dict[str, Any], target: Path) -> List[Path]:
-    from PIL import Image, ImageDraw
-
-    private_dir(target)
-    width = int(runtime["output"]["width"])
-    height = int(runtime["output"]["height"])
-    fonts = _fonts()
-    asset = next(item for item in brand["assets"] if item["id"] == manifest["asset_id"])
-    source = Image.open(ROOT / asset["path"]).convert("RGB")
-    background = _fit_crop(source, (width, height))
-    colors = {key: _hex(value) for key, value in brand["colors"].items()}
-    cards: List[Path] = []
-    for index, scene in enumerate(manifest["scenes"], 1):
-        image = background.copy().convert("RGBA")
-        overlay = Image.new("RGBA", image.size, colors["teal"] + (178 if index < 4 else 215,))
-        image = Image.alpha_composite(image, overlay)
-        draw = ImageDraw.Draw(image)
-        safe_x = 94
-        safe_w = width - safe_x * 2
-        draw.rounded_rectangle((safe_x, 110, width - safe_x, 175), radius=28, fill=colors["sage"] + (235,))
-        draw.text((safe_x + 28, 126), scene["eyebrow"], font=fonts["eyebrow"], fill=colors["ink"])
-        y = 445
-        for line in _wrap(draw, scene["headline"], fonts["headline"], safe_w, 5):
-            draw.text((safe_x, y), line, font=fonts["headline"], fill=colors["paper"], stroke_width=1)
-            y += 112
-        y += 34
-        for line in _wrap(draw, scene["body"], fonts["body"], safe_w, 5):
-            draw.text((safe_x, y), line, font=fonts["body"], fill=colors["sage"])
-            y += 65
-        draw.line((safe_x, height - 330, width - safe_x, height - 330), fill=colors["orange"], width=8)
-        draw.text((safe_x, height - 278), "cali", font=fonts["brand"], fill=colors["paper"])
-        cali_w = draw.textbbox((safe_x, 0), "cali", font=fonts["brand"])[2] - safe_x
-        draw.text((safe_x + cali_w, height - 278), "clean", font=fonts["brand"], fill=colors["sage"])
-        disclosure = brand["content_rules"]["required_visual_disclosure"][manifest["language"]]
-        for line_number, line in enumerate(_wrap(draw, disclosure, fonts["small"], safe_w, 3)):
-            draw.text((safe_x, height - 174 + line_number * 34), line, font=fonts["small"], fill=colors["paper"])
-        path = target / f"scene-{index:02d}.png"
-        image.convert("RGB").save(path, format="PNG", optimize=True)
-        path.chmod(0o600)
-        cards.append(path)
-    return cards
+def qa_frames(renderer: "motion.Renderer", contact_path: Path) -> Dict[str, Any]:
+    """Safe zones for every scene, no empty frames on a 0.5 s grid, and a contact sheet of >= 8 moments."""
+    for layout in renderer.layouts:
+        for name, box in motion.layout_boxes(layout).items():
+            if not motion.inside(box, motion.SAFE):
+                raise PolicyError(f"{name} leaves the Reels safe zone: {box}")
+    step = max(1, motion.FPS // 2)
+    checked = 0
+    for frame_index in range(0, renderer.plan["total_frames"], step):
+        motion.assert_not_empty(renderer.frame(frame_index), f"#{frame_index}")
+        checked += 1
+    sheet = motion.contact_sheet(renderer, contact_path)
+    contact_path.chmod(0o600)
+    return {"empty_frame_checks": checked, "contact_sheet": sheet}
 
 
 def validate_video_metadata(metadata: Dict[str, Any], output: Dict[str, Any]) -> None:
@@ -943,6 +1012,8 @@ def validate_video_metadata(metadata: Dict[str, Any], output: Dict[str, Any]) ->
         raise PolicyError(f"Rendered duration {duration:.2f}s is outside {MIN_DURATION_SECONDS:g}–{MAX_DURATION_SECONDS:g}s")
     if abs(duration - float(output["duration_seconds"])) > DURATION_TOLERANCE_SECONDS:
         raise PolicyError(f"Rendered duration does not match target: {metadata}")
+    if "fps" in metadata and abs(float(metadata["fps"]) - float(output["fps"])) > 0.5:
+        raise PolicyError(f"Rendered frame rate does not match target: {metadata}")
     if metadata.get("codec_fourcc") not in ALLOWED_CODECS:
         raise PolicyError(f"Unexpected video codec: {metadata.get('codec_fourcc')}")
     if metadata.get("decodable") is not True:
@@ -962,52 +1033,133 @@ def _run_logged(command: List[str], timeout: int, step: str, log_dir: Path, logs
     return result
 
 
+def stream_frames(
+    command: List[str],
+    frames: Iterable[bytes],
+    timeout: int,
+    step: str,
+    log_dir: Path,
+    logs: List[Dict[str, Any]],
+) -> subprocess.CompletedProcess:
+    """Pipe raw frames into the encoder's stdin with a wall-clock watchdog; log everything."""
+    import tempfile
+    import threading
+
+    sent = 0
+    broken = False
+    with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out_f, stderr=err_f)
+        watchdog = threading.Timer(timeout, process.kill)
+        watchdog.start()
+        try:
+            for chunk in frames:
+                try:
+                    process.stdin.write(chunk)
+                except BrokenPipeError:
+                    broken = True
+                    break
+                sent += 1
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                broken = True
+            code = process.wait()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            watchdog.cancel()
+        out_f.seek(0)
+        err_f.seek(0)
+        result = subprocess.CompletedProcess(command, code, out_f.read().decode("utf-8", "replace"), err_f.read().decode("utf-8", "replace"))
+    log_path = log_dir / f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{step}.log"
+    write_private(log_path, diagnostic_log(command, result, {"frames_sent": sent, "broken_pipe": broken}))
+    logs.append({"step": step, "exit_code": code, "frames_sent": sent, "log": str(log_path)})
+    if code != 0 or broken:
+        tail = "\n".join((result.stderr or result.stdout or "").strip().splitlines()[-25:])
+        raise PolicyError(f"{step} failed (exit {code}, {sent} frames sent); full diagnostics: {log_path}\n{tail}")
+    return result
+
+
 def render_video(
     manifest: Dict[str, Any],
     brand: Dict[str, Any],
     runtime: Dict[str, Any],
     paths: Dict[str, Path],
-    toolchain: Toolchain,
+    built: Dict[str, Any],
+    logs: List[Dict[str, Any]],
     runner: Runner = run_diag,
+    streamer: Callable[..., subprocess.CompletedProcess] = stream_frames,
 ) -> Dict[str, Any]:
     log_dir = storage_path(runtime, "logs")
     private_dir(log_dir)
-    logs: List[Dict[str, Any]] = []
-    built = build_renderers(toolchain, logs, log_dir, runner)
-    render_bin, inspect_bin = built["render"], built["inspect"]
+    private_dir(paths["draft_dir"])
+    renderer = motion.Renderer(motion_plan_from(manifest), brand, ASSET_ROOT)
+    qa = qa_frames(renderer, paths["draft_dir"] / "contact-sheet.png")
     ensure_not_killed(runtime)
-    cards = render_cards(manifest, brand, runtime, paths["draft_dir"])
-    output = runtime["output"]
+    output = manifest["output"]
     command = [
-        str(render_bin), str(paths["video"]),
-        str(output["width"]), str(output["height"]), str(output["fps"]), str(output["duration_seconds"]),
-        *[str(path) for path in cards],
+        str(built["render"]), str(paths["video"]),
+        str(output["width"]), str(output["height"]), str(output["fps"]), str(output["frames"]),
     ]
-    completed = _run_logged(command, 300, "render", log_dir, logs, runner)
+    completed = streamer(command, renderer.frames(), RENDER_TIMEOUT_SECONDS, "render", log_dir, logs)
     paths["video"].chmod(0o600)
-    inspected = _run_logged([str(inspect_bin), str(paths["video"])], 120, "inspect", log_dir, logs, runner)
+    inspected = _run_logged([str(built["inspect"]), str(paths["video"])], 120, "inspect", log_dir, logs, runner)
     metadata = json.loads(inspected.stdout.strip())
     validate_video_metadata(metadata, output)
     return {
-        "engine": "macOS AVFoundation",
+        "engine": "Pillow motion frames → macOS AVFoundation H.264",
         "backend": built["backend"],
         "fallback_reason": built["fallback_reason"],
+        "vfs_overlay": built.get("overlay"),
         "provider_cost": 0,
         "rendered_at": now_local(runtime).isoformat(),
-        "toolchain": {
-            "swiftc": toolchain.swiftc,
-            "swiftc_version": toolchain.swiftc_version,
-            "clang": toolchain.clang,
-            "clang_version": toolchain.clang_version,
-            "sdk": toolchain.sdk_path,
-            "sdk_version": toolchain.sdk_version,
-            "target": toolchain.target,
-        },
         "video": str(paths["video"]),
         "sha256": sha256_file(paths["video"]),
         "bytes": paths["video"].stat().st_size,
         "metadata": metadata,
+        "qa": qa,
         "renderer_output": completed.stdout.strip(),
+        "logs": logs,
+    }
+
+
+def preflight(runtime: Dict[str, Any], brand: Dict[str, Any], topics: Dict[str, Any], slot: datetime) -> Dict[str, Any]:
+    """Everything except encoding: toolchain + encoder build, plan, layout, frame QA and a contact sheet.
+
+    Writes only under var/state/preflight and .build; never a draft, an MP4 or a ledger entry.
+    """
+    log_dir = storage_path(runtime, "logs")
+    private_dir(log_dir)
+    logs: List[Dict[str, Any]] = []
+    toolchain = resolve_toolchain()
+    deps = check_card_dependencies()
+    built = build_renderers(toolchain, logs, log_dir)
+    plan = choose_plan(slot, brand, topics)
+    manifest = build_storyboard(plan, brand, runtime, topics)
+    validate_branding(manifest, brand)
+    renderer = motion.Renderer(motion_plan_from(manifest), brand, ASSET_ROOT)
+    target = storage_path(runtime, "state") / "preflight"
+    private_dir(target)
+    qa = qa_frames(renderer, target / f"{manifest['draft_id']}-contact-sheet.png")
+    return {
+        "status": "preflight_ok",
+        "rendered": False,
+        "draft_id": manifest["draft_id"],
+        "script_id": manifest["script_id"],
+        "language": manifest["language"],
+        "duration_seconds": manifest["output"]["duration_seconds"],
+        "frames": manifest["output"]["frames"],
+        "scenes": [{"kind": s["kind"], "seconds": round(s["end"] - s["start"], 2), "headline": s["headline"]} for s in manifest["scenes"]],
+        "hook_lands_at": manifest["scenes"][0]["headline_done"],
+        "backend": built["backend"],
+        "fallback_reason": built["fallback_reason"],
+        "vfs_overlay": built.get("overlay"),
+        "dependencies": deps,
+        "contrast": motion.validate_contrast(brand),
+        "qa": qa,
+        "quota": quota_status(runtime, now_local(runtime)),
         "logs": logs,
     }
 
@@ -1114,11 +1266,15 @@ def run(command: str, slot_value: str | None, supervised: bool = False, override
         ensure_not_killed(runtime)
 
     with exclusive_lock(runtime):
+        if command == "preflight":
+            report = preflight(runtime, brand, topics, slot)
+            report["meta"] = meta_status
+            return report
         if command == "hourly":
             prune(runtime, now_local(runtime))
 
         plan = choose_plan(slot, brand, topics)
-        manifest = build_storyboard(plan, brand, runtime)
+        manifest = build_storyboard(plan, brand, runtime, topics)
         validate_branding(manifest, brand)
         paths = output_paths(runtime, manifest["draft_id"])
 
@@ -1132,6 +1288,11 @@ def run(command: str, slot_value: str | None, supervised: bool = False, override
             toolchain = resolve_toolchain()
             check_card_dependencies()
             quota = enforce_render_quota(runtime, now_local(runtime), override_reason)
+            # Encoders are built before the attempt is recorded: a compiler problem never spends quota.
+            log_dir = storage_path(runtime, "logs")
+            private_dir(log_dir)
+            logs: List[Dict[str, Any]] = []
+            built = build_renderers(toolchain, logs, log_dir)
             if quota["override"]:
                 append_ledger(runtime, {
                     "event": "quota_override", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(),
@@ -1141,7 +1302,7 @@ def run(command: str, slot_value: str | None, supervised: bool = False, override
             append_ledger(runtime, {"event": "started", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(),
                                     "quota_override": quota["override"]})
             try:
-                manifest["render"] = render_video(manifest, brand, runtime, paths, toolchain)
+                manifest["render"] = render_video(manifest, brand, runtime, paths, built, logs)
             except Exception as exc:
                 append_ledger(runtime, {"event": "failed", "draft_id": manifest["draft_id"], "at": now_local(runtime).isoformat(), "error": str(exc)[:500]})
                 raise
@@ -1163,7 +1324,7 @@ def run(command: str, slot_value: str | None, supervised: bool = False, override
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("dry-run", "render-pilot", "hourly", "healthcheck"))
+    parser.add_argument("command", choices=("dry-run", "preflight", "render-pilot", "hourly", "healthcheck"))
     parser.add_argument("--slot", help="ISO timestamp; rounded down to the hour")
     parser.add_argument("--supervised", action="store_true", help="required for render-pilot")
     parser.add_argument("--quota-override-reason", help="render-pilot --supervised only: one extra attempt per day after the normal quota is spent")

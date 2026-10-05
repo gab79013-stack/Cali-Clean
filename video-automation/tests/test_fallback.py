@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -221,8 +222,9 @@ class SourceParityTests(guards.OfflineCase):
             self.assertNotRegex(source, r"#import\s*<AppKit/")
             self.assertNotRegex(source, r"(?m)^\s*@import\b", "@import would require modules")
             self.assertIn("#import <AVFoundation/AVFoundation.h>", source)
-        for header in ("ImageIO/ImageIO.h", "CoreVideo/CoreVideo.h", "CoreGraphics/CoreGraphics.h"):
+        for header in ("CoreVideo/CoreVideo.h", "CoreMedia/CoreMedia.h"):
             self.assertIn(header, render)
+        self.assertIn("fread(", render)
         self.assertIn("shouldOptimizeForNetworkUse = YES", render)
 
     def test_inspectors_emit_the_same_keys(self):
@@ -233,7 +235,7 @@ class SourceParityTests(guards.OfflineCase):
         self.assertEqual(objc_keys, keys)
 
     def test_renderers_share_cli_and_output(self):
-        usage = "usage: render_mp4 OUTPUT WIDTH HEIGHT FPS DURATION FRAME FRAME..."
+        usage = "usage: render_mp4 OUTPUT WIDTH HEIGHT FPS FRAMES < raw BGRA frames on stdin"
         self.assertIn(usage, self.read("render_mp4.swift"))
         self.assertIn(usage, self.read("render_mp4.m"))
         for key in ("status", "output", "width", "height", "fps", "duration", "frames"):
@@ -241,38 +243,59 @@ class SourceParityTests(guards.OfflineCase):
             self.assertIn(f'@"{key}"', self.read("render_mp4.m"))
 
 
-class RenderVideoWithFallbackTests(guards.OfflineCase):
-    """Drives render_video end to end with fake compilers and binaries; nothing is encoded."""
+try:
+    import PIL  # noqa: F401
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
-    def test_render_record_reports_objc_backend_and_zero_cost(self):
+
+@unittest.skipUnless(HAS_PIL, "Pillow is required to rasterize frames")
+class RenderVideoWithFallbackTests(guards.OfflineCase):
+    """Drives render_video end to end with fake compilers, a fake encoder and inspector; nothing is encoded."""
+
+    def test_streams_every_frame_and_reports_objc_backend_and_zero_cost(self):
         compilers = Compilers(swift={"render_mp4.swift": SWIFT_BRIDGING_FAILURE})
-        metadata = {"width": 1080.0, "height": 1920.0, "duration": 15.0, "fps": 30, "codec_fourcc": "avc1",
-                    "decodable": True, "audio_tracks": 0, "bytes": 7}
+        logs = []
+        built = pipeline.build_renderers(toolchain(), logs, self.root / "var" / "state" / "logs", compilers)
+        self.assertEqual(built["backend"], "objc")
+        plan = pipeline.choose_plan(pipeline.parse_slot("2026-10-05T10:00:00-07:00", self.runtime["timezone"]), self.brand, self.topics)
+        manifest = pipeline.build_storyboard(plan, self.brand, self.runtime, self.topics)
+        paths = pipeline.output_paths(self.runtime, manifest["draft_id"])
+        received = {}
+
+        def streamer(command, frames, timeout, step, log_dir, log_list):
+            count = total = 0
+            for chunk in frames:
+                count += 1
+                total += len(chunk)
+            received.update(command=command, frames=count, bytes=total)
+            Path(command[1]).write_bytes(b"fakemp4")
+            log_list.append({"step": step, "exit_code": 0, "frames_sent": count})
+            return subprocess.CompletedProcess(command, 0, '{"status":"ok"}', "")
+
+        metadata = {"width": 1080.0, "height": 1920.0, "duration": manifest["output"]["duration_seconds"], "fps": 30,
+                    "codec_fourcc": "avc1", "decodable": True, "audio_tracks": 0, "bytes": 7}
 
         def runner(command, timeout, env=None):
-            if command[0] == pipeline.XCRUN:
-                return compilers(command, timeout, env)
-            if command[0].endswith("render_mp4-objc"):
-                Path(command[1]).write_bytes(b"fakemp4")
-                return subprocess.CompletedProcess(command, 0, '{"status":"ok"}', "")
-            if command[0].endswith("inspect_mp4-objc"):
-                return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
-            raise AssertionError(f"unexpected command {command}")
+            self.assertTrue(command[0].endswith("inspect_mp4-objc"))
+            return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
 
-        plan = pipeline.choose_plan(pipeline.parse_slot("2026-10-04T09:00:00-07:00", self.runtime["timezone"]), self.brand, self.topics)
-        manifest = pipeline.build_storyboard(plan, self.brand, self.runtime)
-        paths = pipeline.output_paths(self.runtime, manifest["draft_id"])
-        with mock.patch.object(pipeline, "render_cards", return_value=[Path("a.png"), Path("b.png")]):
-            paths["draft_dir"].mkdir(parents=True)
-            record = pipeline.render_video(manifest, self.brand, self.runtime, paths, toolchain(), runner)
+        record = pipeline.render_video(manifest, self.brand, self.runtime, paths, built, logs, runner, streamer)
+        frames = manifest["output"]["frames"]
+        self.assertEqual(received["frames"], frames)
+        self.assertEqual(received["bytes"], frames * 1080 * 1920 * 4)
+        self.assertEqual(received["command"][-4:], ["1080", "1920", "30", str(frames)])
         self.assertEqual(record["backend"], "objc")
         self.assertIn("SwiftBridging", record["fallback_reason"])
         self.assertEqual(record["provider_cost"], 0)
-        self.assertEqual(record["toolchain"]["clang"], "/fake/clang")
         self.assertEqual(paths["video"].stat().st_mode & 0o777, 0o600)
+        sheet = Path(record["qa"]["contact_sheet"]["path"])
+        self.assertTrue(sheet.exists())
+        self.assertGreaterEqual(len(record["qa"]["contact_sheet"]["moments"]), 8)
         steps = [entry["step"] for entry in record["logs"]]
-        self.assertEqual(steps[-2:], ["render", "inspect"])
         self.assertIn("fallback:objc", steps)
+        self.assertEqual(steps[-2:], ["render", "inspect"])
 
 
 if __name__ == "__main__":

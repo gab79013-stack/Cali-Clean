@@ -48,7 +48,11 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(draft["publication"]["enabled"])
         self.assertEqual(draft["publication"]["destinations"], [])
         self.assertTrue(draft["review"]["required"])
-        self.assertEqual(len(draft["scenes"]), 4)
+        self.assertTrue(6 <= len(draft["scenes"]) <= 8)
+        self.assertEqual(draft["output"]["fps"], 30)
+        self.assertTrue(18 <= draft["output"]["duration_seconds"] <= 24)
+        self.assertEqual([s["kind"] for s in draft["scenes"]][:2], ["hook", "problem"])
+        self.assertEqual(draft["scenes"][-1]["kind"], "cta")
 
     def test_unsupported_claims_are_rejected(self):
         with self.assertRaises(pipeline.PolicyError):
@@ -82,14 +86,16 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("VIDEO_ROUTINE_ENABLED", script)
         self.assertIn("exit 78", script)
 
-    def test_all_topics_use_official_services_and_valid_copy(self):
-        self.assertEqual(len(self.topics["topics"]), 8)
-        for topic in self.topics["topics"]:
-            pipeline.validate_copy([
-                topic["title"]["en"], topic["title"]["es"],
-                topic["hook"]["en"], topic["hook"]["es"],
-                topic["body"]["en"], topic["body"]["es"],
-            ], self.brand)
+    def test_all_scripts_use_official_services_and_valid_copy(self):
+        official = {"commercial", "office", "residential", "medical-office", "industrial", "windows", "moving", "post-construction"}
+        self.assertGreaterEqual(len(self.topics["scripts"]), 4)
+        for script in self.topics["scripts"]:
+            self.assertIn(script["service"], official)
+            for lang in ("en", "es"):
+                pipeline.validate_copy(
+                    [script["title"][lang]] + [scene[k][lang] for scene in script["scenes"] for k in ("headline", "support")],
+                    self.brand,
+                )
 
 
 if __name__ == "__main__":
